@@ -38,7 +38,10 @@ jobs:
       # `npm ci` first: `build-wasm.mjs` runs the binaryen `wasm-opt` from node_modules, and
       # without it the published module is a third larger.
       - run: npm ci
+      - name: install pinned browser atomics toolchain
+        run: rustup toolchain install nightly-2026-09-05 --profile minimal --component rust-src --target wasm32-unknown-unknown
       - run: node tools/build-wasm.mjs
+      - run: node tools/build-wasm-threads.mjs
       # Build once for Chromium to replay every real example through the viewer, then package
       # those fixed 320×180 canvases in the final deploy artifact.
       - run: npm run build -w packages/app

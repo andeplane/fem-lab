@@ -65,9 +65,22 @@ describe('the project folder', () => {
     expect(await folder.readText('calc/sweep.ts')).toBe('fem.mesh.set({})');
     await folder.writeText('reports/beam.md', '# Beam');
     expect(files['reports/beam.md']).toBe('# Beam');
+    await folder.refresh();
     expect(folder.files.some((f) => f.path === 'reports/beam.md')).toBe(true);
     await folder.writeBytes('reports/beam.vtu', new TextEncoder().encode('<VTKFile/>'));
     expect(files['reports/beam.vtu']).toBe('<VTKFile/>');
+  });
+
+  it('rejects oversized folder content before reading it into memory', async () => {
+    const dir = fakeDir({ 'large.txt': 'x' });
+    const handle = await dir.getFileHandle('large.txt');
+    const text = vi.fn(async () => 'must not be read');
+    vi.spyOn(dir, 'getFileHandle').mockResolvedValue({ ...handle, getFile: async () => ({ size: 17 * 1024 * 1024, lastModified: 0, text, arrayBuffer: async () => new ArrayBuffer(0) }) });
+    const folder = await ProjectFolder.fromHandle(dir);
+    await expect(folder.readText('large.txt')).rejects.toMatchObject({ code: 'unsupported' });
+    expect(text).not.toHaveBeenCalled();
+    await expect(folder.readText('large.txt', 2 * 1024 * 1024)).rejects.toMatchObject({ code: 'unsupported' });
+    expect(text).not.toHaveBeenCalled();
   });
 
   it('publishes refresh atomically and serializes reads from the watcher and Commands', async () => {

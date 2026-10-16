@@ -3,25 +3,91 @@
   "livemode": false,
   "project": "femlab-app-staging",
   "apiVersion": "2026-09-30.endive",
-  "billingEnabled": false,
-  "taxClassificationConfirmed": false,
-  "taxMode": "not_collecting",
+  "creditUnit": "usd-milli-v1",
+  "billingEnabled": true,
+  "taxClassificationConfirmed": true,
+  "taxMode": "automatic",
   "taxCollectionDecisionConfirmed": true,
-  "policyUrlsConfirmed": false,
-  "stagingCheckoutVerified": false,
-  "webhookVerified": false,
+  "policyUrlsConfirmed": true,
+  "stagingCheckoutVerified": true,
+  "webhookVerified": true,
   "activeTaxRegistrationVerified": false,
   "plans": {
-    "plus": {"product": "femlab_plus_2026_10", "price": "price_1UQmUHAAtmJJ65hfQVF4VCnb", "amountUsdCents": 4900, "credits": 4000000},
-    "pro": {"product": "femlab_pro_2026_10", "price": "price_1UQmUIAAtmJJ65hfQACv6dMm", "amountUsdCents": 14900, "credits": 16000000},
-    "studio": {"product": "femlab_studio_2026_10", "price": "price_1UQmUJAAtmJJ65hf4OIUbmP4", "amountUsdCents": 49900, "credits": 50000000}
+    "plus": {
+      "product": "femlab_plus_2026_10",
+      "price": "price_1UQmUHAAtmJJ65hfQVF4VCnb",
+      "amountUsdCents": 4900,
+      "credits": 7500,
+      "purchaseUses": {
+        "personal": {
+          "product": "femlab_plus_mp_personal_2026_10",
+          "price": "price_1UQpdxAAtmJJ65hfHQy6R9PR",
+          "taxCode": "txcd_10105001"
+        },
+        "business": {
+          "product": "femlab_plus_mp_business_2026_10",
+          "price": "price_1UQpdzAAtmJJ65hf6MFuxB2t",
+          "taxCode": "txcd_10105002"
+        }
+      }
+    },
+    "pro": {
+      "product": "femlab_pro_2026_10",
+      "price": "price_1UQmUIAAtmJJ65hfQACv6dMm",
+      "amountUsdCents": 14900,
+      "credits": 12000,
+      "purchaseUses": {
+        "personal": {
+          "product": "femlab_pro_mp_personal_2026_10",
+          "price": "price_1UQpe1AAtmJJ65hfVyxtFsxi",
+          "taxCode": "txcd_10105001"
+        },
+        "business": {
+          "product": "femlab_pro_mp_business_2026_10",
+          "price": "price_1UQpe4AAtmJJ65hfQgJzoY2C",
+          "taxCode": "txcd_10105002"
+        }
+      }
+    },
+    "studio": {
+      "product": "femlab_studio_2026_10",
+      "price": "price_1UQmUJAAtmJJ65hf4OIUbmP4",
+      "amountUsdCents": 49900,
+      "credits": 37500,
+      "purchaseUses": {
+        "personal": {
+          "product": "femlab_studio_mp_personal_2026_10",
+          "price": "price_1UQpe5AAtmJJ65hfacjCpcxC",
+          "taxCode": "txcd_10105001"
+        },
+        "business": {
+          "product": "femlab_studio_mp_business_2026_10",
+          "price": "price_1UQpe8AAtmJJ65hfllTdEiNM",
+          "taxCode": "txcd_10105002"
+        }
+      }
+    }
   },
   "portalConfiguration": "bpc_1UQmVGAAtmJJ65hfytjrG5vG",
   "webhook": {
     "id": "we_1UQmVHAAtmJJ65hfv9xlOJ19",
-    "enabled": false,
+    "enabled": true,
     "url": "https://femlab-api-dhphcl4vma-ey.a.run.app/v1/billing/webhook",
-    "events": ["invoice.paid", "invoice.payment_succeeded", "invoice.payment_failed", "customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted", "charge.refunded", "charge.dispute.created"],
+    "events": [
+      "invoice.paid",
+      "invoice.payment_succeeded",
+      "invoice.payment_failed",
+      "customer.subscription.created",
+      "customer.subscription.updated",
+      "customer.subscription.deleted",
+      "charge.refunded",
+      "charge.dispute.created"
+    ],
     "secretName": "stripe-webhook-secret"
-  }
+  },
+  "merchantMode": "managed",
+  "managedPaymentsAccountEnabled": true,
+  "managedPaymentsEligibilityConfirmed": true,
+  "managedPaymentsTermsAccepted": false,
+  "managedPaymentsCheckoutVerified": true
 }

@@ -1,4 +1,6 @@
 import { defineConfig, type Plugin } from 'vite';
+import {resolve} from 'node:path';
+import {docsPlugin} from '../../tools/docs.mjs';
 
 /** Isolation without the service worker in dev and preview (ADR 0013). */
 const headers = {
@@ -27,23 +29,35 @@ function preloadLazyChunks(): Plugin {
     transformIndexHtml: {
       order: 'post',
       handler: (_html, ctx) =>
-        Object.keys(ctx.bundle ?? {})
+        ctx.filename.endsWith('/signin.html')?[]:Object.keys(ctx.bundle ?? {})
           .filter((name) => PRELOAD.test(name))
           .map((name) => ({ tag: 'link', attrs: { rel: 'modulepreload', href: BASE + name }, injectTo: 'head' as const })),
     },
   };
 }
 
+/** The sign-in host embeds Firebase's non-isolated reserved helper; the engine stays isolated. */
+function isolationHeaders():Plugin {
+  const install=(server:import('vite').ViteDevServer|import('vite').PreviewServer)=>{server.middlewares.use((request,response,next)=>{
+    for(const [name,value] of Object.entries(headers))response.setHeader(name,value);
+    if(new URL(request.url??'/', 'http://localhost').pathname===`${BASE}signin.html`)response.setHeader('Cross-Origin-Embedder-Policy','unsafe-none');
+    next();
+  });};
+  return {name:'femlab-host-isolation',configureServer:install,configurePreviewServer:install};
+}
+
 export default defineConfig(({ command }) => ({
   base: BASE,
-  server: { headers },
-  preview: { headers },
   worker: { format: 'es' },
-  plugins: [preloadLazyChunks(), {
+  plugins: [docsPlugin(BASE),isolationHeaders(),preloadLazyChunks(), {
     name: 'femlab-dev-csp',
     // Production keeps the static meta policy. Only the dev server needs HMR sockets.
     transformIndexHtml(html, ctx) {
-      if (apiOrigin) html = html.replace("connect-src 'self' https://api.anthropic.com https://api.openai.com", `frame-src 'self' https://*.firebaseapp.com; connect-src 'self' ${new URL(apiOrigin).origin} https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://www.googleapis.com`);
+      if (apiOrigin) html = html.replace("connect-src 'self' https://api.anthropic.com https://api.openai.com", `connect-src 'self' ${new URL(apiOrigin).origin} https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://www.googleapis.com`);
+      if(ctx.filename.endsWith('/signin.html')&&firebaseConfig!=='null'){
+        const authDomain=(JSON.parse(firebaseConfig) as {authDomain?:string}).authDomain;
+        if(authDomain){const origin=new URL(`https://${authDomain}`).origin;if(origin!==`https://${authDomain}`)throw new Error('Firebase authDomain must be a hostname.');html=html.replace("frame-src 'none'",`frame-src ${origin}/__/auth/iframe`);}
+      }
       return ctx.server ? html.replace("connect-src 'self'", "connect-src 'self' ws://localhost:* ws://127.0.0.1:* wss://localhost:*") : html;
     },
   }],
@@ -55,6 +69,7 @@ export default defineConfig(({ command }) => ({
     // import closure) from everything that only arrives when someone asks for it.
     manifest: true,
     rollupOptions: {
+      input:{index:resolve(import.meta.dirname,'index.html'),signin:resolve(import.meta.dirname,'signin.html')},
       output: {
         advancedChunks: {
           groups: [

@@ -1,6 +1,6 @@
 import { isBulkQuery, queryBulk, retainedFieldBulk, retainedSurfaceBulk } from './result-transfer';
 import type { SessionEngine, PreparedEngine } from './generated/wasm/femlab_engine_wasm.js';
-import { MAX_MODEL_FILE_BYTES, modelFileEncoder, type ModelFilePublicationPolicy, type BufferSpec, type DocumentSnapshot, type ExecutionContext, type Stamp } from '@femlab/registry';
+import { MAX_MODEL_FILE_BYTES, modelFileEncoder, type ModelFilePublicationPolicy, type BufferSpec, type DocumentSnapshot, type ExecutionContext, type Progress, type Stamp } from '@femlab/registry';
 import type { SessionOptions, SessionRequest, SessionResponse } from './session-protocol';
 import { toStructured } from './engine-error';
 const json = JSON.stringify;
@@ -24,6 +24,8 @@ export class SessionRuntime {
   constructor(
     private readonly create: (options: SessionOptions, epoch: string) => Promise<SessionEngine>,
     private readonly candidate: (ticket: string, options: SessionOptions) => Promise<PreparedEngine>,
+    /** Monotonic host time in milliseconds; the runtime does not read a global clock. */
+    private readonly now: () => number,
     private readonly publication: ModelFilePublicationPolicy = { encode: modelFileEncoder(), maxBytes: MAX_MODEL_FILE_BYTES },
   ) {}
   private async handle(req: SessionRequest, progress: (phase: string, fraction: number, message: string) => boolean): Promise<unknown> {
@@ -93,15 +95,38 @@ const need = (): SessionEngine => {
   accept(req: SessionRequest, post: (reply: SessionResponse, raw?: ArrayBuffer[]) => void): Promise<void> {
   const context = 'context' in req ? req.context : null;
   const run = async (): Promise<void> => {
+    let latest: Required<Progress> | undefined;
+    let delivered: Required<Progress> | undefined;
+    let deliveredAt = 0;
+    const flush = (at: number): void => {
+      if (!latest || latest === delivered) return;
+      delivered = latest;
+      deliveredAt = at;
+      post({ id: req.id, context, progress: latest });
+    };
+    // Progress is current state, not a per-iteration event log. Flooding postMessage can
+    // starve the main thread's Cancel button. Match the UI's percentage resolution while
+    // preserving phase boundaries and the actual final sample, including on failure.
+    // A fixed percentage can still carry a changing measured residual. Deliver at most
+    // ten such message-only updates per second, without timers or delaying a boundary.
+    const progress = (phase: string, fraction: number, message: string): boolean => {
+      const at = this.now();
+      const boundary = !latest || phase !== latest.phase || Math.round(fraction * 100) !== Math.round(latest.fraction * 100);
+      if (latest && phase !== latest.phase) flush(at);
+      latest = { phase, fraction, message };
+      if (boundary || (message !== delivered?.message && at - deliveredAt >= 100)) flush(at);
+      return true;
+    };
     try {
-      const result = await this.handle(req, (phase, fraction, message) => { post({ id: req.id, context, progress: { phase, fraction, message } }); return true; });
+      const result = await this.handle(req, progress);
+      flush(this.now());
       const stamp = result instanceof Publication ? result.stamp : JSON.parse(this.engine!.stamp()) as Stamp;
       const value = result instanceof Publication ? result.value : result;
       if (value && typeof value === 'object' && 'raw' in value) {
         const data = value as Bulk;
         post({ id: req.id, context, ok: true, stamp, ...data }, data.raw);
       } else post({ id: req.id, context, ok: true, stamp, value });
-    } catch (error) { post({ id: req.id, context, ok: false, error: toStructured(error) }); }
+    } catch (error) { flush(this.now()); post({ id: req.id, context, ok: false, error: toStructured(error) }); }
   };
   this.tail = this.tail.then(run, run);
   return this.tail;

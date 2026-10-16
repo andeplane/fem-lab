@@ -11,6 +11,7 @@ import { Store } from '../src/store';
 import { bindRegistryProducer } from '../src/producer-registry';
 import { afterEffects, waitFor, waitForGone, waitForText } from './wait-for';
 import { Tour } from '../src/tutorial/Tour';
+import { tourCommands, TOUR_DISMISSED_KEY, TOUR_STOPS, type TourHost } from '../src/tutorial/tour-state';
 import { TutorialPanel } from '../src/tutorial/TutorialPanel';
 import { tutorialById } from '../src/tutorial/tutorials';
 
@@ -22,7 +23,7 @@ const progress = () => root.querySelector('.tutorial-progress');
 
 function fakeRegistry(): Registry & { dispatch: ReturnType<typeof vi.fn>; query: ReturnType<typeof vi.fn> } {
   const journal: JournalDump = { hash: 'empty', entries: [], revision: 0, canUndo: false, canRedo: false };
-  const model: ModelSummary = { name: 'm', revision: 0 } as unknown as ModelSummary;
+  const model: ModelSummary = { name: 'm', revision: 0, bodies: [] } as unknown as ModelSummary;
   const dispatch = vi.fn(async (cmd: { cmd: string } & Record<string, unknown>) => {
     if (cmd.cmd === 'model.new') journal.entries = [];
     journal.entries = [...journal.entries, { seq: journal.entries.length, cmd, hashAfter: `h${journal.entries.length}` } as never];
@@ -375,36 +376,214 @@ describe('TutorialPanel', () => {
   });
 });
 
+function tourHarness(store = new Store(), overrides: Partial<TourHost> = {}) {
+  const commands = tourCommands(store, {
+    preferences: localStorage,
+    openCantilever: async () => { location.hash = 'tutorial=cantilever/0'; },
+    ...overrides,
+  });
+  const dispatch = vi.fn(async (command: { cmd: string } & Record<string, unknown>) => {
+    const { cmd, ...input } = command;
+    const definition = commands.find(def => def.name === cmd)!;
+    return definition.run(definition.schema.parse(input), undefined as never);
+  });
+  store.dispatch = dispatch;
+  return { store, dispatch, commands };
+}
+
+const tourButton = (text: string) => [...root.querySelectorAll<HTMLButtonElement>('.tour-callout button')].find(button => button.textContent === text) ?? null;
+
 describe('Tour', () => {
-  it('shows the first stop, and Skip tour dismisses it (persisted)', async () => {
-    const tree = Object.assign(document.createElement('div'), { className: 'tree' });
-    document.body.append(tree);
-    const store = new Store();
-    render(<Tour store={store} />, root);
-    await afterEffects();
-    await waitFor(() => root.querySelector('.tour-callout'), 'the first tour stop');
-    await click(root.querySelector('.tutorial-btn')); // "Skip tour"
-    await waitForGone(() => root.querySelector('.tour-callout'), 'the tour callout');
-    expect(localStorage.getItem('femlab.tour.dismissed')).toBe('1');
-    tree.remove();
-  });
-
-  it('stays dismissed across a remount', () => {
-    localStorage.setItem('femlab.tour.dismissed', '1');
-    const store = new Store();
-    render(<Tour store={store} />, root);
-    expect(root.querySelector('.tour-callout')).toBeNull();
-  });
-
-  it('the last stop starts the cantilever tutorial and opens the panel', async () => {
-    const store = new Store();
-    render(<Tour store={store} />, root);
-    await afterEffects();
-    for (let i = 0; i < 4; i++) {
-      await click(await waitFor(() => root.querySelector('.tutorial-btn.primary'), `tour stop ${i + 1}`));
+  it('guides all eight modeling stages through view Commands without modifying the Journal or Model', async () => {
+    const { store, dispatch } = tourHarness();
+    const model = { name: 'my work', bodies: [], revision: 1 } as unknown as ModelSummary;
+    journalOf(store, [{ cmd: 'model.new', name: 'my work' }]);
+    store.set({ model, revision: 1 });
+    const journal = store.state.journal;
+    render(<Tour store={store} dispatch={dispatch} />, root);
+    await waitForText(() => root.querySelector('h2'), TOUR_STOPS[0].title);
+    expect(tourButton('Back')?.disabled).toBe(true);
+    for (const stop of TOUR_STOPS.slice(1)) {
+      await click(tourButton('Next'));
+      await waitForText(() => root.querySelector('h2'), stop.title);
     }
-    await click(await waitFor(() => [...root.querySelectorAll('.tutorial-btn')].find((b) => b.textContent?.includes('Start the cantilever tutorial')), 'the tutorial hand-off'));
-    await waitFor(() => store.state.panels['tutorial'] === true, 'the tutorial panel to open');
-    expect(location.hash).toContain('tutorial=cantilever/0');
+    await click(tourButton('Back'));
+    await waitForText(() => root.querySelector('h2'), 'Solve the Step');
+    expect(store.state.model).toBe(model);
+    expect(store.state.journal).toBe(journal);
+    expect(dispatch.mock.calls.every(([command]) => command.cmd === 'tour.show')).toBe(true);
+    expect(root.querySelectorAll('button:not([data-cmd])')).toHaveLength(0);
+  });
+
+  it('dismisses with Continue on my own and stays dismissed after remount, but can explicitly reopen', async () => {
+    const { store, dispatch } = tourHarness();
+    render(<Tour store={store} dispatch={dispatch} />, root);
+    await waitForText(() => root.querySelector('h2'), 'Add geometry');
+    await click(tourButton('Continue on my own'));
+    await waitForGone(() => root.querySelector('.tour-callout'), 'the tour callout');
+    expect(localStorage.getItem(TOUR_DISMISSED_KEY)).toBe('1');
+    render(null, root);
+    const next = tourHarness();
+    render(<Tour store={next.store} dispatch={next.dispatch} />, root);
+    await afterEffects();
+    expect(root.querySelector('.tour-callout')).toBeNull();
+    next.store.togglePanel('tree.geometry', false);
+    await next.dispatch({ cmd: 'tour.show' });
+    await waitForText(() => root.querySelector('h2'), 'Add geometry');
+    expect(next.store.state.panels['tree.geometry']).toBe(true);
+    expect(localStorage.getItem(TOUR_DISMISSED_KEY)).toBe('1');
+  });
+
+  it('dismisses with the close button and Escape, restoring the invoking control without a focus trap', async () => {
+    localStorage.setItem(TOUR_DISMISSED_KEY, '1');
+    const trigger = document.createElement('button');
+    trigger.textContent = 'Tutorials';
+    document.body.append(trigger);
+    const { store, dispatch } = tourHarness();
+    render(<Tour store={store} dispatch={dispatch} />, root);
+    await afterEffects();
+    trigger.focus();
+    await dispatch({ cmd: 'tour.show' });
+    const heading = await waitFor(() => root.querySelector('h2'), 'the tour heading');
+    await waitFor(() => document.activeElement === heading, 'focus at the heading');
+    // The card has no tab trap: the person can return to the workspace at any time.
+    trigger.focus();
+    expect(document.activeElement).toBe(trigger);
+    heading.focus();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await waitForGone(() => root.querySelector('.tour-callout'), 'the escaped tour');
+    expect(document.activeElement).toBe(trigger);
+    await dispatch({ cmd: 'tour.show' });
+    await waitFor(() => root.querySelector('.tour-dismiss'), 'close control');
+    await click(root.querySelector('.tour-dismiss'));
+    await waitForGone(() => root.querySelector('.tour-callout'), 'the closed tour');
+    expect(localStorage.getItem(TOUR_DISMISSED_KEY)).toBe('1');
+  });
+
+  it('does not steal focus from a field or consume Escape from a modal', async () => {
+    const modal = document.createElement('div');
+    modal.setAttribute('aria-modal', 'true');
+    const input = document.createElement('input');
+    modal.append(input); document.body.append(modal); input.focus();
+    const { store, dispatch } = tourHarness();
+    render(<Tour store={store} dispatch={dispatch} />, root);
+    await waitForText(() => root.querySelector('h2'), 'Add geometry');
+    expect(document.activeElement).toBe(input);
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await afterEffects();
+    expect(store.state.panels['tour']).toBe(true);
+    await dispatch({ cmd: 'tour.dismiss' });
+  });
+
+  it('returns focus to Tutorials when reopening removed the invoking panel button', async () => {
+    const topbar = document.createElement('div'); topbar.className = 'topbar';
+    const fallback = document.createElement('button'); fallback.title = 'Guided tutorials'; topbar.append(fallback); document.body.append(topbar);
+    const { store, dispatch } = tourHarness();
+    render(<Tour store={store} dispatch={dispatch} />, root);
+    await waitForText(() => root.querySelector('h2'), 'Add geometry');
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await waitForGone(() => root.querySelector('.tour-callout'), 'the escaped tour');
+    expect(document.activeElement).toBe(fallback);
+  });
+
+  it('does not interrupt a tutorial that created the first Model', async () => {
+    const { store, dispatch } = tourHarness();
+    store.togglePanel('tutorial', true);
+    render(<Tour store={store} dispatch={dispatch} />, root);
+    await afterEffects();
+    expect(root.querySelector('.tour-callout')).toBeNull();
+    expect(store.state.panels['tutorial']).toBe(true);
+    expect(localStorage.getItem(TOUR_DISMISSED_KEY)).toBeNull();
+  });
+
+  it('allows local dismissal and tutorial opening when browser preferences are denied', async () => {
+    const { store, dispatch } = tourHarness(new Store(), { preferences: { getItem() { throw new Error('denied'); }, setItem() { throw new Error('denied'); } } });
+    render(<Tour store={store} dispatch={dispatch} />, root);
+    await waitForText(() => root.querySelector('h2'), 'Add geometry');
+    await click(tourButton('Continue on my own'));
+    await waitForGone(() => root.querySelector('.tour-callout'), 'the dismissed tour');
+    await dispatch({ cmd: 'tour.show', step: 7 });
+    await waitForText(() => root.querySelector('h2'), 'Read and check Results');
+    await click(tourButton('Build the cantilever tutorial'));
+    await waitForGone(() => root.querySelector('.tour-callout'), 'the completed tour');
+    expect(store.state.panels['tutorial']).toBe(true);
+    expect(location.hash).toBe('#tutorial=cantilever/0');
+  });
+
+  it('strictly validates registered view Commands and leaves existing work untouched on tutorial launch failure', async () => {
+    const { store, dispatch, commands } = tourHarness(new Store(), { openCantilever: async () => { throw new Error('unavailable'); } });
+    for (const step of [-1, 8, 1.5]) await expect(dispatch({ cmd: 'tour.show', step })).rejects.toThrow();
+    for (const definition of commands) expect(definition.schema.safeParse({ unexpected: true }).success).toBe(false);
+    await dispatch({ cmd: 'tour.show', step: 7 });
+    await expect(dispatch({ cmd: 'tour.startCantilever' })).rejects.toThrow('unavailable');
+    expect(store.state.panels['tour']).toBe(true);
+    expect(store.state.panels['tutorial']).not.toBe(true);
+    expect(localStorage.getItem(TOUR_DISMISSED_KEY)).toBeNull();
+  });
+
+  it('the registered cantilever handoff replaces another active runner without requiring tour.show first', async () => {
+    localStorage.setItem(TOUR_DISMISSED_KEY, '1');
+    const { store, dispatch } = tourHarness();
+    const registry = fakeRegistry();
+    store.togglePanel('tutorial', true);
+    render(<TutorialPanel registry={registry} store={store} />, root);
+    await click(await waitFor(() => [...root.querySelectorAll('.tutorial-pick')].find(pick => pick.textContent?.includes('Column buckling')), 'the column tutorial'));
+    await click(root.querySelector('.tutorial-btn.primary'));
+    await waitForText(progress, 'step 2 of');
+    await dispatch({ cmd: 'tour.startCantilever' });
+    await waitForText(() => root.querySelector('.tutorial-title'), 'Cantilever beam');
+    await waitForText(progress, 'step 1 of 11');
+    expect(registry.dispatch).toHaveBeenCalledExactlyOnceWith({ cmd: 'model.new', name: 'column-buckling' });
+    // The same Command can explicitly restart that runner too.
+    await click(root.querySelector('.tutorial-btn.primary'));
+    await waitForText(progress, 'step 2 of 11');
+    await dispatch({ cmd: 'tour.startCantilever' });
+    await waitForText(progress, 'step 1 of 11');
+    expect(registry.dispatch).toHaveBeenCalledTimes(2);
+  });
+
+  it('follows the first model.new into its replacement Store instead of mistaking its reset generation for another restart', async () => {
+    const old = tourHarness();
+    const registry = fakeRegistry();
+    journalOf(old.store, [{ cmd: 'model.new', name: 'previous' }, { cmd: 'model.setUnits' }]);
+    await old.dispatch({ cmd: 'tour.startCantilever' });
+    render(<TutorialPanel registry={registry} store={old.store} />, root);
+    await waitForText(progress, 'step 1 of 11');
+    expect(old.store.state.tutorialStart).toBe(1);
+    // The producer's model.new replaces both the Journal and its Store. The panel survives,
+    // just as it does in App; that new acknowledged entry must satisfy the existing step.
+    const replacement = tourHarness();
+    replacement.store.togglePanel('tutorial', true);
+    journalOf(replacement.store, [{ cmd: 'model.new', name: 'cantilever' }]);
+    render(<TutorialPanel registry={registry} store={replacement.store} />, root);
+    await waitForText(progress, 'step 2 of 11');
+    expect(replacement.store.state.tutorialStart).toBe(0);
+    expect(registry.dispatch).not.toHaveBeenCalled();
+    await replacement.dispatch({ cmd: 'tour.startCantilever' });
+    await waitForText(progress, 'step 1 of 11');
+    expect(replacement.store.state.journal?.entries).toHaveLength(1);
+  });
+
+  it('reopens from an active tutorial and starts the cantilever at step one without consuming earlier work', async () => {
+    localStorage.setItem(TOUR_DISMISSED_KEY, '1');
+    const { store, dispatch } = tourHarness();
+    const registry = fakeRegistry();
+    journalOf(store, [{ cmd: 'model.new', name: 'cantilever' }, { cmd: 'model.setUnits' }]);
+    store.set({ model: { name: 'cantilever', bodies: [], revision: 2 } as unknown as ModelSummary, revision: 2 });
+    store.togglePanel('tutorial', true);
+    render(<><Tour store={store} dispatch={dispatch} /><TutorialPanel registry={registry} store={store} /></>, root);
+    await click(await waitFor(() => root.querySelector('.tutorial-pick'), 'a tutorial to pick'));
+    await waitForText(progress, 'step 1 of');
+    await click(root.querySelector('[data-cmd="tour.show"]'));
+    await waitForText(() => root.querySelector('h2'), 'Add geometry');
+    expect(store.state.panels['tutorial']).toBe(false);
+    await dispatch({ cmd: 'tour.show', step: 7 });
+    await waitForText(() => root.querySelector('h2'), 'Read and check Results');
+    await click(tourButton('Build the cantilever tutorial'));
+    await waitForText(progress, 'step 1 of 11');
+    expect(registry.dispatch).not.toHaveBeenCalled();
+    expect(store.state.journal?.entries).toHaveLength(2);
+    expect(localStorage.getItem(TOUR_DISMISSED_KEY)).toBe('1');
+    expect(store.state.panels['tour']).toBe(false);
   });
 });

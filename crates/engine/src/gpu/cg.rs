@@ -68,6 +68,12 @@ pub async fn solve_refined(
             .at("solve")
             .suggest("solve.run { solver: 'cpu-pcg' }")
     })?;
+    // All prescribed DOFs leave the unique empty reduced solution. Recovery still uses
+    // the prescribed values to compute stress and reactions; no GPU vectors exist to bind.
+    // Keep the device requirement above: an explicit GPU request never changes solver.
+    if k.n == 0 {
+        return Ok((Vec::new(), SolveInfo { solver: "gpu-pcg", iterations: 0, rel_residual: 0.0, time_ms: 0.0 }));
+    }
     let mut inner = Inner::Gpu(Box::new(GpuCg::new(gpu, k, opts).await?));
     refine(k, b, &mut inner, "gpu-pcg", opts.rel_tol, opts.max_outer, progress).await
 }

@@ -124,15 +124,28 @@ jobs:
       # `npm ci` first: `build-wasm.mjs` shrinks both outputs with binaryen's `wasm-opt`, and the
       # `web` job's size budget is measured on the module this job uploads.
       - run: npm ci
+      - name: install pinned browser atomics toolchain
+        run: rustup toolchain install nightly-2026-09-05 --profile minimal --component rust-src --target wasm32-unknown-unknown
+      - name: wasm32 STL length regressions with debug overflow checks
+        run: |
+          node tools/build-wasm.mjs --dev
+          node tools/test-stl-wasm.mjs debug
       - run: node tools/build-wasm.mjs
+      - name: wasm32 STL length regressions in the optimized shipping module
+        run: node tools/test-stl-wasm.mjs optimized
+      - run: node tools/build-wasm-threads.mjs
       - run: cargo build -p femlab --release
+      - run: cargo test --locked -p femlab-project-io
+      - run: node tools/build-project-io.mjs
       - run: ./target/release/femlab schema --out engine.schema.json
       - uses: actions/upload-artifact@v4
         with:
           name: wasm
           path: |
             packages/app/src/generated/wasm
+            packages/app/src/generated/wasm-threads
             tools/wasm-node
+            tools/project-io
             engine.schema.json
             target/release/femlab
 
@@ -151,7 +164,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: wasm
-      - run: chmod +x target/release/femlab
+      - run: chmod +x target/release/femlab tools/project-io/*/femlab-project-io
       - run: npm ci
       - run: node tools/test-units-wasm.mjs
       - run: node tools/test-material-library-wasm.mjs
@@ -223,12 +236,15 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: wasm
+      - run: chmod +x tools/project-io/*/femlab-project-io
       - run: npm ci
       - run: python3 -m unittest discover -s tools -p 'test_release_artifacts.py'
       - run: python3 -B -m unittest discover -s tools/abaqus-interoperability -p 'test_*.py'
       - run: python3 -m unittest discover -s infra/google -p 'test_*.py'
       - run: npm run codegen:check
       - run: node --test tools/test-step-assets.mjs
+      - run: node --test tools/test-size-runtime.mjs
+      - run: node --test tools/test-static-serve.mjs
       - run: npm run typecheck
       - run: npm run test -w packages/registry
       - run: npm run test -w packages/ai
@@ -241,6 +257,7 @@ jobs:
       # The first build is the real app the supported-Chromium thumbnail pass drives. That pass
       # writes fixed 320×180 viewer canvases into public/examples; the final build packages them.
       - run: npm run build -w packages/app
+      - run: node tools/test-built-linkage.mjs
       - name: playwright version for thumbnails
         id: thumbnail-pw
         run: echo "v=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
@@ -284,7 +301,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: wasm
-      - run: chmod +x target/release/femlab
+      - run: chmod +x target/release/femlab tools/project-io/*/femlab-project-io
       - name: playwright version
         id: pw
         run: echo "v=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
@@ -305,12 +322,15 @@ jobs:
           cp -R packages/app/dist/examples/thumbnails/. packages/app/public/examples/thumbnails/
       # Existing supplier wire fixtures use the explicit local development host.
       - run: npm run build -w packages/app
+      - name: chromium, cold Pages network boundary
+        run: xvfb-run -a npx playwright test e2e/browser-threads.spec.ts --project=sw --grep "cold Pages bootstrap"
+        working-directory: packages/app
       - name: chromium, cpu path
         run: xvfb-run -a npx playwright test --project=cpu
         working-directory: packages/app
       - name: chromium, service-worker isolation
         if: github.event_name != 'pull_request' || inputs.strict
-        run: xvfb-run -a npx playwright test --project=sw
+        run: xvfb-run -a npx playwright test --project=sw --grep-invert "cold Pages bootstrap"
         working-directory: packages/app
       - name: webgpu on swiftshader
         if: github.event_name != 'pull_request' || inputs.strict

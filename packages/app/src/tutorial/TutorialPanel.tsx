@@ -1,5 +1,5 @@
 import { acquireRegistryProducer, type RegistryProducer } from '../producer-registry';
-import { useStore } from '../ui/cmd';
+import { Cmd, useStore } from '../ui/cmd';
 import { TheoryText } from '../ui/TheoryText';
 // The compact side card of DESIGN-BRIEF §5.8b: step n of m, the explanation, "do it for me",
 // Skip, Next. Not part of the `[data-cmd]`-enforced App shell (ADR 0003) — it is a self
@@ -8,7 +8,7 @@ import { TheoryText } from '../ui/TheoryText';
 import type { JournalDump, ModelSummary, Registry } from '@femlab/registry';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { Store } from '../store';
-import { TutorialRunner } from './runner';
+import { parseTutorialHash, TutorialRunner } from './runner';
 import { Spotlight, useTarget } from './Spotlight';
 import { candidates, fieldsOf, FORM, formHintsOf, place, rectOf } from './target';
 import { TUTORIALS, tutorialById } from './tutorials';
@@ -39,6 +39,7 @@ export function TutorialPanel({ registry, store }: { registry: Registry; store: 
   const s = useStore(store);
   const owner = useRef<Promise<RegistryProducer> | null>(null);
   const [runner, setRunner] = useState<TutorialRunner | null>(null);
+  const started = useRef({ store, generation: 0 });
   useRunnerTick(runner);
 
   const open = s.panels['tutorial'] === true;
@@ -71,12 +72,27 @@ export function TutorialPanel({ registry, store }: { registry: Registry; store: 
   // Resume from the URL hash (Tour's "start the cantilever tutorial" sets it) or localStorage
   // the moment the panel opens, if nothing is running yet.
   useEffect(() => {
-    if (!open || runner) return;
-    const fromHash = typeof location !== 'undefined' ? location.hash : '';
-    const id = /tutorial=([^/]+)\//.exec(fromHash)?.[1];
-    const tutorial = id ? tutorialById(decodeURIComponent(id)) : undefined;
-    if (tutorial) setRunner(makeRunner(tutorial));
-  }, [open, runner]);
+    // model.new publishes another Store while this runner follows its producer. Its initial
+    // generation is not a new start request; a positive generation on that Store still is.
+    const explicitStart = (started.current.store === store ? started.current.generation : 0) !== s.tutorialStart;
+    if (started.current.store !== store) started.current = { store, generation: 0 };
+    if (!open || s.panels['tour'] || runner && !explicitStart) return;
+    const fromHash = parseTutorialHash(typeof location !== 'undefined' ? location.hash : '');
+    const tutorial = fromHash ? tutorialById(fromHash.id) : undefined;
+    if (tutorial) {
+      started.current = { store, generation: s.tutorialStart };
+      setRunner(makeRunner(tutorial, explicitStart || fromHash?.step === 0 ? 0 : undefined));
+    }
+  }, [store, open, runner, s.tutorialStart, s.panels['tour']]);
+
+  // Reopening the workflow tour pauses this tutorial; its final action can start a fresh
+  // cantilever runner without applying old Journal entries or keeping an older producer.
+  useEffect(() => {
+    if (!s.panels['tour'] || !runner) return;
+    if (owner.current) void owner.current.then(lease => lease.release()).catch(() => undefined);
+    owner.current = null;
+    setRunner(null);
+  }, [s.panels['tour'], runner]);
 
   // The one source of truth: whenever the Journal changes (a real click or "do it for me"),
   // see if it satisfies the current step.
@@ -105,7 +121,7 @@ export function TutorialPanel({ registry, store }: { registry: Registry; store: 
   // Store is refreshed here so the Journal watch above still fires.
   const [busy, setBusy] = useState(false);
 
-  if (!open) return null;
+  if (!open || s.panels['tour']) return null;
 
   // Anchored beside the target; docked bottom-right when nothing resolved.
   const card = spot ? { class: 'tutorial-panel anchored', style: `left:${spot.left}px;top:${spot.top}px`, 'data-side': spot.side } : { class: 'tutorial-panel' };
@@ -150,6 +166,9 @@ export function TutorialPanel({ registry, store }: { registry: Registry; store: 
     }
   };
 
+  const tourLink = s.model && (s.model.bodies.length > 0 || s.revision > 0)
+    ? <Cmd dispatch={store.dispatch ?? (command => registry.dispatch(command))} cmd="tour.show" args={{ step: 0 }} class="tutorial-btn tutorial-tour" disabled={busy}>Modeling tour</Cmd> : null;
+
   if (!runner) {
     return (
       <aside class="tutorial-panel" role="complementary" aria-label="Tutorials">
@@ -159,6 +178,7 @@ export function TutorialPanel({ registry, store }: { registry: Registry; store: 
             ×
           </button>
         </div>
+        {tourLink}
         <div class="tutorial-list">
           {TUTORIALS.map((t) => (
             <button key={t.id} type="button" class="tutorial-pick" onClick={() => setRunner(makeRunner(t, 0))}>
@@ -182,6 +202,7 @@ export function TutorialPanel({ registry, store }: { registry: Registry; store: 
             ×
           </button>
         </div>
+        {tourLink}
         <p class="tutorial-explain">Every step is in the Journal. Pick another tutorial, or close this and keep building.</p>
         <div class="tutorial-actions">
           <button
@@ -213,7 +234,9 @@ export function TutorialPanel({ registry, store }: { registry: Registry; store: 
             ×
           </button>
         </div>
-        <div class="tutorial-content">
+        {tourLink}
+        {/* A different explanation starts at the top; same-step rerenders keep reading position. */}
+        <div key={`${runner.tutorial.id}:${runner.step}`} class="tutorial-content">
           <h3 class="tutorial-step-title">{step.title}</h3>
           <p class="tutorial-explain">{step.explain}</p>
           {fallback && step.expect ? (

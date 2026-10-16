@@ -11,7 +11,10 @@
     "build": "npm run build -w packages/app",
     "size": "node tools/size-check.mjs",
     "test": "npm run test --workspaces --if-present",
-    "typecheck": "npm run typecheck --workspaces --if-present"
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "docs:check": "node tools/docs.mjs --check",
+    "docs:build": "node tools/docs.mjs --out packages/app/dist",
+    "docs:test": "node --test tools/test_docs.mjs"
   },
   "devDependencies": {
     "binaryen": "^132.0.0"

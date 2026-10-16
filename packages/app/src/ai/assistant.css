@@ -325,12 +325,16 @@
   cursor: pointer;
 }
 .assistant .files-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: baseline;
   gap: 8px;
   padding: 5px 9px;
   border-bottom: 1px solid #14171d;
 }
+.assistant .files-row .path { grid-column: 1 / -1; }
+.assistant .files-row .file-size { font-family: var(--mono); font-size: 10.5px; }
+.assistant .files-row .file-unavailable { grid-column: 1 / -1; overflow-wrap: anywhere; }
 .assistant .files-row .path {
   font-family: var(--mono);
   font-size: 11px;

@@ -8,7 +8,9 @@ test.describe('@cpu public policies',()=>{
     await expect(page.getByRole('heading',{name:'Terms of service',exact:true})).toBeVisible();
     await expect(page.getByRole('table')).toContainText('Plus');
     await expect(page.getByRole('table')).toContainText('$49 USD / month');
-    await expect(page.getByRole('table')).toContainText('50,000,000');
+    await expect(page.getByRole('table')).toContainText('7,500');
+    await expect(page.getByRole('table')).toContainText('12,000');
+    await expect(page.getByRole('table')).toContainText('37,500');
     await expect(page.locator('main')).toContainText('Hafreager kode & koblinger');
     await expect(page.locator('address')).toContainText('Seller and FEM Lab operator');
     await expect(page.locator('main')).toContainText('Hafreager kode & koblinger sells and provides your FEM Lab subscription, whether you purchase directly or through Stripe Managed Payments.');
@@ -19,6 +21,11 @@ test.describe('@cpu public policies',()=>{
     await expect(page.locator('main')).toContainText('an earlier direct purchase retains its existing payment arrangements');
     await expect(page.locator('main')).not.toContainText('its merchant of record sells that subscription');
     await expect(page.locator('main')).toContainText('do not renew automatically');
+    await expect(page.locator('main')).toContainText('Signing up starts with zero AI credits.');
+    await expect(page.locator('main')).toContainText('explicitly claim 5,000 AI credits');
+    await expect(page.locator('main')).toContainText('00:00 UTC on the first day of the next month');
+    await expect(page.locator('main')).toContainText('one claim per reviewed person and month');
+    await expect(page.locator('main')).toContainText('free monthly credits are not added to a paid allowance');
     await expect(page.locator('main')).toContainText('There are no automatic overage charges');
     await expect(page.locator('main')).toContainText('14 days');
     await expect(page.locator('main')).toContainText('For both direct and Managed Payments purchases, email andershaf@gmail.com');
@@ -34,6 +41,9 @@ test.describe('@cpu public policies',()=>{
     await expect(page.locator('main')).toContainText('Your FEM Lab account and any account used to manage a Managed Payments order are separate');
     await expect(page.locator('main')).toContainText('Hafreager kode & koblinger remains the seller and provider of FEM Lab');
     await expect(page.locator('main')).toContainText('no automatic expiry');
+    await expect(page.locator('main')).toContainText('keyed fingerprints of reviewed email aliases');
+    await expect(page.locator('main')).toContainText('monthly claim markers also remain after account deletion');
+    await expect(page.locator('main')).toContainText('rebinding eligibility to a new account does not expose a previous account’s ledger');
     await expect(page.locator('main')).toContainText('24 hours');
     await expect(page.locator('script')).toHaveCount(0);
     expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
@@ -45,7 +55,7 @@ test.describe('@cpu public policies',()=>{
   test('landing offers optional account access and public policy links',async({page})=>{
     await page.addInitScript(()=>localStorage.setItem('femlab.tour.dismissed','1'));
     await page.goto('./');
-    await expect(page.locator('.start .pitch')).toContainText('Optional hosted AI');
+    await expect(page.locator('.start .landing-local')).toContainText('Optional hosted AI');
     const policies=page.getByRole('navigation',{name:'FEM Lab policies'});
     await expect(policies.getByRole('link',{name:'Terms of service'})).toHaveAttribute('href',/\/terms\.html$/);
     const popup=page.waitForEvent('popup');
@@ -53,8 +63,8 @@ test.describe('@cpu public policies',()=>{
     const privacy=await popup;
     await expect(privacy.getByRole('heading',{name:'Privacy notice',exact:true})).toBeVisible();
     await privacy.close();
-    await page.getByRole('button',{name:'Sign in for AI',exact:true}).click();
-    const account=page.getByRole('dialog',{name:'Sign in for AI'});
+    await page.getByRole('button',{name:'Sign in',exact:true}).click();
+    const account=page.getByRole('dialog',{name:'Sign in'});
     await expect(account).toBeVisible();
     await expect(account.getByRole('navigation',{name:'Account policies'}).getByRole('link',{name:'Terms of service'})).toHaveAttribute('href',/\/terms\.html$/);
   });

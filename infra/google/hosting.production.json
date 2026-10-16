@@ -30,11 +30,69 @@
         ]
       },
       {
+        "source": "/",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache"
+          }
+        ]
+      },
+      {
         "source": "/index.html",
         "headers": [
           {
             "key": "Cache-Control",
             "value": "no-cache"
+          }
+        ]
+      },
+      {
+        "source": "/fem-lab",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache"
+          }
+        ]
+      },
+      {
+        "source": "/fem-lab/",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache"
+          }
+        ]
+      },
+      {
+        "source": "/fem-lab/index.html",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache"
+          }
+        ]
+      },
+      {
+        "source": "/docs/**",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache"
+          }
+        ]
+      },
+      {
+        "source": "/signin.html",
+        "headers": [
+          {
+            "key": "Cross-Origin-Embedder-Policy",
+            "value": "unsafe-none"
+          },
+          {
+            "key": "Cache-Control",
+            "value": "no-store"
           }
         ]
       }

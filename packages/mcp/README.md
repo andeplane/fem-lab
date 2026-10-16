@@ -21,14 +21,23 @@ byte for byte.
   `await fem.query.model()`), an optional `timeoutMs` up to 30 s (default 30 s). Its Commands enter the Journal like any other.
 - **`export_file { format, path, step? }`** — writes `vtu`, `msh`, `inp`, `stl`, `report` (the
   Markdown calculation note), `script` or `journal` into the `--project` folder. Paths are
-  relative to that folder; `..`, absolute paths and symlinks out of it are refused.
-- **`file_importAbaqus { name, body, mode, unitLength, unitForce?, text? | path? }`** — converts
-  a supported flat C3D4/C3D8 `.inp` deck into a new unsolved Model through checked portable
-  Commands. Choose `mesh` or `static`; static requires explicit Force units as well as Length
-  units. A path is scoped to `--project`; inline text needs no folder. The Node host has no
-  picker. Returns exact counts, SI bounds and named object mappings. `.odb`, `.cae`, unsupported
-  content, stale reads and failed validation preserve the current Model. See the
-  [supported import slice](../../docs/plans/500-abaqus-import.md).
+  relative to that folder; `..`, absolute paths, absolute symlink targets and symlinks out of it are refused. Relative directory links may resolve within the captured project; final file links are refused. Exports have a 64 MiB host transfer limit.
+- **`file_importAbaqus { name, body, mode, unitLength, unitForce?, unitTime?, text? | path?, sourceName?, sourceFiles? }`** — converts
+  a supported UTF-8 `.inp` deck into a new unsolved Model through checked portable Commands.
+  Preserves parts and transformed assembly instances, named Sets, material regions, C3D4,
+  mean-dilatation C3D8, C3D10 and full-integration C3D20, including original quadratic geometry.
+  Choose `mesh` or `static`; supply explicit Length units, Force units for static mode and Time
+  units when density is present. Static mode translates isotropic elastic materials,
+  translational supports/displacements, nodal forces, face pressures and multiple linear-static
+  load cases. Supply either `text` or a `path` scoped to `--project`; inline text needs no folder
+  and the Node host has no picker. Includes and NODE/ELEMENT `INPUT=` files are acquired within
+  the project or supplied as exact UTF-8 contents in the relative-filename `sourceFiles` map;
+  `sourceName` identifies the submission-relative root file. The deck and includes together
+  have a 16 MiB UTF-8 limit; the engine performs no file I/O. Returns exact counts, SI bounds
+  and named object mappings. Import never solves: solve each named Step to compare its final
+  equilibrium. Binary `.odb`/`.cae` databases require a text `.inp` export. Unsupported physics
+  or element formulations fail explicitly; there is no mesh fallback. Failed validation or
+  stale reads preserve the current Model. See [Abaqus input-deck import](../../README.md#import-an-abaqus-input-deck).
 
 Validation has a separate worker and deadline: 10 s by default, configurable up to 30 s for
 `validate_script`, with a 64,000-character source limit. `run_script` first validates with the
@@ -52,8 +61,7 @@ loader, filesystem or network APIs. `Function` and `eval` stay inside QuickJS. T
 registry proxy implements the browser and MCP `fem` APIs.
 
 Scripts may invoke the host's `fem.export.file` Command, which uses the same project export
-policy as `export_file`; runtime isolation does not strengthen that host capability's path
-checks. Nested `fem.script.run` calls are refused. The registry remains responsible for
+directory capability as `export_file` (see [ADR 0041](../../docs/adr/0041-mcp-project-directory-capability.md)). Nested `fem.script.run` calls are refused. The registry remains responsible for
 validating all Commands and Queries.
 `await fem.file.importAbaqus({ text, name: 'bar', body: 'bar', mode: 'static', unitLength: '1 mm', unitForce: '1 N' })`
 uses the same import Command; solve the returned Step explicitly afterwards. The imported
@@ -84,6 +92,7 @@ package:
 ```
 npm ci
 node tools/build-wasm.mjs          # writes tools/wasm-node (gitignored)
+node tools/build-project-io.mjs    # builds the small host-only filesystem helper
 npm run build -w packages/mcp      # writes packages/mcp/dist/femlab-mcp.js
 node packages/mcp/dist/femlab-mcp.js --project /path/to/your/work
 ```
@@ -92,6 +101,13 @@ node packages/mcp/dist/femlab-mcp.js --project /path/to/your/work
 `packages/mcp/dist/femlab-mcp.js` next to its own binary or in the checkout it was built in, or
 at `FEMLAB_MCP`, and reports setup instructions if it finds none. Point `FEMLAB_WASM` at a
 folder holding `femlab_engine_wasm.js` if the engine lives somewhere unusual.
+
+Project disk access uses a native helper with a retained directory handle. The installed
+package supplies that helper on Linux x64, Windows x64 and macOS arm64/x64; it needs no Rust
+compiler or runtime download. An unsupported platform or missing helper reports `file.scope`
+and suggests the checkout build command. With `--project`, startup waits for the helper
+to acknowledge the captured directory before connecting MCP. To use inline input and engine
+tools without project disk access, start without `--project`.
 
 ### Build and verify an npm artifact
 
@@ -141,3 +157,7 @@ claude mcp add femlab -- node /path/to/fem-lab/packages/mcp/dist/femlab-mcp.js -
 
 The model, the Journal and the note are all reproducible: `femlab run <journal>` replays it
 natively, `query_report` writes the same Markdown twice, and the Model hash is in its header.
+
+Release npm artifacts include all four helper targets and a SHA-256 manifest. Local packs
+include the current host target. The installed-package smoke checks the helper payload and
+uses actual project-relative file import and nested export outside the checkout.

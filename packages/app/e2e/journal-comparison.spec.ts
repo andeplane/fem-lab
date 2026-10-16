@@ -63,7 +63,7 @@ async function installReplyGate(page: import('@playwright/test').Page): Promise<
     gate.release = () => { for (const deliver of deliveries.splice(0)) deliver(); gate.held = 0; };
     Object.assign(window, { comparisonGate: gate });
     // Inject scheduling at the typed host boundary; every value still comes from the real engine.
-    const transport = Object.getPrototypeOf((window.fem.registry as unknown as { transport: SessionTransport }).transport) as SessionTransport;
+    const transport = Object.getPrototypeOf((window.fem.registry as unknown as { engine: { transport: SessionTransport } }).engine.transport) as SessionTransport;
     const delay = async <T>(op: string, action: () => Promise<T>): Promise<T> => {
       const hold = gate.op === op;
       if (hold) gate.op = null;
@@ -199,7 +199,7 @@ for (const replacement of ['file.open', 'model.new'] as const) {
     await ready(page); await installReplyGate(page);
     const opened = await page.evaluate(async () => {
       await window.fem.model.new({ name: 'opened B' });
-      const transport = (window.fem.registry as unknown as { transport: EngineTransport }).transport;
+      const transport = (window.fem.registry as unknown as { engine: { transport: EngineTransport } }).engine.transport;
       return JSON.stringify(await transport.exportFile());
     });
     await page.evaluate(async () => {

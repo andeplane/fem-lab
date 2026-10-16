@@ -22,7 +22,7 @@ const same = (a: Box | null, b: Box | null): boolean =>
  * ponytail: a bounded retry loop, not a MutationObserver — good enough for a form that settles
  * within a render or two; move to an observer if a step ever needs to wait longer than this.
  */
-export function useTarget(cands: string[]): { box: Box | null; name: string | null; fallback: boolean } {
+export function useTarget(cands: string[], focus = true): { box: Box | null; name: string | null; fallback: boolean } {
   const key = cands.join('|');
   const [found, setFound] = useState<{ box: Box; name: string | null; fallback: boolean } | null>(null);
   useEffect(() => {
@@ -46,7 +46,7 @@ export function useTarget(cands: string[]): { box: Box | null; name: string | nu
       // Keyboard users get the same cue as everyone else — but never while someone is typing,
       // so focus only moves when it is sitting on nothing or on the tutorial card itself.
       const active = document.activeElement;
-      if (active === null || active === document.body || active.closest('.tutorial-panel') !== null) el.focus({ preventScroll: true });
+      if (focus && (active === null || active === document.body || active.closest('.tutorial-panel') !== null)) el.focus({ preventScroll: true });
       measure();
     };
     const timer = setInterval(look, 150);
@@ -62,7 +62,7 @@ export function useTarget(cands: string[]): { box: Box | null; name: string | nu
       el?.removeAttribute('data-tutorial-target');
       setFound(null);
     };
-  }, [key]);
+  }, [key, focus]);
   return found ?? { box: null, name: null, fallback: false };
 }
 

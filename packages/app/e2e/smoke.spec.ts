@@ -12,15 +12,12 @@ async function ready(page: Page): Promise<void> {
 }
 
 async function expectCanvasSized(page: Page): Promise<void> {
-  await expect
-    .poll(() =>
-      page.locator('.viewer canvas').evaluate((el) => {
-        const canvas = el as HTMLCanvasElement;
-        const scale = Math.min(devicePixelRatio, 2);
-        return [canvas.width - Math.round(canvas.clientWidth * scale), canvas.height - Math.round(canvas.clientHeight * scale)];
-      }),
-    )
-    .toEqual([0, 0]);
+  await expect.poll(() => page.locator('.viewer canvas').evaluateAll(elements => elements.length > 0 && elements.every(element => {
+    const canvas = element as HTMLCanvasElement, scale = Math.min(devicePixelRatio, 2);
+    return canvas.clientWidth > 0 && canvas.clientHeight > 0
+      && canvas.width === Math.round(canvas.clientWidth * scale)
+      && canvas.height === Math.round(canvas.clientHeight * scale);
+  }))).toBe(true);
 }
 
 test.describe('@cpu the shell', () => {
@@ -58,58 +55,128 @@ test.describe('@cpu the shell', () => {
     expect(await page.evaluate(() => window.fem.query.journal())).toEqual(journal);
   });
 
-  test('Assistant stays on the right and spans the workspace when toggled', async ({ page }) => {
+  test('Assistant stays on the right and spans the workspace when toggled', async ({ page }, testInfo) => {
     await page.goto('./');
     await ready(page);
     await page.evaluate(() => window.fem.model.new({ name: 'assistant-layout' }));
-    for (const width of [1600, 1494, 1280, 1180, 1100]) {
-      await page.setViewportSize({ width, height: 900 });
+    const properties = page.locator('.props');
+    const draft = properties.locator('input').first();
+    await draft.fill('preserved-layout-draft');
+    const receipts: unknown[] = [];
+    const geometry = () => page.evaluate(() => {
+      const box = (selector: string) => { const r = document.querySelector(selector)!.getBoundingClientRect(); return { x: r.x, y: r.y, right: r.right, width: r.width, height: r.height }; };
+      const canvases = [...document.querySelectorAll<HTMLCanvasElement>('.viewer canvas')].map(canvas => ({
+        width: canvas.width, height: canvas.height, clientWidth: canvas.clientWidth, clientHeight: canvas.clientHeight,
+        right: canvas.getBoundingClientRect().right,
+      }));
+      return { drawer: box('.assistant'), workspace: box('.workspace'), viewer: box('.viewer'), properties: box('.props'), canvases, scrollWidth: document.documentElement.scrollWidth };
+    });
+    // Begin with the reported overlap, then cover both sides of the responsive boundary.
+    for (const width of [1180, 1600, 1494, 1493, 1280, 1100]) {
+      await page.setViewportSize({ width, height: 1000 });
       await expectCanvasSized(page);
       for (let cycle = 0; cycle < 2; cycle++) {
+        const camera = await page.evaluate(() => window.fem.registry.query({ query: 'query.view' }));
         await page.locator('.topbar').getByRole('button', { name: '✳ Assistant', exact: true }).click();
         const assistant = page.locator('.assistant');
         await expect(assistant).toBeVisible();
-        const drawer = (await assistant.boundingBox())!;
-        const workspace = (await page.locator('.workspace').boundingBox())!;
-        const properties = (await page.locator('.workspace > .panel').last().boundingBox())!;
-        const banner = (await page.locator('.banner').boundingBox())!;
-        expect(drawer.width).toBe(392);
-        expect(drawer.y).toBe(workspace.y);
-        expect(drawer.height).toBe(workspace.height);
-        expect(drawer.x + drawer.width).toBe(width);
-        expect(banner.x + banner.width).toBe(width);
-        if (width >= 1494) {
-          expect(drawer.x).toBe(properties.x + properties.width);
-        } else {
-          expect(properties.x + properties.width).toBe(width);
+        const opened = await geometry();
+        if (width === 1180 && cycle === 0) {
+          await testInfo.attach('assistant-first-open-observation.json', { body: JSON.stringify(opened, null, 2), contentType: 'application/json' });
+          await testInfo.attach('assistant-first-open.png', { body: await page.screenshot(), contentType: 'image/png' });
         }
-        expect(drawer.x).toBeGreaterThanOrEqual(workspace.x);
-        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+        expect(opened.viewer.right).toBeLessThanOrEqual(opened.drawer.x);
+        if (width >= 1494) await expect(properties).toBeVisible();
+        else {
+          await expect(properties).toBeHidden();
+          expect(await properties.evaluate(element => {
+            element.querySelector<HTMLInputElement>('input')!.focus();
+            return element.contains(document.activeElement);
+          })).toBe(false);
+        }
         await expectCanvasSized(page);
+        const rect = await geometry();
+        expect(rect.drawer.width).toBe(392);
+        expect(rect.drawer.y).toBe(rect.workspace.y);
+        expect(rect.drawer.height).toBe(rect.workspace.height);
+        expect(rect.drawer.right).toBe(width);
+        expect(rect.viewer.right).toBeLessThanOrEqual(rect.drawer.x);
+        if (width >= 1494) expect(rect.properties.right).toBe(rect.drawer.x);
+        expect(rect.scrollWidth).toBeLessThanOrEqual(width);
+        receipts.push({ width, cycle, rect, camera });
+        if (cycle === 0) await testInfo.attach(`assistant-layout-${width}.png`, { body: await page.screenshot(), contentType: 'image/png' });
         await assistant.getByTitle('Close the assistant', { exact: true }).click();
         await expect(assistant).toBeHidden();
-        const centre = (await page.locator('.centre').boundingBox())!;
-        expect(centre.y).toBe(workspace.y);
-        expect(centre.height).toBe(workspace.height);
+        await expect(properties).toBeVisible();
+        await expect(draft).toHaveValue('preserved-layout-draft');
         await expectCanvasSized(page);
+        expect(await page.evaluate(() => window.fem.registry.query({ query: 'query.view' }))).toEqual(camera);
       }
     }
 
+    // The requested width survives a temporary physical cap at the narrow viewport.
+    await page.setViewportSize({ width: 1180, height: 1000 });
+    await page.evaluate(() => window.fem.dispatch({ cmd: 'panel.resize', panel: 'assistant', size: 520 }));
+    await page.locator('.topbar').getByRole('button', { name: '✳ Assistant', exact: true }).click();
+    await expect(page.locator('.assistant')).toBeVisible();
+    await expectCanvasSized(page);
+    const capped = await geometry();
+    expect(capped.drawer.width).toBe(480);
+    expect(capped.viewer.width).toBeGreaterThanOrEqual(520);
+    expect(capped.viewer.right).toBe(capped.drawer.x);
+    expect((await page.getByRole('separator', { name: 'Resize assistant panel' }).boundingBox())!.x + 10).toBe(capped.drawer.x);
+    await page.setViewportSize({ width: 1600, height: 1000 });
+    await expectCanvasSized(page);
+    expect((await geometry()).drawer.width).toBe(520);
+    await page.locator('.assistant').getByTitle('Close the assistant', { exact: true }).click();
+    await page.evaluate(() => window.fem.dispatch({ cmd: 'panel.resize', panel: 'assistant', size: 392 }));
+    receipts.push({ capped, restoredRequestedWidth: 520 });
+
     await page.evaluate(() => window.fem.dispatch({ cmd: 'file.openExample', name: 'cantilever' }));
     await expect(page.locator('.banner')).toHaveCount(0);
-    await page.setViewportSize({ width: 1600, height: 900 });
-    await expectCanvasSized(page);
-    await page.locator('.topbar').getByRole('button', { name: '✳ Assistant', exact: true }).click();
-    const assistant = page.locator('.assistant');
-    await expect(assistant).toBeVisible();
-    const drawer = (await assistant.boundingBox())!;
-    const workspace = (await page.locator('.workspace').boundingBox())!;
-    expect(drawer.y).toBe(workspace.y);
-    expect(drawer.height).toBe(workspace.height);
-    await expectCanvasSized(page);
-    await assistant.getByTitle('Close the assistant', { exact: true }).click();
-    await expect(assistant).toBeHidden();
-    await expectCanvasSized(page);
+    const scientific = () => page.evaluate(async () => ({
+      document: await window.fem.query.document(), journal: await window.fem.query.journal(),
+      displacement: await window.fem.query.field({ field: 'displacement' }),
+    }));
+    const before = await scientific();
+    for (const width of [1180, 1600]) {
+      await page.setViewportSize({ width, height: 1000 });
+      await expectCanvasSized(page);
+      const camera = await page.evaluate(() => window.fem.registry.query({ query: 'query.view' }));
+      await page.locator('.topbar').getByRole('button', { name: '✳ Assistant', exact: true }).click();
+      const assistant = page.locator('.assistant');
+      await expect(assistant).toBeVisible();
+      expect(await page.evaluate(() => window.fem.registry.query({ query: 'query.view' }))).toEqual(camera);
+      const uy = page.locator('.legend').getByRole('button', { name: 'uy', exact: true });
+      await uy.click(); // Real pointer hit testing catches the former drawer overlap.
+      await expect(uy).toHaveAttribute('aria-pressed', 'true');
+      const ux = page.locator('.legend').getByRole('button', { name: 'ux', exact: true });
+      await ux.focus(); await page.keyboard.press('Enter');
+      await expect(ux).toHaveAttribute('aria-pressed', 'true');
+      const compare = page.locator('.comparison-controls').getByRole('button', { name: 'Compare', exact: true });
+      await expect(compare).toBeEnabled(); await compare.click();
+      await expect(page.locator('.comparison-pane canvas')).toHaveCount(2);
+      await expectCanvasSized(page);
+      const comparison = await geometry();
+      for (const canvas of comparison.canvases) expect(canvas.right).toBeLessThanOrEqual(comparison.drawer.x);
+      receipts.push({ width, comparison });
+      await testInfo.attach(`assistant-comparison-${width}.png`, { body: await page.screenshot(), contentType: 'image/png' });
+      await page.locator('.comparison-controls').getByRole('button', { name: 'Single Result', exact: true }).click();
+      await expect(page.locator('.viewer canvas')).toHaveCount(1);
+      await expectCanvasSized(page);
+      const rect = await geometry();
+      expect(rect.viewer.right).toBeLessThanOrEqual(rect.drawer.x);
+      expect(await scientific()).toEqual(before);
+      // Compare's initial fit is allowed to choose its own pose; layout toggles preserve it.
+      const comparisonCamera = await page.evaluate(() => window.fem.registry.query({ query: 'query.view' }));
+      receipts.push({ width, loaded: true, rect, camera, comparisonCamera, scientific: before });
+      await testInfo.attach(`assistant-loaded-controls-${width}.png`, { body: await page.screenshot(), contentType: 'image/png' });
+      await assistant.getByTitle('Close the assistant', { exact: true }).click();
+      await expect(properties).toBeVisible();
+      await expectCanvasSized(page);
+      expect(await page.evaluate(() => window.fem.registry.query({ query: 'query.view' }))).toEqual(comparisonCamera);
+    }
+    await testInfo.attach('assistant-layout-public-receipts.json', { body: JSON.stringify(receipts, null, 2), contentType: 'application/json' });
   });
 
   test('boots, builds a Model from window.fem, and shows it', async ({ page }, testInfo) => {
@@ -283,13 +350,13 @@ test.describe('@cpu the shell', () => {
       expect((await label.boundingBox())!.width, `command label has no useful room at ${width}px`).toBeGreaterThan(18);
     }
 
-    // Undoing the solve makes Redo an enabled keyboard stop; now every top-bar button can be
-    // reached in DOM order, including actions whose disabled state normally removes them.
+    // Undoing the solve makes Redo an enabled keyboard stop. Walk every native top-bar
+    // control in DOM order, including the editable model name and the Docs navigation link.
     await page.evaluate(() => window.fem.journal.undo({ steps: 1 }));
     await expect(page.locator('button[data-cmd="journal.redo"]')).toBeEnabled();
     for (const width of widths) {
       await page.setViewportSize({ width, height: 900 });
-      const stops = page.locator('.topbar button:not(:disabled)');
+      const stops = page.locator('.topbar :is(button, a[href], input:not([type="hidden"]), select):not(:disabled):not([tabindex="-1"]):visible');
       const stopCount = await stops.count();
       await stops.first().focus();
       for (let i = 0; i < stopCount; i++) {

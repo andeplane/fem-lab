@@ -1632,6 +1632,14 @@ rows, because their oracles are the geometry itself:
 - **Round trip.** Our own `write_stl` output for a box, a 64-facet cylinder, a 32-facet sphere
   and a revolve is read back by `read_stl` and re-evaluated; volume, area and bounding box agree
   with the shape it came from to 1e-9, and the patch counts are 6, 3, 1 and 3.
+- **STL length width (#716).** An authored unit tetrahedron has volume 1/6, area
+  (3 + √3)/2 and bounds [0, 1] on each axis in both ASCII and binary forms. Its long ASCII
+  solid name makes bytes 80–83 an oversized binary-count candidate. Native reader tests
+  preserve its exact vertices/facets; the CI debug and optimized wasm32 imports check the
+  closed forms. Declared counts 85,899,345, 85,899,346, 2³¹ + 4 and 2³² − 1 cover addition
+  overflow, multiplication overflow and a wrapped length equal to a real 284-byte file.
+  Each malformed file must return a structured error without changing the Model or Journal,
+  and a subsequent valid import must still work.
 - **Topology.** `genus` is the oracle a volume cannot be: 0 for an imported cube, 1 for an
   imported torus, 1 for a plate with a through bore — and the bore's wall comes back as one
   smooth patch of exactly n·2R sin(π/n)·h, with the two faces it pierces still whole.
@@ -3079,3 +3087,33 @@ the author values nor either declared tolerance is changed.
 The software-adapter GPU gate runs a uniaxial traction patch at 2, 4 and 8 Hex8 cells,
 checking the closed-form extension, Poisson contraction and recovered stress through the
 actual B-bar assembled operator, GPU preconditioner and mixed-precision refinement.
+
+### Browser CPU thread determinism (#17)
+
+`packages/app/e2e/browser-threads.spec.ts` runs actual Chromium shared-memory wasm
+at one and four workers under both server COOP/COEP and service-worker isolation.
+A 1 m bar of 0.01 m² area, E=200 GPa and ν=0 under 1000 N axial traction has
+u_tip=F L/(E A)=5e-7 m and support reaction -1000 N. Hex8 grids of 2/4/8 cells must
+retain those closed-form values and bit-identical displacement, stress, reaction and
+Journal hashes at both thread counts. This affine patch is exact at every grid;
+no nonzero discretization convergence rate is asserted. The portable fallback must
+report one real CPU thread and display its isolation note.
+
+## Fully prescribed affine Hex8 GPU solve (#740)
+
+`all_prescribed_affine_cube_gpu_preserves_recovery_and_journal` in `gpu_kernels.rs`
+uses a real injected adapter (lavapipe in CI) through the public Engine Commands.
+A full-integration unit Hex8 cube, E = 200 GPa and ν = 0.25, has all 24 DOFs
+prescribed by the six component face constraints:
+u = (0.001 x, −0.00025 y, −0.00025 z) m. The reduced system has zero equations;
+its exact solution is the empty vector, with zero iterations and zero f64 residual.
+The explicit solver remains `gpu-pcg`; there is no iterative work or CPU fallback.
+
+The independent Hooke-law oracle is ε = (0.001, −0.00025, −0.00025, 0, 0, 0),
+σ = (200 MPa, 0, 0, 0, 0, 0), with resultant x reactions −200 MN at xmin
+and +200 MN at xmax and zero remaining reaction components. The test checks
+prescribed displacement, recovered stress and every reaction, then replays the
+Journal at one thread against the original two-thread result. This is an exact
+patch/boundary case, not a convergence-rate or adapter timing benchmark.
+The adapter-free test also requires the existing structured `unsupported` error
+for an explicitly requested GPU solve with zero equations.

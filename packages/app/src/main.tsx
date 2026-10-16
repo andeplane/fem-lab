@@ -8,10 +8,12 @@ import '@fontsource/ibm-plex-sans/latin-600.css';
 import { HOST_COMMANDS, HOST_QUERIES, Registry, makeFemProxy, FemError, STEP_ACCEPT, type AbaqusConversion, type AbaqusDependencies, type Capabilities, type Command, type DocumentSnapshot, type EngineSchema, type Fem, type ProjectMeta, type JournalDiff } from '@femlab/registry';
 import { render } from 'preact';
 import schema from '../../registry/src/generated/runtime-schema';
-import { migratePersistentKeys } from './ai/key-storage';
+import { prepareKeyStorage } from './ai/key-storage';
 import { browserScriptValidator } from './script-validation-host';
 import { capabilityNotes, readHostCaps } from './capabilities';
-import { appHostCommands, appHostQueries, makeHostContext, noteAutosave, primeAutosave, autosaveHistory, type ViewerRef } from './host';
+import { appHostCommands, appHostQueries, makeHostContext, noteAutosave, primeAutosave, autosaveHistory, browserDownload, type ViewerRef } from './host';
+import { createCompletedFiles } from './completed-files';
+import type { CompletedFilesHost } from '@femlab/registry';
 import { benchmarkProvenance } from './benchmark';
 import { ProjectRepository, indexedDbAtomicProjects, memoryAtomicProjects, type ProjectBinding, type SaveJob } from './project-repository';
 import type { Projects } from './projects';
@@ -21,8 +23,10 @@ import type { CameraState } from './viewer/viewer';
 import { ScriptHost } from './script-host';
 import { readShareFragment } from './share';
 import { Store, unsaved } from './store';
+import { retireProjectHost } from './project-host';
 import { AnimationCapture, browserAnimationCaptureEnvironment } from './animation-capture';
 import { App } from './ui/App';
+import { StartupHost, startupWait, WORKSPACE_STATUS, workspaceStatus } from './startup';
 import { SessionWorkspace } from './session-workspace';
 import { SessionTransport, sameSession } from './session-transport';
 import type { ReplacementSource } from './session-protocol';
@@ -30,6 +34,8 @@ import { bindRegistryProducer, type RegistryProducer } from './producer-registry
 import { browserAbaqusIo } from './abaqus-files';
 import { StepImporter } from './step-import';
 import './ui/style.css';
+import { GeometryDraft, geometryDraftRenderer } from './geometry-draft';
+import { defaultFormValues, fieldsOf, type Defs } from './ui/schema';
 
 declare global {
   interface Window { fem: Fem & { registry: Registry; dispatch: Registry['dispatch']; gpuSelfTest(n: number): Promise<number> } }
@@ -40,6 +46,10 @@ const engineOptions = { gpu: false, threads: host.threads };
 const repository = new ProjectRepository(typeof indexedDB === 'undefined' ? memoryAtomicProjects() : indexedDbAtomicProjects(indexedDB), () => crypto.randomUUID());
 
 const bundles = new WeakMap<object, Bundle>();
+// Private host identity distinguishes same-document Worker recovery from an explicit open/new.
+// No cache or capability is serialized to the engine, a Model file or browser storage.
+const recoveredFiles = new WeakMap<ReplacementSource, CompletedFilesHost>();
+const completedFileStores = new WeakMap<CompletedFilesHost, Store>();
 const scriptJobs = new Set<{ runner: ScriptHost; producer: Producer }>();
 const nextMeta = (name: string): ProjectMeta => ({ id: crypto.randomUUID(), name, at: Date.now(), createdAt: Date.now(), commands: 0, hash: null, thumbnail: null });
 const expired = (): FemError => new FemError('session.expired', 'this action belongs to an inactive project');
@@ -55,6 +65,7 @@ class Bundle {
   readonly capture = new AnimationCapture(browserAnimationCaptureEnvironment());
   readonly viewer: ViewerRef = { current: null };
   readonly rightViewer: ViewerRef = { current: null };
+  readonly geometryDraft: GeometryDraft;
   readonly validation = new ScriptHost(() => new Worker(new URL('./script.worker.ts', import.meta.url), { type: 'module' }), async () => undefined, async () => undefined,
     browserScriptValidator(() => new Worker(new URL('./script-validation.worker.ts', import.meta.url), { type: 'module' })));
   readonly results: ResultsView;
@@ -74,8 +85,24 @@ class Bundle {
   private fitAfterOpen = false;
   private initialCamera: CameraState | undefined;
   private detachAccount = () => {};
+  private detachFiles = () => {};
+  private ownsFiles: boolean;
+  readonly completedFiles: CompletedFilesHost;
   disposed = false;
-  constructor(readonly transport: SessionTransport) {
+  constructor(readonly transport: SessionTransport, recovered?: CompletedFilesHost) {
+    this.ownsFiles = !recovered;
+    const engineSchema = schema as unknown as EngineSchema;
+    const definitions: Defs = { ...engineSchema.commands.$defs, ...engineSchema.queries.$defs };
+    this.geometryDraft = new GeometryDraft(this.store, geometryDraftRenderer(
+      () => new Worker(new URL('./session.worker.ts', import.meta.url), { type: 'module' }), () => crypto.randomUUID()),
+      () => this.viewer.current,
+      { schedule: (fn, ms) => setTimeout(fn, ms), cancel: handle => clearTimeout(handle as ReturnType<typeof setTimeout>) },
+      form => {
+        const variant = engineSchema.commands.oneOf.find(variant => variant.properties['cmd']?.const === form.cmd);
+        return variant ? defaultFormValues(form.values, fieldsOf(variant, definitions)) : form.values;
+      });
+    this.completedFiles = recovered ?? createCompletedFiles({ download: browserDownload, nextId: () => crypto.randomUUID(),
+      changed: () => { const store = completedFileStores.get(this.completedFiles); if (store) store.set({ completedFilesVersion: store.state.completedFilesVersion + 1 }); } });
     this.detachAccount = accounts.subscribe(account => this.store.set({ account }));
     this.store.setJournalDiffQuery(async base => await transport.query({ query: 'query.journalDiff', base }) as JournalDiff);
     const playbackClock = { now: () => performance.now(), schedule: (cb: () => void, ms: number) => setTimeout(cb, ms), cancel: (handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>) };
@@ -87,6 +114,7 @@ class Bundle {
     this.rightViewer.onReady = () => this.comparison.resume();
     this.viewer.onReady = () => {
       if (this.fitAfterOpen) this.initialCamera = this.viewer.current?.getCamera();
+      this.geometryDraft.restore();
       void this.refresh().catch(error => this.fail(error));
     };
     this.viewer.onBounds = () => {
@@ -176,11 +204,24 @@ class Bundle {
     return this.savedMeta?.id ?? null;
   }
   async recoverySource(source: ReplacementSource): Promise<ReplacementSource> {
-    if (this.projectDeleted || !this.binding) return source;
+    if (this.projectDeleted || !this.binding) { recoveredFiles.set(source, this.completedFiles); return source; }
     if (this.autosave) await this.save();
     await this.saving;
     const expected = await repository.read(this.binding.meta.id);
-    return { ...source, project: { meta: expected.meta!, expected } };
+    const recovery = { ...source, project: { meta: expected.meta!, expected } };
+    recoveredFiles.set(recovery, this.completedFiles);
+    return recovery;
+  }
+  activateFiles(previous?: Bundle): void {
+    if (previous?.completedFiles === this.completedFiles) previous.ownsFiles = false;
+    this.ownsFiles = true;
+    completedFileStores.set(this.completedFiles, this.store);
+    let folder = this.store.state.folder;
+    this.detachFiles = this.store.subscribe(() => {
+      if (!this.ownsFiles || folder === this.store.state.folder) return;
+      folder = this.store.state.folder;
+      this.completedFiles.clear();
+    });
   }
   recoveryFailed(error: unknown): void { this.store.set({ ready: false }); this.fail(error); }
   async primeProjects(): Promise<ProjectMeta[]> {
@@ -237,8 +278,12 @@ class Bundle {
   fail(error: unknown): void { if (!this.disposed) this.store.fail(error); }
   dispose(): void {
     this.disposed = true;
+    retireProjectHost(this.store);
     this.stepImport.dispose();
+    this.geometryDraft.dispose();
     this.detachAccount();
+    this.detachFiles();
+    if (this.ownsFiles) { completedFileStores.delete(this.completedFiles); this.completedFiles.dispose(); }
     this.capture.cancel();
     if (this.timer !== undefined) clearTimeout(this.timer);
     this.results.invalidateTransient();
@@ -266,7 +311,7 @@ class Producer {
     });
     this.listen();
   }
-  private handle(): RegistryProducer {
+  handle(): RegistryProducer {
     return { registry: this.registry, signal: this.lifetime.signal, store: () => this.bundle.store,
       release: async () => { this.lifetime.abort(); this.detach(); await this.transport.release().catch(() => undefined); } };
   }
@@ -289,6 +334,7 @@ class Producer {
     const bundle = this.bundle; const transport = this.transport;
     const ctx = makeHostContext(bundle.store, transport, bundle.viewer, host, bundle.validation, bundle.results, undefined, undefined, undefined, () => bundle.refresh(), {
       projects: bundle.projectApi(transport), active: () => transport.assertActive(),
+      completedFiles: bundle.completedFiles,
       replay: async (commands, benchmark) => { await transport.replaceWith({ kind: 'commands', commands: commands as Command[], ...(benchmark ? { benchmark } : {}) }); },
       captureImport: () => {
         const admitted = transport.stamp;
@@ -337,18 +383,21 @@ class Producer {
       } finally { child.lifetime.signal.removeEventListener('abort', stop); child.bundle.store.set({ scriptRunning: false, source: 'you' }); scriptJobs.delete(job); }
     };
     ctx.script.stop = () => { for (const job of scriptJobs) { if (job.producer.bundle !== bundle) continue; job.runner.stop(); job.producer.lifetime.abort(); void job.producer.transport.release().catch(() => undefined); } };
-    const registry = new Registry({ schema: schema as unknown as EngineSchema, host: ctx, hostCommands: [...HOST_COMMANDS, ...appHostCommands(bundle.store, transport, bundle.viewer, () => bundle.refresh(), bundle.results, () => this.registry, bundle.comparison)], hostQueries: [...HOST_QUERIES, ...appHostQueries(bundle.store)] });
+    const registry = new Registry({ schema: schema as unknown as EngineSchema, host: ctx, hostCommands: [...HOST_COMMANDS, ...appHostCommands(bundle.store, transport, bundle.viewer, () => bundle.refresh(), bundle.results, () => this.registry, bundle.comparison)], hostQueries: [...HOST_QUERIES, ...appHostQueries(bundle.store), { ...WORKSPACE_STATUS, run: () => workspaceStatus(bundle.store.state.ready) }] });
     return registry;
   }
   async dispatch(command: { cmd: string } & Record<string, unknown>): Promise<unknown> {
     const before = this.bundle; const native = this.native; const transport = this.transport;
     const definition = native.describe(command.cmd);
     if (before.disposed) throw expired();
+    // Expired retained output is a local delivery status, never an engineering failure or a
+    // reason to erase a currently displayed solve error. The private cache owns its authority.
+    if (command.cmd === 'file.download') return native.dispatch(command);
     if (definition.provider === 'host' && !['control', 'sessionView'].includes(definition.execution)) await transport.assertActive();
     before.store.set({ lastError: null });
     const long = command.cmd === 'solve.run' || command.cmd === 'study.converge';
     if (long) before.store.set({ solving: String(command['step'] ?? ''), progress: { phase: 'starting', fraction: 0 } });
-    transport.onProgress(progress => { if (!before.disposed) before.store.set({ progress: { phase: progress.phase, fraction: progress.fraction ?? 0 } }); });
+    transport.onProgress(progress => { if (!before.disposed) before.store.set({ progress: { phase: progress.phase, fraction: progress.fraction ?? 0, message: progress.message } }); });
     let publication = before;
     try {
       const versionBefore = transport.stamp.stateVersion;
@@ -388,12 +437,15 @@ accountLeaveHook(prepareAccountNavigation);
 const workspace = new SessionWorkspace<Bundle>({
   spawn: () => new Worker(new URL('./session.worker.ts', import.meta.url), { type: 'module' }),
   epoch: () => crypto.randomUUID(), engine: engineOptions,
-  build: async (transport, snapshot, source) => { const bundle = new Bundle(await transport.fork()); try { await bundle.initialize(snapshot, source); } catch (error) { try { await bundle.abandon(); } finally { bundle.dispose(); } throw error; } bundles.set(transport.channel, bundle); return bundle; },
+  build: async (transport, snapshot, source) => { const bundle = new Bundle(await transport.fork(), source ? recoveredFiles.get(source) : undefined); try { await bundle.initialize(snapshot, source); } catch (error) { try { await bundle.abandon(); } finally { bundle.dispose(); } throw error; } bundles.set(transport.channel, bundle); return bundle; },
   publish: ({ resources: bundle }) => {
+    // A folder is a workspace capability; replacing the engine keeps the current selection.
+    if (displayed) bundle.store.setFolder(displayed.store.state.folder);
     if (displayed && !bundle.store.state.result && bundle.store.state.viewMode !== 'results') bundle.store.set({ tab: displayed.store.state.tab });
     if (displayed) for (const [panel, open] of Object.entries(displayed.store.state.panels)) {
       if (panel === 'assistant' || panel.startsWith('assistant.') || panel === 'tutorial' || panel.startsWith('skill:')) bundle.store.togglePanel(panel, open);
     }
+    bundle.activateFiles(displayed);
     displayed = bundle;
     const ui = new Producer(bundle, bundle.uiTransport);
     const dispatch: Registry['dispatch'] = async command => {
@@ -425,44 +477,52 @@ const workspace = new SessionWorkspace<Bundle>({
     window.fem = new Proxy({} as Window['fem'], { get: (_target, key) => key === 'registry' ? consoleRegistry : key === 'dispatch' ? consoleDispatch : key === 'gpuSelfTest' ? (n: number) => consoleProducer.transport.gpuSelfTest(n) : Reflect.get(proxy, key) });
     bundle.store.dispatch = dispatch;
     if (!root.querySelector('.shell, .start-layout, .start')) root.textContent = '';
+    startup.retire();
+    detachStartupAccount();
     render(<App sessionKey={bundle.transport.stamp.session.backendEpoch} store={bundle.store} dispatch={dispatch} query={query => ui.registry.query(query)} viewer={bundle.viewer} rightViewer={bundle.rightViewer} comparison={bundle.comparison} commands={ui.registry.list().commands} registry={ui.registry} />, root);
   },
 });
-async function boot(): Promise<void> {
-  bootStage('Checking graphics capabilities…', 20);
-  migratePersistentKeys();
-  // Select the initial backend from an actual adapter probe. Later candidate device failures
-  // still abort replacement; they never silently change an established backend.
-  const gpu = (navigator as Navigator & { gpu?: { requestAdapter(): Promise<unknown> } }).gpu;
-  engineOptions.gpu = Boolean(await gpu?.requestAdapter());
-  bootStage('Reading saved projects…', 40);
-  await primeAutosave();
-  bootStage('Loading the simulation engine…', 60);
-  const active = await workspace.start();
-  await active.resources.refresh();
-  const accountReturn = sessionStorage.getItem('femlab.accountReturnProject');
-  if (accountReturn) {
-    sessionStorage.removeItem('femlab.accountReturnProject');
-    try { await window.fem.dispatch({ cmd: 'project.open', id: accountReturn }); return; }
-    catch (error) { workspace.active.resources.fail(error); }
-  }
-  const example = new URLSearchParams(location.search).get('example');
-  if (example) await window.fem.dispatch({ cmd: 'file.openExample', name: example });
-  const commands = await readShareFragment(location.hash);
-  if (commands) await workspace.replace(workspace.active.transport, { kind: 'commands', commands: commands as Command[] });
-}
-function bootStage(message: string, progress: number): void {
-  const status = root.querySelector('.boot-status');
-  const bar = root.querySelector<HTMLElement>('.boot-fill');
-  if (status) status.textContent = message;
-  if (bar) bar.style.width = `${progress}%`;
-}
-void accounts.initialize();
-void boot().catch(error => {
-  const message = error instanceof Error ? error.message : String(error);
-  if (root.querySelector('.boot')) {
-    root.querySelector('h1')!.textContent = 'Could not start the workspace';
-    root.querySelector('.boot')!.setAttribute('aria-busy', 'false');
-    bootStage(message, 100);
-  } else root.textContent = message;
+const startup = new StartupHost({
+  schema: schema as unknown as EngineSchema, caps: host, account: accounts.state,
+  listProjects: () => repository.list(),
+  start: async signal => {
+    prepareKeyStorage(__HOSTED_AI__);
+    // A late non-cancellable adapter probe cannot spawn a Worker after cancellation.
+    const gpu = (navigator as Navigator & { gpu?: { requestAdapter(): Promise<unknown> } }).gpu;
+    engineOptions.gpu = Boolean(await startupWait(Promise.resolve(gpu?.requestAdapter()), signal));
+    await startupWait(primeAutosave(), signal);
+    signal.throwIfAborted();
+    const active = await workspace.start(signal);
+    void finishBoot(active.resources).catch(error => active.resources.fail(error));
+  },
 });
+const detachStartupAccount = accounts.subscribe(account => startup.setAccount(account));
+// The existing Start component is mounted before any awaited adapter, storage or engine work.
+render(<App startup={startup} />, root);
+void startup.loadProjects();
+void accounts.initialize();
+void startup.start().catch(() => undefined); // Failure remains visible, with registered Retry.
+
+async function finishBoot(owner: Bundle): Promise<void> {
+  await owner.refresh();
+  // Never retarget initial navigation onto a session that replaced this startup publication.
+  if (displayed !== owner) return;
+  // Use the ordinary producer lease: automatic navigation can follow only replacements it
+  // initiates, and a late share decode cannot target a project selected by the person.
+  const operation = new Producer(owner, await owner.transport.fork());
+  const navigation = operation.handle();
+  try {
+    const accountReturn = sessionStorage.getItem('femlab.accountReturnProject');
+    if (accountReturn) {
+      sessionStorage.removeItem('femlab.accountReturnProject');
+      try { await navigation.registry.dispatch({ cmd: 'project.open', id: accountReturn }); return; }
+      catch (error) { owner.fail(error); }
+    }
+    const example = new URLSearchParams(location.search).get('example');
+    if (example) await navigation.registry.dispatch({ cmd: 'file.openExample', name: example });
+    const commands = await readShareFragment(location.hash);
+    if (commands) {
+      await operation.transport.replaceWith({ kind: 'commands', commands: commands as Command[] });
+    }
+  } finally { await navigation.release(); }
+}

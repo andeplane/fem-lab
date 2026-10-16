@@ -2,13 +2,14 @@ import type { AccountServices } from '@femlab/registry';
 // `HostContext` for the browser: the side effects every host Command in `@femlab/registry` is
 // allowed to have, bound to this app's store and viewer. Nothing here reaches into the engine
 // except through the transport, and nothing in the registry knows the DOM exists.
-import { MAX_GEOMETRY_FILE_BYTES, MAX_MODEL_FILE_BYTES, FemError, refOf, type AiProvider, type AutosaveState, type AutosaveVersion, type EngineTransport, type HostContext, type HostDef, type Registry, type Journal, type JournalDiff, type Selection } from '@femlab/registry';
+import { MAX_GEOMETRY_FILE_BYTES, MAX_MODEL_FILE_BYTES, FemError, refOf, type AiProvider, type AutosaveState, type AutosaveVersion, type EngineTransport, type HostContext, type HostDef, type Registry, type Journal, type JournalDiff, type Selection, type CompletedFilesHost } from '@femlab/registry';
 
 import { z } from 'zod';
 import type { Command } from '@femlab/registry';
 import { loadTargets } from './loadTargets';
 import { attachComparison, type ActiveBenchmark, type ExampleEntry } from './benchmark';
 import { storeKey } from './ai/key-storage';
+import { makeProjectHost, type ProjectAccess } from './project-host';
 import { AnimationCapture, browserAnimationCaptureEnvironment, type AnimationCaptureEnvironment } from './animation-capture';
 import type { HostCaps } from './capabilities';
 import { choiceOf, modeCount } from './fields';
@@ -25,6 +26,16 @@ import type { TransientInput } from './transient';
 import { MATERIAL_PHYSICS, type MaterialPhysics } from './ui/schema';
 import type { AbaqusIo } from '@femlab/registry';
 import { browserAbaqusIo } from './abaqus-files';
+import { tourCommands } from './tutorial/tour-state';
+
+/** Static form metadata is shared with the unavailable startup control; no form runs early. */
+export const FORM_OPEN = {
+      name: 'form.open',
+      execution: 'sessionView',
+      description: 'Put a Command into the Properties form, pre-filled with `args`, without running it: `command` names the Command, `args` are its parameters so far. `keepInitial` preserves the original values and edited object identity across field edits and Revert. `materialPhysics` selects visible Material property groups without changing their values; omitting it derives groups from the Model Steps and existing properties. The person reads the fields, edits them and presses Apply; nothing reaches the Journal until they do. For geometry.add/addBox, valid arguments also draw a dashed uncommitted preview in geometry view; edit unit-bearing coordinates or inline transforms to place it, and use view.fit to frame it. An empty command closes the form and discards the preview. Preview never writes the active Model or Journal; Apply remains one engine Command. Use it to propose a Command rather than perform one.',
+      schema: z.object({ command: z.string(), args: z.record(z.string(), z.unknown()).optional(), keepInitial: z.boolean().optional(), materialPhysics: z.array(z.enum(MATERIAL_PHYSICS)).optional() }),
+      tool: true,
+} satisfies Omit<HostDef, 'run'>;
 
 /**
  * The viewer exists only once the canvas is mounted and its chunk has arrived, so every host
@@ -41,9 +52,6 @@ export interface ViewerRef {
   previewTransient?: (input: TransientInput) => Promise<void>;
 }
 
-const soon = (what: string, suggestion: string) => (): never => {
-  throw new FemError('unsupported', `${what} is not built yet`, what, suggestion);
-};
 
 async function fetchExample(name: string): Promise<string> {
   const res = await fetch(`${import.meta.env.BASE_URL}examples/${name}.json`);
@@ -107,6 +115,7 @@ export function autosaveHistory(): AutosaveVersion[] {
 
 
 export interface SessionHostServices {
+  completedFiles?: CompletedFilesHost;
   projects: Projects;
   active(): Promise<void>;
   replay(commands: ShareCommand[], benchmark?: ActiveBenchmark): Promise<void>;
@@ -120,6 +129,14 @@ const unboundSession: SessionHostServices = {
     open: missingSession, rename: missingSession, delete: missingSession, save: missingSession,
     setEnabled: missingSession, enabled: missingSession, flush: missingSession },
 };
+
+/** A browser-accepted download handoff, not confirmation of an eventual filesystem write. */
+export function browserDownload(name: string, mime: string, data: string | Uint8Array): void {
+  const url = URL.createObjectURL(new Blob([data as BlobPart], { type: mime }));
+  const a = Object.assign(document.createElement('a'), { href: url, download: name });
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 export function makeHostContext(
   store: Store,
@@ -137,6 +154,7 @@ export function makeHostContext(
   abaqusIo?: AbaqusIo,
   account?: AccountServices,
   comparison?: ResultComparison,
+  projectAccess?: ProjectAccess,
 ): HostContext {
   const own = session.projects;
   const v = (): Viewer => {
@@ -334,6 +352,7 @@ export function makeHostContext(
     skills: () => store.state.skills,
     clipboard: { writeText: (text) => navigator.clipboard.writeText(text) },
     files: {
+      completed: session.completedFiles,
       beginSave: () => store.beginSave(),
       markSaved: (journal) => store.markOpened(journal),
       pick: () =>
@@ -362,12 +381,7 @@ export function makeHostContext(
           };
           input.click();
         }),
-      download: (name, mime, data) => {
-        const url = URL.createObjectURL(new Blob([data as BlobPart], { type: mime }));
-        const a = Object.assign(document.createElement('a'), { href: url, download: name });
-        a.click();
-        URL.revokeObjectURL(url);
-      },
+      download: browserDownload,
       // The Journal alone, not the whole `femlab/1` file: replay rebuilds the Model, and the
       // Commands deflate to a fraction of a Model snapshot.
       shareLink: async (file) => {
@@ -409,30 +423,16 @@ export function makeHostContext(
       list: () => own.list(),
       current: () => own.current(),
     },
-    folder: {
-      // The Assistant picker supplies the folder skill source; full folder I/O is #13.
-      open: soon('the folder on disk', 'use file.open and file.save for now'),
-      close: () => store.setFolder(null),
-      refresh: async () => {
-        const folder = store.state.folder;
-        if (!folder) throw new FemError('file.not-found', 'no folder is open', 'folder', 'open a project folder in the Assistant');
-        await folder.refresh();
-        // Closing/replacing a folder while this read is in flight must not restore the old one.
-        if (store.state.folder === folder) store.setFolder(folder);
-      },
-
-      info: () => null,
-      readText: soon('the folder on disk', 'use file.open for now'),
-      readBytes: soon('the folder on disk', 'use geometry.importFile with the picker for now'),
-      writeText: soon('the folder on disk', 'use file.save for now'),
-      writeBytes: soon('the folder on disk', 'use file.save for now'),
-    },
+    folder: makeProjectHost(store, projectAccess, session.active),
     examples: { open: async (name) => {
       return openExample(name, session);
     } },
     ai: {
       setKey: (key, provider: AiProvider) => {
-        storeKey(provider, key);
+        if (!storeKey(provider, key)) throw new FemError('unsupported', key
+          ? 'browser storage could not complete saving the key'
+          : 'browser storage refused to forget the key completely',
+        'ai.setKey', 'Allow browser storage and retry ai.setKey; to remove inaccessible saved keys, clear this site’s storage in browser settings.');
       },
       setModel: (model) => {
         localStorage.setItem('femlab.ai.model', model);
@@ -503,6 +503,13 @@ async function editDefinition(store: Store, transport: EngineTransport, target: 
 export function appHostCommands(store: Store, transport: EngineTransport, viewer: ViewerRef, _refresh: () => Promise<void>, results?: ResultsView, registry?: () => Registry, comparison?: ResultComparison): HostDef[] {
   let intentRun = 0;
   return [
+    ...tourCommands(store, {
+      preferences: { getItem: key => localStorage.getItem(key), setItem: (key, value) => localStorage.setItem(key, value) },
+      openCantilever: async () => {
+        const { tutorialHash } = await import('./tutorial/runner');
+        location.hash = tutorialHash('cantilever', 0);
+      },
+    }),
     {
       name: 'palette.resolve',
       execution: 'sessionView',
@@ -578,11 +585,7 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
       },
     },
     {
-      name: 'form.open',
-      execution: 'sessionView',
-      description: 'Put a Command into the Properties form, pre-filled with `args`, without running it: `command` names the Command, `args` are its parameters so far. `keepInitial` preserves the original values and edited object identity across field edits and Revert. `materialPhysics` selects visible Material property groups without changing their values; omitting it derives groups from the Model Steps and existing properties. The person reads the fields, edits them and presses Apply; nothing reaches the Journal until they do. Use it to propose a Command rather than perform one.',
-      schema: z.object({ command: z.string(), args: z.record(z.string(), z.unknown()).optional(), keepInitial: z.boolean().optional(), materialPhysics: z.array(z.enum(MATERIAL_PHYSICS)).optional() }),
-      tool: true,
+      ...FORM_OPEN,
       run: (input) => {
         const { command, args, keepInitial, materialPhysics } = input as { command: string; args?: Record<string, unknown>; keepInitial?: boolean; materialPhysics?: MaterialPhysics[] };
         store.openForm(command, args ?? {}, keepInitial === true, undefined, materialPhysics);

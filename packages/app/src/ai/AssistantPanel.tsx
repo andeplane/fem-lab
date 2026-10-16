@@ -1,3 +1,4 @@
+import {formatAiCredits} from '../account/credits';
 import { accounts } from '../account/browser';
 import { hostedProvider, hostedTools, HOSTED_COMMAND_INSTRUCTIONS } from './hosted';
 import { acquireRegistryProducer, type RegistryProducer } from '../producer-registry';
@@ -6,9 +7,10 @@ import { useStore } from '../ui/cmd';
 // journaled) and nothing else: every effect it has on the Model goes through `registry.dispatch`,
 // and every clickable carries the `data-cmd` of the Command behind it, so `test/data-cmd.test.tsx`
 // holds this panel against `registry.list()` the same way it holds the shell.
-import { FemError, parseMentions, parseRef, toToolDefinitions, type JournalEntry, type Registry, type ResultAssumption } from '@femlab/registry';
+import { FemError, FileDelivery, parseMentions, parseRef, toToolDefinitions, type JournalEntry, type Registry, type ResultAssumption } from '@femlab/registry';
 import type { ComponentChildren } from 'preact';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { CompletedFileRow } from './CompletedFileRow';
 import { verificationState, type AssistantVerification, type Store, type UiState } from '../store';
 
 import { runTurn, undoTurn, type ToolCall, type TurnResult } from './agent';
@@ -18,7 +20,7 @@ import { buildSystem, buildTurn, downscaleImage, mentionLabel, objectIndex, pars
 import { defaultProvider, maskKey, MODELS, resolveKey, storedModel } from './keys';
 import { Prose, toolDisplay } from './Prose';
 import { openaiProvider } from './openai';
-import { ProjectFolder, pickFolder, rememberHandle, rememberedFolder, reopenRemembered, watchAgents, type DirHandle, type RememberedFolder } from './project';
+import { watchAgents } from './project';
 import type { ImageBlock, Message, Provider, ProviderId } from './provider';
 
 export interface AssistantPanelProps {
@@ -76,10 +78,22 @@ type Item =
   | { kind: 'skill'; name: string; note: string }
   | { kind: 'tool'; call: ToolCall }
   | { kind: 'diff'; owner: RegistryProducer | null; entries: JournalEntry[]; steps: number; journal: string | null }
-  | { kind: 'files'; files: string[] }
+  | { kind: 'files'; files: FileDelivery[] }
   | { kind: 'bad'; text: string };
 
-const WROTE = new Set(['file.write', 'file.save', 'file.export']);
+const WROTE = new Set(['file.write', 'file.save', 'file.export', 'file.download']);
+
+/** Only host-confirmed delivery metadata, never a requested name or script-authored return. */
+export function fileDeliveries(call: ToolCall): FileDelivery[] {
+  if (call.status !== 'succeeded' && call.status !== 'failed') return [];
+  try {
+    const result: unknown = JSON.parse(call.result);
+    const files = call.command === 'script.run' ? object(result)?.['files']
+      : call.status === 'succeeded' && WROTE.has(call.command) ? [result] : [];
+    const deliveries = FileDelivery.array().safeParse(files);
+    return deliveries.success ? deliveries.data : [];
+  } catch { return []; }
+}
 const seconds = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
 
 /**
@@ -264,11 +278,11 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
     setTokens([]);
   }, [registry]);
   const { folder, skills } = ui;
-  /** The folder a previous session remembered, by name only: reading its handle is a click (#247). */
-  const [remembered, setRemembered] = useState<RememberedFolder | null>(null);
   const [provider, setProvider] = useState<ProviderId>(() => __HOSTED_AI__ ? 'openai' : defaultProvider());
   const [model, setModel] = useState(() => __HOSTED_AI__ ? 'gpt-5.4-mini' : storedModel(defaultProvider()));
   const [keyDraft, setKeyDraft] = useState('');
+  const [recentProject, setRecentProject] = useState<string | null>(null);
+  const [projectFailure, setProjectFailure] = useState<string | null>(null);
   const [charged, setCharged] = useState(0);
   const [pendingUsage, setPendingUsage] = useState<string | null>(null);
   const [turn, setTurn] = useState<TurnResult | null>(null);
@@ -319,40 +333,23 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
     if (store.state.folder === folder) store.setFolder(folder);
   }, undefined, undefined, (error) => store.log('warn', `project refresh failed: ${String(error)}`)) : undefined), [folder, store]);
 
-  // With no folder open, offer the one a previous session remembered. Only its name is read here:
-  // deserialising the handle is what ends the browser process on Chromium 153 (#247), so that waits
-  // for the click, where a failure has somewhere to be reported.
   useEffect(() => {
-    if (folder) {
-      setRemembered(null);
-      return;
-    }
-    void rememberedFolder().then(setRemembered).catch(() => setRemembered(null));
-  }, [folder]);
+    let active = true;
+    setRecentProject(null);
+    if (!folder) void registry.query({ query: 'query.folderRecent' }).then((info) => {
+      if (active) setRecentProject((info as { name: string } | null)?.name ?? null);
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [folder, registry, projectFailure]);
 
-  const openFolder = async () => {
-    let handle: DirHandle;
-    try {
-      // The host Command owns this when the app wires it; until then the panel opens it itself.
-      await dispatch({ cmd: 'folder.open', picker: true });
-      return;
-    } catch {
-      handle = await pickFolder();
-    }
-    store.setFolder(await ProjectFolder.fromHandle(handle));
-    // Remembered after the folder opened, so a storage failure costs the reopen offer, not the folder.
-    await rememberHandle(handle).catch((error: unknown) => store.log('warn', `this folder will not be offered after a reload: ${String(error)}`));
-  };
-
-  /** Reopen the remembered folder, or say plainly that it is gone and go back to the picker. */
-  const reopenFolder = async () => {
-    try {
-      const restored = await reopenRemembered();
-      setRemembered(null);
-      if (restored) store.setFolder(restored);
-    } catch (error) {
-      setRemembered(null);
-      store.fail(error);
+  const projectCommand = async (cmd: string, args: Record<string, unknown> = {}) => {
+    setProjectFailure(null);
+    try { await dispatch({ cmd, ...args }); }
+    catch (error) {
+      if (!(error instanceof FemError && error.code === 'cancelled')) {
+        setProjectFailure(error instanceof FemError ? error.cause : String(error));
+      }
+      throw error;
     }
   };
 
@@ -440,7 +437,7 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
             add({ kind: 'bad', text: event.message });
           } else if (event.type === 'turn') {
             finishProse();
-            const wrote = event.turn.calls.filter((c) => c.status === 'succeeded' && WROTE.has(c.command)).map((c) => String((c.input as { path?: string; name?: string })?.path ?? (c.input as { name?: string })?.name ?? c.command));
+            const wrote = event.turn.calls.flatMap(fileDeliveries);
             if (wrote.length > 0) add({ kind: 'files', files: wrote });
             if (event.turn.diff.length > 0) {
               const owner = event.turn.undoSteps > 0 ? await acquireRegistryProducer(registry) : null;
@@ -625,19 +622,23 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
             <span class="count">{folder.agentsMd ? `${rules.length} project rules in force` : 'no project rules'}</span>
             <span class="paths">/{folder.name}</span>
           </Cmd>
-        ) : remembered ? (
-          <Cmd cmd="folder.open" class="agents" title="Reopen the remembered folder" run={reopenFolder}>
-            <span class="mono">↻</span>
-            <span class="file">reopen ‘{remembered.name}’</span>
-            <span class="count">remembered from a previous session</span>
-          </Cmd>
         ) : (
-          <Cmd cmd="folder.open" class="agents" title="Open a folder on disk" run={openFolder}>
+          <Cmd cmd="folder.open" class="agents" title="Open a project folder" run={() => projectCommand('folder.open', { picker: true })}>
             <span class="mono">＋</span>
             <span class="file">open a project folder</span>
             <span class="count">for AGENTS.md, skills and files</span>
           </Cmd>
         )}
+        {!folder && recentProject ? (
+          <Cmd cmd="folder.open" title={`Reopen ${recentProject}`} run={() => projectCommand('folder.open', { reopen: true })}>
+            reopen {recentProject}
+          </Cmd>
+        ) : null}
+        {folder ? <>
+          <Cmd cmd="folder.refresh" title="Refresh project files and rules" run={() => projectCommand('folder.refresh')}>refresh</Cmd>
+          <Cmd cmd="folder.close" title="Close project folder" run={() => projectCommand('folder.close')}>close folder</Cmd>
+        </> : null}
+        {projectFailure ? <div class="empty-note" role="alert">{projectFailure}</div> : null}
         {folder && openPanel('rules') ? <div class="rules">{folder.agentsMd?.text}</div> : null}
         <div class="chips">
           <span class="section-label">Skills</span>
@@ -658,7 +659,7 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
         followBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 32;
       }}>
         {items.map((item, i) => (
-          <Item key={i} item={item} dispatch={dispatch} state={ui} />
+          <Item key={i} item={item} dispatch={dispatch} state={ui} registry={registry} />
         ))}
         {streaming ? <Prose streaming text={streaming} /> : null}
         {busy ? (
@@ -830,7 +831,7 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
         </div>
 
         {__HOSTED_AI__ ? <div class="hosted-account">
-          <Cmd cmd="account.open" run={() => dispatch({cmd:'account.open'})}>{ui.account.uid ? `${Math.floor(ui.account.profile?.usage?.availableCredits ?? 0).toLocaleString()} AI credits · Account` : 'Sign in for free AI'}</Cmd>
+          <Cmd cmd="account.open" run={() => dispatch({cmd:'account.open'})}>{ui.account.uid ? `${formatAiCredits(ui.account.profile?.usage?.availableCredits ?? 0)} AI credits · Account` : 'Sign in'}</Cmd>
           {ui.account.uid && !ui.account.disclosureAccepted ? <div class="ai-disclosure"><p>Your messages, selected model and project context, tool results and attached images pass through FEM Lab to OpenAI. Conversations stay in this browser; OpenAI processes requests under its API data policy. Review sensitive project content before sending.</p><a href="https://platform.openai.com/docs/guides/your-data" target="_blank" rel="noreferrer">Provider data policy</a><Cmd cmd="ai.acceptDisclosure" run={() => dispatch({cmd:'ai.acceptDisclosure'})}>Accept and enable AI</Cmd></div> : null}
         </div> : null}
         <div class="model-row">
@@ -850,7 +851,7 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
         </div> : null}
         <div class="cost">
           <span>{turn ? `this turn: ${turn.calls.length} commands · ${turn.skills.length} skills · ${seconds(turn.ms)}${__HOSTED_AI__ || turn.cost === null ? '' : ` · $${turn.cost.toFixed(3)}`}` : `${model} · ${skills.length} skills`}</span>
-          <span>{__HOSTED_AI__ ? `${charged.toLocaleString()} AI credits used${pendingUsage ? ' · usage pending' : ''}` : key.source === 'stored' ? 'key stored for this tab session' : key.source === 'dev' ? 'key from the dev server' : 'no key yet'}</span>
+          <span>{__HOSTED_AI__ ? `${formatAiCredits(charged)} AI credits used${pendingUsage ? ' · usage pending' : ''}` : key.source === 'stored' ? 'key saved in this browser' : key.source === 'session' ? 'key available in this tab only' : key.source === 'dev' ? 'key from the dev server' : 'no key yet'}</span>
         </div>
       </div>
 
@@ -878,16 +879,18 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
               title="Keep this key in this browser only"
               run={async () => {
                 const key = keyDraft || null;
-                await dispatch({ cmd: 'ai.setKey', key, provider });
-                setKeyDraft('');
-                setProvider(provider);
+                try {
+                  await dispatch({ cmd: 'ai.setKey', key, provider });
+                  setKeyDraft('');
+                  setProvider(provider);
+                } catch (error) { add({ kind: 'bad', text: String(error) }); }
               }}
             >
               {keyDraft ? 'save' : 'forget'}
             </Cmd>
           </label>
           <span class="source">
-            {key.source === 'stored' ? 'from sessionStorage in this tab' : key.source === 'dev' ? 'from the dev server’s shell environment; never in a build' : 'no key: the assistant cannot send anything'}
+            {key.source === 'stored' ? 'from localStorage in this browser; forget it before leaving a shared machine' : key.source === 'session' ? 'from sessionStorage in this tab only; this browser refused persistent storage' : key.source === 'dev' ? 'from the dev server’s shell environment; never in a build' : 'no key: the assistant cannot send anything'}
           </span>
         </div>
       ) : null}
@@ -910,7 +913,7 @@ function flushProse(text: string, add: (item: Item) => void, record: (rows: Veri
   if (rows.length > 0) add({ kind: 'verify', record: record(rows) });
 }
 
-function Item({ item, dispatch, state }: { state: UiState; item: Item; dispatch: (cmd: { cmd: string } & Record<string, unknown>) => Promise<unknown> }) {
+function Item({ item, dispatch, state, registry }: { state: UiState; item: Item; dispatch: (cmd: { cmd: string } & Record<string, unknown>) => Promise<unknown>; registry: Registry }) {
   const [undoState, setUndoState] = useState<'ready' | 'pending' | 'done' | 'failed'>('ready');
   const [undoError, setUndoError] = useState('');
   if (item.kind === 'user') {
@@ -957,16 +960,9 @@ function Item({ item, dispatch, state }: { state: UiState; item: Item; dispatch:
   }
   if (item.kind === 'files') {
     return (
-      <div class="card">
-        <div class="head">Wrote {item.files.length} files</div>
-        {item.files.map((path) => (
-          <div class="files-row" key={path}>
-            <span class="path">{path}</span>
-            <Cmd cmd="clipboard.copy" title="Copy the path" run={() => dispatch({ cmd: 'clipboard.copy', what: { kind: 'text', text: path } })}>
-              copy
-            </Cmd>
-          </div>
-        ))}
+      <div class="card files-card">
+        <div class="head">Files</div>
+        {item.files.map((file, index) => <CompletedFileRow key={index} file={file} registry={registry} dispatch={dispatch} version={state.completedFilesVersion} />)}
       </div>
     );
   }

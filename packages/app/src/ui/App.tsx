@@ -1,14 +1,16 @@
 import { AccountPanel } from './Account';
+import {ProfileControl} from './Profile';
 // The shell of docs/design/README.md: top bar, blocker banner, Model tree, viewer, Properties,
 // bottom panel, and the three overlays. Rule (ADR 0003): everything a person can click dispatches
 // one registry Command and carries its name in `data-cmd`, so `test/data-cmd.test.tsx` and the
 // Playwright smoke can hold the DOM against `registry.list()`.
 import type { CommandDef, EngineSchema, JsonSchema, Registry, Valued } from '@femlab/registry';
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import schema from '../../../registry/src/generated/runtime-schema';
 import { engineChip } from '../capabilities';
 import { choiceOf, fieldChoices, formatNumber, hasDeformation, legendTicks, showFieldArgs } from '../fields';
 import type { ViewerRef } from '../host';
+import type { StartupHost } from '../startup';
 import type { ResultComparison } from '../result-comparison';
 import { lazy } from '../lazy';
 import { clampPanelSize, PANEL_SIZE_LIMITS, solveLabel, stageOf, unsaved, type ResizablePanel, type Store, type UiState } from '../store';
@@ -37,7 +39,8 @@ const TutorialPanel = lazy(() => import('../tutorial').then((m) => m.TutorialPan
 const Tour = lazy(() => import('../tutorial').then((m) => m.Tour));
 const Report = lazy(() => import('./Report').then((m) => m.Report));
 
-export interface AppProps {
+export type AppProps = ActiveAppProps | { startup: StartupHost };
+export interface ActiveAppProps {
   store: Store;
   sessionKey?: string;
   dispatch: Dispatch;
@@ -79,6 +82,11 @@ export function handleGlobalKey(e: KeyboardEvent, dispatch: Dispatch, selectionC
   if (e.defaultPrevented) return;
   const meta = e.metaKey || e.ctrlKey;
   const key = e.key.toLowerCase();
+  if(panels['profile']){
+    if(meta&&key==='k'){e.preventDefault();void dispatch({cmd:'panel.toggle',panel:'palette',open:true}).catch(()=>undefined);}
+    else if(e.key==='Escape'){e.preventDefault();void dispatch({cmd:'panel.toggle',panel:'profile',open:false}).catch(()=>undefined);}
+    return;
+  }
   const camera = e.shiftKey && !meta && !e.altKey && !e.repeat && !isEditableTarget(e.target)
     ? CAMERA_SHORTCUTS[e.code as keyof typeof CAMERA_SHORTCUTS]
     : undefined;
@@ -166,7 +174,7 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
       <Cmd dispatch={dispatch} cmd="file.save" class="tbutton file-action" title="Download the Model and its Journal as a femlab/1 file" label="Save as file">
         <span class="file-action-label" aria-hidden="true">Save as file</span><span class="file-action-icon" aria-hidden="true">↓</span>
       </Cmd>
-      <Cmd dispatch={dispatch} cmd="file.shareLink" class="tbutton" title="A URL that reopens this Model (not built yet)">
+      <Cmd dispatch={dispatch} cmd="file.shareLink" class="tbutton" title="Copy a URL that reopens this Model">
         Share
       </Cmd>
       <Cmd dispatch={dispatch} cmd="panel.toggle" class="tbutton" args={{ panel: 'export' }}>
@@ -178,7 +186,8 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
       <Cmd dispatch={dispatch} cmd="panel.toggle" class="tbutton" args={{ panel: 'tutorial' }} pressed={s.panels['tutorial'] === true} title="Guided tutorials">
         Tutorials
       </Cmd>
-      <Cmd dispatch={dispatch} cmd="account.open" class="tbutton account-button" title="Login, AI allowance and subscription" label={s.account.uid ? 'Account' : 'Sign in'}><span class="account-button-label">{s.account.uid ? 'Account' : 'Sign in'}</span><span class="account-button-icon" aria-hidden="true">◉</span></Cmd>
+      <a class="tbutton docs-link" href={`${import.meta.env.BASE_URL}docs/`} target="_blank" rel="noreferrer">Docs</a>
+      <ProfileControl account={s.account} dispatch={dispatch} compact open={s.panels['profile']===true}/>
       <Cmd dispatch={dispatch} cmd="panel.toggle" class="tbutton outline" args={{ panel: 'assistant' }} pressed={s.panels['assistant'] === true}>
         ✳ Assistant
       </Cmd>
@@ -263,6 +272,7 @@ function SolvingCard({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
       <div class="mono solving-meta">
         {s.progress?.phase ?? 'starting'} · {percent} % · the viewer stays interactive; cancelling replays the Journal without this solve
       </div>
+      {s.progress?.message ? <div class="mono solving-message">{s.progress.message}</div> : null}
     </div>
   );
 }
@@ -539,8 +549,10 @@ function ViewerPane({ s, store, dispatch, viewer, query, comparison, side = 'lef
           }
           const legend = parent.querySelector('.legend')?.getBoundingClientRect();
           if (legend?.width) right = Math.min(right, legend.left - box.left - 12);
-          const deformation = parent.querySelector('.deform-bar')?.getBoundingClientRect();
-          if (deformation?.height) bottom = Math.min(bottom, deformation.top - box.top - 12);
+          for (const selector of ['.deform-bar', '.geometry-draft-note']) {
+            const overlay = parent.querySelector(selector)?.getBoundingClientRect();
+            if (overlay?.height) bottom = Math.min(bottom, overlay.top - box.top - 12);
+          }
           return right > 24 && bottom > top + 12 ? { width: box.width, height: box.height, left: 12, right, top, bottom } : null;
         });
       } catch (e) {
@@ -664,9 +676,13 @@ function ViewerPane({ s, store, dispatch, viewer, query, comparison, side = 'lef
       </div> : null}
       {side === 'left' ? <><SolvingCard s={s} dispatch={dispatch} /><ErrorCard s={s} dispatch={dispatch} /></> : null}
       {!comparing ? <div class="probe mono">{probe}</div> : null}
+      {side === 'left' && s.geometryDraft.status !== 'idle' ? <div class={`geometry-draft-note ${s.geometryDraft.status}`} role="status">
+        <strong>{s.geometryDraft.status === 'ready' ? 'Draft · not added' : s.geometryDraft.status === 'pending' ? 'Preparing draft…' : 'Draft unavailable'}</strong>
+        <span>{s.geometryDraft.status === 'error' ? `${s.geometryDraft.error.code}: ${s.geometryDraft.error.cause}${s.geometryDraft.error.where ? ` (${s.geometryDraft.error.where})` : ''}. Correct Properties to preview again.` : 'Edit size and position in Properties. Fit frames the preview. Add body commits it.'}</span>
+      </div> : null}
       {broken ? (
         <div class="hint">{broken}</div>
-      ) : (s.model?.bodies.length ?? 0) === 0 ? (
+      ) : (s.model?.bodies.length ?? 0) === 0 && s.geometryDraft.status === 'idle' ? (
         <div class="hint">
           <b>No geometry yet</b>
           <span>Add a box in Properties, or ask the Assistant. The banner above always says what is missing before Solve can run.</span>
@@ -745,21 +761,37 @@ function ResizeHandle({ panel, axis, direction, store, dispatch, fixed = false }
   );
 }
 
-function DocumentApp({ store, dispatch, viewer, rightViewer, comparison, query, commands = [] }: AppProps) {
+function DocumentApp(props: AppProps) {
+  const active = 'startup' in props ? undefined : props;
+  const store = active?.store;
   const s = useStore(store);
-  const started = s.model !== null && (s.model.bodies.length > 0 || s.revision > 0);
-  const read = useMemo<Query>(() => query ?? (async () => ({ value: 0, unit: '' })), [query]);
-
-  // Design state 1: the moment a Model exists the Properties panel shows "New body".
+  const startup = 'startup' in props ? props.startup : undefined;
+  const [, updateStartup] = useState(0);
+  const startupState = startup?.state;
+  useLayoutEffect(() => {
+    if (!startup) return;
+    const redraw = () => updateStartup(revision => revision + 1);
+    const detach = startup.subscribe(redraw);
+    if (startup.state !== startupState) redraw();
+    return detach;
+  }, [startup]);
+  const started = !!s && s.model !== null && (s.model.bodies.length > 0 || s.revision > 0);
+  const read = useMemo<Query>(() => active?.query ?? (async () => ({ value: 0, unit: '' })), [active?.query]);
   useEffect(() => {
-    if (started && !s.form) store.openForm('geometry.addBox', { name: 'body', size: ['1 m', '100 mm', '100 mm'] });
-  }, [started, s.form, store]);
-
+    // This runs after paint. A script or first geometry Command may have populated the
+    // Model since the empty workspace rendered; never invent a starter draft over it.
+    const current = store?.state;
+    if (started && current?.model?.bodies.length === 0 && !current.form) store?.openForm('geometry.addBox', { name: 'body', size: ['1 m', '100 mm', '100 mm'] });
+  }, [started, s?.form, store]);
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => handleGlobalKey(e, dispatch, s.selection.refs.length, s.panels);
+    if (!active || !s) return;
+    const onKey = (e: KeyboardEvent) => handleGlobalKey(e, active.dispatch, s.selection.refs.length, s.panels);
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [dispatch, s.selection.refs.length, s.panels]);
+  }, [active?.dispatch, s?.selection.refs.length, s?.panels]);
+  if ('startup' in props) return <><div class="start-layout"><Start s={props.startup.state} dispatch={command => props.startup.registry.dispatch(command)} /></div></>;
+  if (!s || !store) return null;
+  const { dispatch, viewer, rightViewer, comparison, commands = [] } = props;
 
   // One fragment for both states, with the overlays at fixed positions: the start screen
   // offers "Tutorials", and a tutorial that begins there has to survive the switch to
@@ -767,8 +799,9 @@ function DocumentApp({ store, dispatch, viewer, rightViewer, comparison, query, 
   return (
     <>
       {started ? (
-        <div class="shell" style={`--tree-width:${s.panelSizes.tree}px;--properties-width:${s.panelSizes.properties}px;--bottom-height:${s.panelSizes.bottom}px;--assistant-width:${s.panelSizes.assistant}px`}>
+        <div class={`shell${s.panels['tour'] ? ' with-tour' : ''}`} style={`--tree-width:${s.panelSizes.tree}px;--properties-width:${s.panelSizes.properties}px;--bottom-height:${s.panelSizes.bottom}px;--assistant-width:${s.panelSizes.assistant}px`}>
           <TopBar s={s} dispatch={dispatch} />
+          <Tour store={store} dispatch={dispatch} />
           <div class={s.panels['assistant'] === true ? 'under-bar with-assistant' : 'under-bar'}>
             <Banner s={s} dispatch={dispatch} />
             <div class="workspace">
@@ -776,6 +809,7 @@ function DocumentApp({ store, dispatch, viewer, rightViewer, comparison, query, 
               <ResizeHandle panel="tree" axis="x" direction={1} store={store} dispatch={dispatch} />
               <div class="centre">
                 <div class="result-workspace">
+                  {s.notes.length > 0 ? <div class="capability-notes" role="status" aria-label="Engine capabilities">{s.notes.map(note => <span key={note}>{note}</span>)}</div> : null}
                   <ComparisonControls s={s} dispatch={dispatch} query={read} />
                   <ComparisonPlaybackControls s={s} store={store} dispatch={dispatch} query={read} preview={comparison} />
                   <div class={`comparison-canvases${s.viewMode === 'results' && s.resultComparison.configuration.mode === 'sideBySide' ? ' paired' : ''}`}>
@@ -807,8 +841,6 @@ function DocumentApp({ store, dispatch, viewer, rightViewer, comparison, query, 
       <AbaqusImportReport s={s} dispatch={dispatch} />
       {s.panels['report'] ? <Report s={s} store={store} dispatch={dispatch} query={read} /> : null}
       <Palette s={s} dispatch={dispatch} commands={commands} />
-      {/* The tour's stops are shell regions, so it waits for the shell. */}
-      {started ? <Tour store={store} /> : null}
     </>
   );
 }
@@ -816,14 +848,17 @@ function DocumentApp({ store, dispatch, viewer, rightViewer, comparison, query, 
 /** Conversations and tutorial runs outlive their model's presentation subtree. Their producer
  * lease, rather than mounting/unmounting a component, decides whether execution may continue. */
 export function App(props: AppProps) {
-  const { store, registry, dispatch } = props;
-  const s = useStore(store);
+  const active = 'startup' in props ? undefined : props;
+  const s = useStore(active?.store);
   const assistantOpened = useRef(false);
-  assistantOpened.current ||= s.panels['assistant'] === true;
+  const initialSession = useRef<{ key: string | undefined }>();
+  if (active && !initialSession.current) initialSession.current = { key: active.sessionKey };
+  const key = !active || active.sessionKey === initialSession.current?.key ? 'initial' : `session:${active.sessionKey}`;
+  assistantOpened.current ||= s?.panels['assistant'] === true;
   return <>
-    <DocumentApp key={props.sessionKey} {...props} />
-    {registry ? <TutorialPanel registry={registry} store={store} /> : null}
-    {registry && assistantOpened.current ? <AssistantPanel registry={registry} store={store} hidden={!s.panels['assistant']} panelWidth={s.panelSizes.assistant} /> : null}
-    {registry && assistantOpened.current && s.panels['assistant'] === true ? <ResizeHandle panel="assistant" axis="x" direction={-1} store={store} dispatch={dispatch} fixed /> : null}
+    <DocumentApp key={key} {...props} />
+    {active?.registry && s ? <TutorialPanel registry={active.registry} store={active.store} /> : null}
+    {active?.registry && s && assistantOpened.current ? <AssistantPanel registry={active.registry} store={active.store} hidden={!s.panels['assistant']} panelWidth={s.panelSizes.assistant} /> : null}
+    {active?.registry && s && assistantOpened.current && s.panels['assistant'] === true ? <ResizeHandle panel="assistant" axis="x" direction={-1} store={active.store} dispatch={active.dispatch} fixed /> : null}
   </>;
 }

@@ -1,6 +1,8 @@
 # Hosted Google sign-in
 
-Tracks [#616](https://github.com/andeplane/fem-lab/issues/616), part of
+Tracks [#616](https://github.com/andeplane/fem-lab/issues/616), the redirect-return fix
+[#696](https://github.com/andeplane/fem-lab/issues/696), and the ADR numbering correction
+[#724](https://github.com/andeplane/fem-lab/issues/724), part of
 [#556](https://github.com/andeplane/fem-lab/issues/556), following
 [custom-domain routing](600-domain-routing.md).
 
@@ -68,6 +70,40 @@ evidence JSON were saved outside the repository.
 
 This proves redirect acceptance, separately from a completed user login. Returning from Google's actual account chooser requires the owner's account interaction;
 provider configuration and a displayed button alone do not prove that final consent step.
+
+## Redirect return and engine isolation
+
+Subsequent isolated Chromium testing for #696 found a reproducible canceled-return
+failure: the engine's self-only CSP blocks Firebase's Google script loader. A controlled
+experiment allowing the exact observed script paths also proved its reserved helper
+iframe lacks COEP and is blocked by the isolated engine document. A fresh first redirect
+still reaches Google; the earlier IAB-only network error does not establish a universal
+first-click failure.
+
+[ADR 0038](../adr/0038-google-redirect-in-a-separate-host-document.md) records the
+separate same-origin `signin.html` host. Both Hosting configurations leave only that
+document outside COEP, retaining the isolated engine and a strict auth-page CSP. The
+engine shares tab session persistence but never initializes a redirect resolver or helper
+iframe. Return state is fixed to the configured app entry; URL queries/hashes are never
+copied. A canceled redirect returns to the app without starting an automatic retry.
+An existing COI service-worker controller applies the non-isolated auth policy only
+to the exact sign-in document, preserving same-origin COOP and the shared tab session.
+
+Deploy staging then production with the existing hosting script and `--google-sign-in`;
+no auth provider or OAuth callback changes are needed. Verify the sign-in document's
+COEP is `unsafe-none`, the app remains cross-origin isolated, and cancel/return/retry
+works before claiming the return-path fix published. Full owner consent and authenticated
+return remain a separate acceptance step.
+
+The opt-in developer smoke is `node tools/smoke-google-redirect.mjs <app-origin>` after
+a root-path build with the matching public Firebase config and Google flag. It overlays
+only the local built candidate in a fresh Chromium context, preserving the real public
+Firebase helper and Google requests. It never deploys, imports a saved browser profile,
+enters credentials, or submits consent. Production and staging are its only accepted
+origins. It checks the real redirect, canceled return and retry, zero auth-page CSP
+violations/request failures, and an isolated anonymous engine with no auth iframe on
+both sides. The engine's existing caught Zod JIT feature probe remains blocked and is
+reported separately; it is not an auth-page allowance.
 
 References:
 [Firebase CLI auth configuration](https://firebase.google.com/docs/auth/configure-providers-cli),

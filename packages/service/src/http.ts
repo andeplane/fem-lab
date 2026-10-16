@@ -6,18 +6,23 @@ import type { AccountResponse } from './accounts';
 import type { Completions } from './completions';
 import type { BillingLifecycle } from './billing';
 import type {CheckoutService} from './checkout';
+import type {MonthlyFreeAllowance} from './free-allowance';
+import type {PublicCreditUnit} from '@femlab/registry';
+import {requestedCreditUnit,accountCredits,allowanceCredits,receiptCredits,requestCredits} from './public-credits';
 
 export interface HttpDependencies {
   now(): Date;
   newId(): string;
   ready(): Promise<boolean>;
-  account?(authorization: string | undefined): Promise<AccountResponse>;
+  /** Usage quantities must be read in the requested unit; omitted means the legacy contract. */
+  account?(authorization: string | undefined,creditUnit?:PublicCreditUnit): Promise<AccountResponse>;
   origins?: readonly string[];
   completions?: Completions;
   heartbeat?(callback:()=>void):()=>void;
   billing?:BillingLifecycle;
   payments?:CheckoutService;
   privacy?:AccountPrivacy;
+  freeAllowance?:MonthlyFreeAllowance;
 }
 
 async function readBytes(req:IncomingMessage,limit:number):Promise<Buffer> {
@@ -54,7 +59,7 @@ export function serviceServer(deps: HttpDependencies) {
     if (origin && deps.origins?.includes(origin)) {
       res.setHeader('access-control-allow-origin', origin);
       res.setHeader('vary', 'Origin');
-      res.setHeader('access-control-allow-headers', 'authorization, content-type, idempotency-key');
+      res.setHeader('access-control-allow-headers', 'authorization, content-type, idempotency-key, x-femlab-credit-unit');
       res.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS');
     }
     if (req.method === 'OPTIONS') { res.statusCode = origin && deps.origins?.includes(origin) ? 204 : 403; res.end(); return; }
@@ -68,6 +73,12 @@ export function serviceServer(deps: HttpDependencies) {
       res.statusCode = ready ? 200 : 503;
       res.end(JSON.stringify({ status: ready ? 'ready' : 'unavailable' }));
       return;
+    }
+    let creditUnit:PublicCreditUnit|undefined;
+    try{creditUnit=requestedCreditUnit(req.headers['x-femlab-credit-unit']);}catch(error){failure(res,error,requestId);return;}
+    if(req.method==='POST'&&req.url==='/v1/account/free-allowance'){
+      try{if(!deps.freeAllowance)throw new ServiceFailure(503,'free-allowance-unavailable','Monthly free allowances are unavailable.','free-allowance');res.end(JSON.stringify(allowanceCredits(await deps.freeAllowance.claim(req.headers.authorization,await readJson(req)),creditUnit)));}
+      catch(error){failure(res,error,requestId)}return;
     }
     if(req.method==='POST'&&['/v1/account/export','/v1/account/delete'].includes(req.url??'')){try{if(!deps.privacy)throw new ServiceFailure(503,'privacy-unavailable','Account data actions are temporarily unavailable.','account');const result=req.url==='/v1/account/export'?await deps.privacy.export(req.headers.authorization,await readJson(req)):await deps.privacy.delete(req.headers.authorization,await readJson(req));res.end(JSON.stringify(result));}catch(error){failure(res,error,requestId)}return;}
     if(req.method==='POST'&&req.url==='/v1/billing/webhook') {
@@ -86,7 +97,7 @@ export function serviceServer(deps: HttpDependencies) {
       }catch(error){failure(res,error,requestId);}return;
     }
     if (req.method === 'GET' && req.url === '/v1/account' && deps.account) {
-      try { res.end(JSON.stringify(await deps.account(req.headers.authorization))); }
+      try { res.end(JSON.stringify(accountCredits(await deps.account(req.headers.authorization,creditUnit),creditUnit))); }
       catch (error) {
         const failure = error instanceof ServiceFailure ? error : new ServiceFailure(503, 'account-unavailable', 'Account service is temporarily unavailable.', 'account');
         res.statusCode = failure.status;
@@ -99,7 +110,7 @@ export function serviceServer(deps: HttpDependencies) {
       catch(error) { failure(res,error,requestId); } return;
     }
     if(req.method==='GET'&&/^\/v1\/ai\/requests\/[a-f0-9-]{36}$/.test(req.url??'')&&deps.completions) {
-      try { res.end(JSON.stringify(await deps.completions.status(req.headers.authorization,req.url!.split('/').at(-1)!))); }
+      try { res.end(JSON.stringify(requestCredits(await deps.completions.status(req.headers.authorization,req.url!.split('/').at(-1)!),creditUnit))); }
       catch(error) { failure(res,error,requestId); } return;
     }
     if(req.method==='POST'&&['/v1/ai/completions','/chat/completions'].includes(req.url??'')&&deps.completions) {
@@ -109,9 +120,9 @@ export function serviceServer(deps: HttpDependencies) {
         const result=await deps.completions.run({authorization:req.headers.authorization,key:typeof req.headers['idempotency-key']==='string'?req.headers['idempotency-key']:undefined,body:await readJson(req),signal:abort.signal},{
           start(){ streaming=true; res.setHeader('content-type','text/event-stream'); res.setHeader('x-accel-buffering','no'); res.flushHeaders();
             stopHeartbeat=deps.heartbeat?.(()=>{if(!res.destroyed) res.write(': keep-alive\n\n');}); },
-          async send(event) { if(abort.signal.aborted) return; if(!res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)) await once(res,'drain',{signal:abort.signal}); },
+          async send(event) { if(abort.signal.aborted) return;const publicEvent=event.type==='receipt'?{...event,receipt:receiptCredits(event.receipt,creditUnit)}:event.type==='request'?{...event,request:requestCredits(event.request,creditUnit)}:event;if(!res.write(`event: ${event.type}\ndata: ${JSON.stringify(publicEvent)}\n\n`)) await once(res,'drain',{signal:abort.signal}); },
         });
-        if(!res.destroyed) res.end(result?JSON.stringify(result):undefined);
+        if(!res.destroyed) res.end(result?JSON.stringify(requestCredits(result,creditUnit)):undefined);
       } catch(error) {
         if(!res.destroyed) { if(streaming) res.end(); else failure(res,error,requestId); }
       } finally { stopHeartbeat?.(); res.removeListener('close',onClose); }
