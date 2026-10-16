@@ -57,15 +57,25 @@ diagonal system exercises restart. Tests retain exact one/four-thread fields,
 zero RHS, budget, cancellation, rank, nonfinite, inner error and admission gates.
 Exact-inner identity-system tests require bit-exact `(0.25,-0.5)` and `(1,1)`
 and zero residual at one/four threads. The latter also detects the normalization
-roundtrip in a CPU-only run. The parent reported that the normalized version
+roundtrip in a CPU-only run. The first normalized implementation
 failed two unchanged small-GPU exact oracles: residual zero became
 2.775557561562891e-15 and `(0.25,-0.5)` became
 `(0.25000000000000006,-0.5000000000000001)` (19 other tests passed,
 2 ignored; RSS 168 MB, footprint 235 MB, no resource guard fired). Those
-failures motivate removing normalization; hardware rerun of this final source
-is still required. These establish the outer algorithm, not D5 physics acceptance. The existing
-66k direct/B1/equilibrium and 780k B1/equilibrium/true-residual tests remain
-mandatory. Full strict LLVM line/function/region coverage remains mandatory.
+failures motivate removing normalization. The final unnormalized source passed
+all 21 active real Metal GPU tests and the unchanged 66,150-equation benchmark on
+home-mini, including direct-displacement, B1, force/moment equilibrium and complete
+one/four-thread field checks. No external resource guard fired. Strict LLVM coverage
+including GPU execution passed with zero misses: 74,461 regions, 3,966 functions
+and 35,143 lines, each 100%. These results are bound to the tested source hashes;
+they do not establish the 780k D5 gate.
+
+The prepared 780,300-equation run was refused before launch: only 60% of the mini's
+16 GiB was available, below the predeclared 70% host-admission threshold. Prior
+measured peak RSS was about 9.3 GB. This is neither a numerical result nor a reason
+to lower the engine or host guards. The original 780k B1/equilibrium/true-residual
+test remains mandatory and unaccepted. No larger-case convergence or performance
+claim follows from the smaller tests.
 
 ## Primary references
 

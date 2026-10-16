@@ -3365,3 +3365,14 @@ physical patches and mesh-convergence studies. The prior stationary-correction
 780k hardware run failed numerically (true residual 3765.703286884391); no accepted
 780k result is claimed for flexible GCR. The default target, factor-100 floor,
 66k direct comparison, B1 tip and equilibrium tolerances remain unchanged.
+
+Final unnormalized-source verification on home-mini (17 October 2026, Oslo): all
+21 active Metal GPU tests and the unchanged 66,150-equation release benchmark
+passed. The latter retained direct-displacement `1e-8`, B1, force/moment equilibrium
+and complete one/four-thread field checks; peak RSS was 1,667,072,000 bytes, with no
+external guard stop. Strict engine/geometry LLVM coverage including GPU tests was
+100% of 74,461 regions, 3,966 functions and 35,143 lines, with zero misses.
+Source hashes and the actual release-binary hash bind those receipts. A subsequent
+780,300-equation attempt was refused before launch by the mini's declared host
+admission (60% free of 16 GiB, below 70%). No 780k result is inferred. The resource
+hold and earlier stationary-correction numerical failure remain separate evidence.
