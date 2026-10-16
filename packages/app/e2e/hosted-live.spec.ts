@@ -12,8 +12,9 @@ interface Session {token:string;firebaseKey:string;email:string;accountId?:strin
 interface AccountExport {account:{id:string;email:string};requests:unknown[];credit_grants:unknown[];credit_entries:unknown[];credit_holds:unknown[];usage_receipts:unknown[]}
 const account=(page:Page)=>page.evaluate(()=>window.fem.registry.query({query:'query.account'})) as Promise<AccountState>;
 const zeroAllowance={plan:'free',totalCredits:0,availableCredits:0,reservedCredits:0};
+const ready=async(page:Page)=>{await page.waitForFunction(()=>Boolean(window.fem),undefined,{timeout:60000});await expect.poll(()=>page.evaluate(()=>window.fem.registry.query({query:'query.workspaceStatus'})).catch(()=>null),{timeout:60000}).toMatchObject({ready:true})};
 
-test('email login has zero signup credits, staging rejects AI, exports stay owned and deletion is durable',async({page,browser},testInfo)=>{
+test('email login has zero credits, private projects stay isolated, anonymous work survives and deletion is durable',async({page,browser},testInfo)=>{
   const paths=[process.env['FEMLAB_LIVE_LOGIN_PATH'],process.env['FEMLAB_LIVE_OTHER_LOGIN_PATH']];
   test.skip(paths.some(path=>!path),'Requires two fresh disposable staging email action links; no email is sent.');
   expect(process.env['FEMLAB_LIVE_ORIGIN']).toBe(ORIGIN);
@@ -47,7 +48,14 @@ test('email login has zero signup credits, staging rejects AI, exports stay owne
   const request=(session:Session,path:string,body?:unknown)=>fetch(API+path,{method:body===undefined?'GET':'POST',headers:headers(session),...(body===undefined?{}:{body:JSON.stringify(body)})});
   const runJob=()=>execFileSync('gcloud',['run','jobs','execute','femlab-recover','--region=europe-west3','--project=femlab-app-staging',`--account=${process.env['FEMLAB_LIVE_GOOGLE_ACCOUNT']!}`,'--wait'],{stdio:'pipe',timeout:120000});
   let passed=false;
+  const anonymousName='Staging anonymous recovery',privateName='Staging private zero-allowance smoke';
   try {
+    await page.addInitScript(()=>localStorage.setItem('femlab.tour.dismissed','1'));
+    await page.goto(ORIGIN);await ready(page);
+    expect(await account(page)).toMatchObject({status:'anonymous',uid:null});
+    const anonymousProject=await page.evaluate(name=>window.fem.dispatch({cmd:'project.new',name}),anonymousName) as {id:string};
+    await page.evaluate(()=>window.fem.dispatch({cmd:'geometry.addBox',name:'staging-anonymous-only',size:['1 m','1 m','1 m']}));
+    await page.evaluate(()=>window.fem.dispatch({cmd:'project.save'}));
     for(const [index,current] of [page,other].entries()){
       const fixture=fixtures[index]!;
       await current.addInitScript(email=>{sessionStorage.setItem('femlab.signInEmail',email);localStorage.setItem('femlab.tour.dismissed','1')},fixture.email);
@@ -62,16 +70,22 @@ test('email login has zero signup credits, staging rejects AI, exports stay owne
       session.accountId=created.id;await writeFile(statePath,JSON.stringify(sessions),{mode:0o600});
       const claim=await request(session,'/v1/account/free-allowance',{});
       expect(claim.status).toBe(403);expect(await claim.json()).toMatchObject({code:'eligibility-required',where:'free-allowance'});
-      await current.waitForFunction(()=>Boolean(window.fem),undefined,{timeout:60000});
+      await ready(current);
       await expect.poll(()=>account(current),{timeout:30000}).toMatchObject({status:'active',email:fixture.email,profile:{id:session.accountId,usage:zeroAllowance}});
       await current.reload();
-      await current.waitForFunction(()=>Boolean(window.fem),undefined,{timeout:60000});
+      await ready(current);
       await expect.poll(()=>account(current),{timeout:30000}).toMatchObject({status:'active',profile:{id:session.accountId,usage:zeroAllowance}});
       await current.evaluate(()=>window.fem.dispatch({cmd:'account.refresh'}));
       expect((await account(current)).profile).toMatchObject({creditUnit:'usd-milli-v1',usage:zeroAllowance,freeAllowance:{status:'review-required',credits:4999.9995}});
     }
     expect(sessions[0]!.accountId===sessions[1]!.accountId).toBe(false);
-    await page.evaluate(()=>window.fem.dispatch({cmd:'model.new',name:'Staging zero-allowance smoke'}));
+    const privateProject=await page.evaluate(name=>window.fem.dispatch({cmd:'project.new',name}),privateName) as {id:string};
+    await page.evaluate(()=>window.fem.dispatch({cmd:'geometry.addBox',name:'staging-private-only',size:['2 m','2 m','2 m']}));
+    await page.evaluate(()=>window.fem.dispatch({cmd:'project.save'}));
+    await page.evaluate(()=>window.fem.dispatch({cmd:'account.syncProjects'}));
+    await page.evaluate(()=>window.fem.dispatch({cmd:'panel.toggle',panel:'projects',open:true}));
+    await expect(page.locator('.recent').filter({hasText:privateName}).first().locator('.project-sync-details')).toHaveAttribute('data-sync-phase','synced',{timeout:30000});
+    await page.evaluate(()=>window.fem.dispatch({cmd:'panel.toggle',panel:'projects',open:false}));
     await page.evaluate(()=>window.fem.dispatch({cmd:'panel.toggle',panel:'assistant',open:true}));
     await expect(page.locator('aside.assistant input[type=password]')).toHaveCount(0);
     await page.getByRole('button',{name:'Accept and enable AI',exact:true}).click();
@@ -93,9 +107,17 @@ test('email login has zero signup credits, staging rejects AI, exports stay owne
     await expect(dialog.getByRole('button',{name:'Claim this month’s free allowance',exact:true})).toBeDisabled();
     await page.setViewportSize({width:390,height:844});await page.screenshot({path:testInfo.outputPath('zero-signup-account-390.png')});
     await dialog.getByRole('button',{name:'Sign out',exact:true}).click();
-    expect(await account(page)).toMatchObject({status:'anonymous',uid:null,profile:null,disclosureAccepted:false});
+    await ready(page);
+    await expect.poll(()=>account(page)).toMatchObject({status:'anonymous',uid:null,profile:null,disclosureAccepted:false});
     await expect(page.locator('aside.assistant .messages')).toBeEmpty();
-    expect((await page.evaluate(()=>window.fem.query.model())).name).toBe('Staging zero-allowance smoke');
+    const afterLogout=await page.evaluate(()=>window.fem.query.model());
+    expect(afterLogout.name).not.toBe(privateName);expect(afterLogout.bodies.some(body=>body.name==='staging-private-only')).toBe(false);
+    const visible=await page.evaluate(()=>window.fem.registry.query({query:'query.projects'})) as {projects:{id:string}[]};
+    expect(visible.projects.some(project=>project.id===privateProject.id)).toBe(false);
+    expect(visible.projects.some(project=>project.id===anonymousProject.id)).toBe(true);
+    await page.evaluate(id=>window.fem.dispatch({cmd:'project.open',id}),anonymousProject.id);
+    const recovered=await page.evaluate(()=>window.fem.query.model());
+    expect(recovered.name).toBe(anonymousName);expect(recovered.bodies.some(body=>body.name==='staging-anonymous-only')).toBe(true);
 
     const anonymous=await fetch(API+'/v1/account/export',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
     expect(anonymous.status).toBe(401);
@@ -117,6 +139,8 @@ test('email login has zero signup credits, staging rejects AI, exports stay owne
       const data=await download.json() as AccountExport;
       expect(data.account).toMatchObject({id:session.accountId,email:session.email});
       expect(JSON.stringify(data).includes(sessions[1-index]!.email)).toBe(false);
+      expect(data).toHaveProperty('cloud_projects');
+      expect(JSON.stringify(data).includes(privateName)).toBe(index===0);
       for(const field of ['requests','credit_grants','credit_entries','credit_holds','usage_receipts'] as const)expect(data[field]).toHaveLength(0);
       expect(data).not.toHaveProperty('prompts');
       const unsigned=new URL(artifact.url);unsigned.search='';
@@ -131,7 +155,7 @@ test('email login has zero signup credits, staging rejects AI, exports stay owne
       if(sessions.length)runJob();
       for(const session of sessions)await expect.poll(async()=>(await request(session,'/v1/account')).status,{timeout:30000}).toBe(401);
       if(passed){
-        await testInfo.attach('staging-zero-signup-proof',{contentType:'application/json',body:JSON.stringify({verifiedAt:new Date().toISOString(),creditUnit:'usd-milli-v1',disposableAccounts:sessions.length,signupCredits:0,reopenedCredits:0,freeAllowanceStatus:'review-required',unapprovedClaimStatus:403,completionStatus:503,completionCode:'ai-unavailable',requestRows:0,creditRows:0,usageReceipts:0,exportsOwned:true,unsignedExportStatus:403,logoutPreservedLocalModel:true,oldTokenStatus:401,generatedAI:false})});
+        await testInfo.attach('staging-zero-signup-proof',{contentType:'application/json',body:JSON.stringify({verifiedAt:new Date().toISOString(),creditUnit:'usd-milli-v1',disposableAccounts:sessions.length,signupCredits:0,reopenedCredits:0,freeAllowanceStatus:'review-required',unapprovedClaimStatus:403,completionStatus:503,completionCode:'ai-unavailable',requestRows:0,creditRows:0,usageReceipts:0,exportsOwned:true,unsignedExportStatus:403,logoutHidPrivateProject:true,anonymousProjectRecovered:true,privateProjectSynced:true,oldTokenStatus:401,generatedAI:false})});
         for(const path of paths)await unlink(path!);
         await unlink(statePath);
       }

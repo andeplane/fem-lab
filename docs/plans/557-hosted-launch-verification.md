@@ -455,11 +455,30 @@ Sanitized current proof, bound to the test source SHA-256, is retained at
 Earlier dated evidence remains separate. Production sender verification in #710 still
 reports `IN_PROGRESS`; post-apply Inbox delivery remains unverified.
 
+### Account-partitioned staging contract (prepared 17 October 2026)
+
+The cloud client in #775 changes sign-out intentionally: private account Models and
+project lists must disappear, while anonymous browser work remains recoverable. The
+older dated runs above predate that client and do not establish the new boundary.
+The prepared smoke now saves an anonymous boxed Model before either login, then
+creates a distinct private project after authentication and waits for its actual
+cloud sync to finish. Sign-out must hide the private Model/project; reopening the
+anonymous project must recover its original Model. Owned account exports must include
+the private project only for its owner. Waiting for completed sync also avoids
+revoking an active chunk writer during durable fixture cleanup.
+
+This is a prepared assertion update, not a new deployed pass. It requires the #775
+client release, type/discovery checks and fresh disposable staging fixtures before
+its source-bound result can be recorded. It creates no production account, AI
+completion, credit grant or payment. The historical zero-spend evidence stays dated.
+
 ## Remaining release gates
 
 - Resolve production email Spam placement/custom-sender deliverability in #710, then
   verify actual Inbox delivery. Receipt and SPF/DKIM checks passed; Google's owner
   chooser/consent return is already verified on both environments.
+- Run the account-partitioned staging contract after #775 is released; retain the
+  earlier dated results separately.
 - Complete required exact-head CI and review for the final three-file verification
   source. Recorded deployed acceptance is separate from that source gate.
 
