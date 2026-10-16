@@ -362,6 +362,12 @@ STEP conversion. Durable face targets use geometric predicates. See ADR 0029 and
 **Account** — One verified Firebase identity mapped to service-owned status, entitlements
 and billing. It is not an engine Model, Session or Journal entry.
 
+**Cloud project** — An Account-owned complete portable project artifact with a service ID,
+revision and change cursor. It can include retained Results, files and completed outputs;
+a ModelFile alone does not imply those are present. Private immutable chunks are committed
+as one revision. Storage quotas use decimal bytes and are independent of AI credits.
+See ADR 0043.
+
 **Merchant mode** — The explicit `pending`, `direct` or `managed` route for new paid
 purchases. It is independent of tax collection mode and does not convert an existing
 subscription. Pending cannot enable Checkout. See ADR 0032.

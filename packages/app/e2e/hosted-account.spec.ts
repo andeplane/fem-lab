@@ -16,6 +16,36 @@ test.describe('@cpu @hosted optional accounts in the production build',()=>{
     await page.setViewportSize({width:390,height:844});await page.goto('./');await page.waitForFunction(()=>Boolean(window.fem),undefined,{timeout:60000});await page.evaluate(()=>window.fem.dispatch({cmd:'account.open'}));
     await expect(page.getByRole('dialog',{name:'Sign in'})).toBeVisible();const box=await page.getByRole('dialog',{name:'Sign in'}).boundingBox();expect(box!.width).toBeLessThanOrEqual(390);await expect(page.getByRole('button',{name:'Close account'})).toBeVisible();
   });
+  test('Assistant account settings opens by keyboard and preserves the unsent draft and Journal', async ({ page }) => {
+    const external: string[] = [];
+    page.on('request', request => {
+      if (/identitytoolkit|securetoken|\/chat\/completions|\/v1\/ai\/completions|checkout\.stripe/.test(request.url())) external.push(request.url());
+    });
+    await page.addInitScript(() => localStorage.setItem('femlab.tour.dismissed', '1'));
+    await page.goto('./');
+    await page.waitForFunction(() => Boolean(window.fem), undefined, { timeout: 60_000 });
+    await page.evaluate(async () => {
+      await window.fem.model.new({ name: 'settings keeps the model' });
+      await window.fem.dispatch({ cmd: 'chat.setDraft', text: 'Keep this unsent analysis' });
+    });
+    const journal = await page.evaluate(() => window.fem.query.journal());
+    const assistant = page.locator('aside.assistant');
+    const gear = assistant.getByTitle('Account settings', { exact: true });
+    await expect(gear).toHaveAttribute('data-cmd', 'account.open');
+    for (let cycle = 0; cycle < 2; cycle++) {
+      await gear.focus();
+      await page.keyboard.press('Enter');
+      const account = page.getByRole('dialog', { name: 'Sign in', exact: true });
+      await expect(account).toBeVisible();
+      await page.getByRole('button', { name: 'Close account', exact: true }).click();
+      await expect(account).toBeHidden();
+      await expect(gear).toBeFocused();
+      await expect(assistant.locator('textarea')).toHaveValue('Keep this unsent analysis');
+      expect(await page.evaluate(() => window.fem.query.journal())).toEqual(journal);
+      await expect(assistant.locator('.settings, input[type=password]')).toHaveCount(0);
+    }
+    expect(external).toEqual([]);
+  });
   test('@hosted explains the product before local and hosted actions and keeps anonymous AI drafts local',async({page})=>{
     const aiRequests:string[]=[];
     page.on('request',request=>{if(/\/(?:chat|v1\/ai)\/completions(?:[?#]|$)/.test(request.url()))aiRequests.push(request.url());});

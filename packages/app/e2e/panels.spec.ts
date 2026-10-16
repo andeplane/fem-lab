@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './fixtures';
 
 async function ready(page: Page): Promise<void> {
   await page.waitForFunction(() => typeof window.fem !== 'undefined', undefined, { timeout: 60_000 });
@@ -17,6 +17,12 @@ async function canvasIsSized(page: Page): Promise<void> {
 }
 
 test.describe('@cpu panel resizing', () => {
+  test.beforeEach(async ({ page }) => {
+    // These defaults describe the workspace without onboarding. The tour's reduced-height
+    // layout and Assistant alignment are exercised in assistant-tour-layout.spec.ts.
+    await page.addInitScript(() => localStorage.setItem('femlab.tour.dismissed', '1'));
+  });
+
   test('drag, keyboard and cancel preserve defaults, Journal and viewer backing size', async ({ page }) => {
     await page.goto('./');
     await ready(page);

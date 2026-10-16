@@ -21,6 +21,12 @@ behavior, verification and any remaining limitations. Review before merging; all
 green. After merge, verify that the issue closed and remove `in progress` if it remains. If
 work stops, remove the label and explain why on the issue.
 
+`main` requires an up-to-date PR and these GitHub Actions checks: **billing release guards**,
+**rust (macos-latest)**, **wasm build**, **web (codegen, typecheck, tests, app build)** and
+**browser smoke (cpu, sw, gpu)**. The protection applies to administrators too. Wait for the
+checks on the current PR head; a local pass, an earlier revision or a pending job cannot
+authorize a merge. The additional main/release matrix follows [ADR 0022](docs/adr/0022-fast-pull-request-gate-full-matrix-on-main.md).
+
 ## Preserve the architecture
 
 The engine and geometry libraries are Rust; hosts are TypeScript. The engine is headless:
@@ -50,6 +56,38 @@ npm test
 npm run build
 npm run size
 ```
+
+Run affected checks before pushing each candidate, using Node 22 as CI does. For changes to
+shared app layout, onboarding, navigation or startup, run the full Chromium CPU suite against
+a fresh development build from this worktree. Set `PW_PORT` to an unused port (the headerless
+server also uses the port seven above it):
+
+```sh
+npm run typecheck
+npm run test -w packages/app
+FEMLAB_AI_MODE=development npm run build -w packages/app
+PW_PORT=4910 npm run e2e -w packages/app -- --project=cpu
+```
+
+For bundle or runtime changes, also run `npm run size` and the cold Pages check:
+
+```sh
+PW_PORT=4910 npm run e2e -w packages/app -- --project=sw --grep "cold Pages bootstrap"
+```
+
+Changes to hosted account behavior also need the hosted build and its separate smoke, before
+rebuilding in development mode for the supplier-fixture CPU suite:
+
+```sh
+FEMLAB_AI_MODE=hosted npm run build -w packages/app
+PW_PORT=4910 npm run e2e -w packages/app -- --project=cpu e2e/hosted-account.spec.ts
+```
+
+The first-run tour is part of the default product state. A test asserting the workspace's
+unobstructed panel dimensions must explicitly dismiss it; tests for onboarding must keep it
+enabled. Do not make selectors ambiguous, drop assertions or lower budgets to accommodate a
+red run. Diagnose the failure, then run the affected checks again. Record any local platform
+or adapter limitation in the PR and wait for the corresponding CI result.
 
 For a schema change, regenerate the native schema and TypeScript/reference outputs together:
 
