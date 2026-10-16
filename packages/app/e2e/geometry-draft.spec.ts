@@ -48,3 +48,22 @@ test.describe('@cpu uncommitted geometry drafts', () => {
     await expect.poll(() => page.evaluate(async () => (await window.fem.query.model()).bodies.length)).toBe(0);
   });
 });
+
+test('@cpu first workspace entry through geometry never invents a starter draft over the committed body', async ({ page }) => {
+  await page.addInitScript(() => { localStorage.setItem('femlab.tour.dismissed', '1'); localStorage.setItem('femlab.autosave', 'off'); });
+  await page.goto('./');
+  await page.waitForFunction(() => Boolean(window.fem));
+  await page.evaluate(() => window.fem.geometry.addBox({ name: 'first-body', size: ['1 mm', '2 mm', '3 mm'] }));
+  await expect(page.locator('.shell')).toBeVisible();
+  // Let Preact's after-paint startup effect run before asserting its absence of work.
+  await page.evaluate(async () => { for (let i = 0; i < 2; i++) await new Promise<void>(resolve => requestAnimationFrame(() => setTimeout(resolve, 0))); });
+  await expect(page.locator('.props .panel-sub')).toHaveCount(0);
+  await expect(page.locator('.geometry-draft-note')).toHaveCount(0);
+  const journal = await page.evaluate(() => window.fem.query.journal());
+  expect(journal.entries).toHaveLength(1);
+  expect((await page.evaluate(() => window.fem.query.model())).bodies.map(body => body.name)).toEqual(['first-body']);
+  // A deliberate form.open remains available after that first committed Body.
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'form.open', command: 'geometry.addBox', args: { name: 'second-body', size: ['2 mm', '2 mm', '2 mm'] } }));
+  await expect(page.getByText('Draft · not added', { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => window.fem.query.journal())).toEqual(journal);
+});
