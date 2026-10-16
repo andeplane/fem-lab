@@ -10,6 +10,8 @@ On the public app, sign in through Account using Google or an email link. Accept
 
 Your messages and the context needed for the request pass through FEM Lab to the configured model provider. Context can include Model definitions, earlier messages, tool arguments/results, project-file excerpts and screenshots. Local storage does not mean an Assistant request stays on the device. Read the [Privacy notice](https://femlab.app/privacy.html) before including confidential data.
 
+Image attachments and viewport captures belong to the account and Model session where you attach them. Signing out, switching accounts (including switching back), or replacing the Model session discards unsent attachments and ignores unfinished reads or captures from the previous context. They cannot enter a later account's message. Collapsing and reopening the Assistant, or refreshing the same account's profile, keeps its current attachments. Canceling an attachment sends nothing; review its image and caption before choosing **Send**.
+
 On the start screen, describing an analysis creates an **unsent draft**. **Sign in to continue** opens Account; the draft stays in that tab’s session storage and remains editable after authentication. It is bound to the authenticated account; signing out or switching accounts clears it. **Review in assistant** moves it into the Assistant without sending it. Nothing goes to hosted AI until you choose **Send** there and complete the disclosure/allowance requirements. Starting local modeling does not require using that draft or signing in.
 
 ## Give a bounded engineering task
