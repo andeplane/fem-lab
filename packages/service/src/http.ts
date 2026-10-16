@@ -7,6 +7,8 @@ import type { Completions } from './completions';
 import type { BillingLifecycle } from './billing';
 import type {CheckoutService} from './checkout';
 import type {MonthlyFreeAllowance} from './free-allowance';
+import type {CloudProjects} from './cloud-projects';
+import {PROJECT_CHUNK_BYTES} from '@femlab/registry';
 import type {PublicCreditUnit} from '@femlab/registry';
 import {requestedCreditUnit,accountCredits,allowanceCredits,receiptCredits,requestCredits} from './public-credits';
 
@@ -23,6 +25,7 @@ export interface HttpDependencies {
   payments?:CheckoutService;
   privacy?:AccountPrivacy;
   freeAllowance?:MonthlyFreeAllowance;
+  projects?:CloudProjects;
 }
 
 async function readBytes(req:IncomingMessage,limit:number):Promise<Buffer> {
@@ -44,7 +47,7 @@ function failure(res:ServerResponse,error:unknown,requestId:string) {
   const publicError=error instanceof ServiceFailure ? error : new ServiceFailure(503,'service-unavailable','The service is temporarily unavailable.','http');
   res.statusCode=publicError.status;
   if(publicError.status===429) res.setHeader('retry-after','60');
-  res.end(JSON.stringify({code:publicError.code,cause:publicError.message,where:publicError.where,suggestion:publicError.suggestion,requestId}));
+  res.end(JSON.stringify({code:publicError.code,cause:publicError.message,where:publicError.where,suggestion:publicError.suggestion,...(publicError.details?{details:publicError.details}:{}),requestId}));
 }
 
 /** Node host only. No engine construction, browser globals, implicit clock or randomness. */
@@ -60,7 +63,7 @@ export function serviceServer(deps: HttpDependencies) {
       res.setHeader('access-control-allow-origin', origin);
       res.setHeader('vary', 'Origin');
       res.setHeader('access-control-allow-headers', 'authorization, content-type, idempotency-key, x-femlab-credit-unit');
-      res.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS');
+      res.setHeader('access-control-allow-methods', 'GET, POST, PUT, OPTIONS');
     }
     if (req.method === 'OPTIONS') { res.statusCode = origin && deps.origins?.includes(origin) ? 204 : 403; res.end(); return; }
     if (req.method === 'GET' && ['/health','/healthz'].includes(req.url??'')) {
@@ -76,6 +79,25 @@ export function serviceServer(deps: HttpDependencies) {
     }
     let creditUnit:PublicCreditUnit|undefined;
     try{creditUnit=requestedCreditUnit(req.headers['x-femlab-credit-unit']);}catch(error){failure(res,error,requestId);return;}
+    if((req.url??'').startsWith('/v1/projects')){
+      try {
+        if(!deps.projects)throw new ServiceFailure(503,'cloud-projects-unavailable','Cloud project storage is unavailable. Local projects remain available.','project');
+        const url=new URL(req.url!,'http://service.local'),path=url.pathname;
+        if(req.method==='GET'&&path==='/v1/projects'){res.end(JSON.stringify(await deps.projects.list(req.headers.authorization,url.searchParams.get('after')??'0')));return}
+        if(req.method==='POST'&&path==='/v1/projects/uploads'){res.end(JSON.stringify(await deps.projects.reserve(req.headers.authorization,req.headers['idempotency-key'],await readJson(req))));return}
+        const upload=path.match(/^\/v1\/projects\/uploads\/([^/]+)\/chunks\/(\d+)$/);
+        if(req.method==='PUT'&&upload){res.end(JSON.stringify(await deps.projects.put(req.headers.authorization,upload[1]!,Number(upload[2]),async()=>{if(req.headers['content-type']!=='application/octet-stream')throw new ServiceFailure(415,'binary-required','Send project chunks as application/octet-stream.','project');const length=req.headers['content-length'];if(length!==undefined&&(!/^\d+$/.test(length)||Number(length)>PROJECT_CHUNK_BYTES))throw new ServiceFailure(413,'project-chunk-too-large','Project chunks are limited to 8,000,000 bytes.','project');return readBytes(req,PROJECT_CHUNK_BYTES)})));return}
+        const commit=path.match(/^\/v1\/projects\/uploads\/([^/]+)\/commit$/);
+        if(req.method==='POST'&&commit){res.end(JSON.stringify(await deps.projects.commit(req.headers.authorization,commit[1]!,await readJson(req))));return}
+        const chunk=path.match(/^\/v1\/projects\/([^/]+)\/chunks\/(\d+)$/);
+        if(req.method==='GET'&&chunk){const bytes=await deps.projects.chunk(req.headers.authorization,chunk[1]!,Number(chunk[2]),url.searchParams.get('revision')??'');res.setHeader('content-type','application/octet-stream');res.setHeader('content-disposition','attachment; filename="femlab-project.chunk"');res.setHeader('x-content-type-options','nosniff');res.end(bytes);return}
+        const remove=path.match(/^\/v1\/projects\/([^/]+)\/delete$/);
+        if(req.method==='POST'&&remove){res.end(JSON.stringify(await deps.projects.remove(req.headers.authorization,remove[1]!,req.headers['idempotency-key'],await readJson(req))));return}
+        const project=path.match(/^\/v1\/projects\/([^/]+)$/);
+        if(req.method==='GET'&&project){res.end(JSON.stringify(await deps.projects.read(req.headers.authorization,project[1]!)));return}
+        throw new ServiceFailure(404,'not-found','This cloud project route is not available.','project');
+      }catch(error){failure(res,error,requestId)}return;
+    }
     if(req.method==='POST'&&req.url==='/v1/account/free-allowance'){
       try{if(!deps.freeAllowance)throw new ServiceFailure(503,'free-allowance-unavailable','Monthly free allowances are unavailable.','free-allowance');res.end(JSON.stringify(allowanceCredits(await deps.freeAllowance.claim(req.headers.authorization,await readJson(req)),creditUnit)));}
       catch(error){failure(res,error,requestId)}return;
