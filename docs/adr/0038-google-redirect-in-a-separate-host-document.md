@@ -1,4 +1,4 @@
-# ADR 0035: Complete Google redirects in a separate same-origin host document
+# ADR 0038: Complete Google redirects in a separate same-origin host document
 
 Status: accepted. Tracks [#696](https://github.com/andeplane/fem-lab/issues/696),
 following [ADR 0013](0013-cpu-parallel-by-design-browser-host-serves-coop-coep.md)
