@@ -51,3 +51,20 @@ await fem.file.export({ spec: { format: 'csv', table: 'nodal-displacements', ste
 Nodal-displacement CSV preserves scientific f64 coordinates and three displacement components **in metres**, with normalized labels and original node/part/instance identities. Unused source nodes have blank displacements and an `unused` status. Identity columns must be treated as text. Stale/changed source Results are refused before delivery.
 
 Exports go to an open permitted project folder when selected, otherwise to a download. Inspect the exact completed filename and byte receipt; an expired retained download can be regenerated from the appropriate Model. See [storage](./projects-storage.md) and [Results](./results-verification.md).
+
+## Portable solved projects
+
+The headless engine additionally exposes `query.portableProject`, an owned `femlab-project/1`
+artifact for project-storage hosts. It includes the ordinary `femlab/1` Model and Journal plus
+all currently retained simulation results: their solved Models and fingerprints, exact meshes,
+resolved Sets, f64 fields, modes, frame histories, harmonic sweeps, convergence/adaptation report tables and solver diagnostics.
+Restoration uses an unpublished replacement candidate and preserves those values without
+running the simulations again. A corrupt or incompatible artifact leaves the open project
+unchanged. Ordinary `.femlab.json` files continue to contain inputs only.
+
+Version 1 supports the exact engine version, eight retained results, and at most 64 MiB of
+UTF-8 JSON. Projects exceeding that artifact limit cannot be captured or restored through this
+boundary. Results already evicted by the engine's retention limit are not recoverable from a
+later snapshot. Model fingerprints identify the saved inputs; they do not certify an imported
+answer's physical correctness. Account ownership, cloud synchronization, original imported
+files and completed output bytes are responsibilities of the surrounding project-storage host.

@@ -49,7 +49,8 @@ const need = (): SessionEngine => {
     }
     case 'query': {
       if (isBulkQuery(req.query)) return queryBulk(transfer(req.context), req.query);
-      return JSON.parse(need().query(json({ context: req.context, query: req.query }))).value;
+      const reply = JSON.parse(need().query(json({ context: req.context, query: req.query })));
+      return new Publication(reply.stamp, reply.value);
     }
     case 'snapshot': return JSON.parse(need().snapshot(json(req.context)));
     case 'field': return retainedFieldBulk(transfer(req.context), req.field);
@@ -80,6 +81,7 @@ const need = (): SessionEngine => {
             }
             break;
           case 'file': await candidate.file(json(source.file)); break;
+          case 'portable': await candidate.project(json(source.portable)); break;
         }
         candidate.finish(this.publication.encode, this.publication.maxBytes);
         const consumed = candidate; candidate = undefined;

@@ -13,7 +13,7 @@ use crate::fem::assembly::ResolvedConstraints;
 use crate::fem::problem::Problem;
 
 /// Where a field's values sit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub enum Per {
     /// One value per element, in global element order.
     Element,
@@ -26,7 +26,8 @@ pub enum Per {
 }
 
 /// One Result field: `comps` components per entity, component-fastest.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct FieldData {
     pub per: Per,
     pub comps: usize,
@@ -51,7 +52,8 @@ impl FieldData {
 }
 
 /// The smallest and largest value of one component, and where each sits.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Extremum {
     pub component: usize,
     pub min: f64,

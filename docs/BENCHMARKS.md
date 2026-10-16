@@ -3117,3 +3117,15 @@ Journal at one thread against the original two-thread result. This is an exact
 patch/boundary case, not a convergence-rate or adapter timing benchmark.
 The adapter-free test also requires the existing structured `unsupported` error
 for an explicitly requested GPU solve with zero equations.
+
+## Portable retained-result persistence (#779)
+
+The existing linear cantilever is solved at two proportional load levels. The second
+retained displacement is twice the first to 1e-10 relative tolerance (linear superposition).
+After UTF-8 JSON serialization and restoration through a private replacement candidate,
+all scientific f64 values, exact mesh connectivity, solved-model fingerprints, immutable
+result identities and current input Journal must equal the source artifact exactly. No
+procedure is executed during restoration. Corrupt identity, model provenance, connectivity,
+field layout, unsupported version and oversized artifacts fail without advancing the active
+session or changing its model. This is a persistence regression around an existing numerical
+capability, not a new physical procedure or an independent accuracy claim for its coarse mesh.

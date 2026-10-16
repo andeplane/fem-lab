@@ -1,7 +1,7 @@
 import { checkResultIdentity, isBulkQuery, scientificQuery } from './result-transfer';
 import type { ResultSelector } from '@femlab/registry';
 // A channel never changes Workers. A producer never acquires a different session implicitly.
-import { decodeBulk, FemError, type Ack, type Command, type DocumentSnapshot, type EngineTransport, type ExecutionContext, type ExportedFile, type ExportSpec, type Field, type FieldData, type ImportAck, type JournalEntry, type ModelFile, type Progress, type Query, type QueryResult, type RunLease, type SessionRef, type Stamp } from '@femlab/registry';
+import { decodeBulk, FemError, type Ack, type Command, type DocumentSnapshot, type EngineTransport, type ExecutionContext, type ExportedFile, type ExportSpec, type Field, type FieldData, type ImportAck, type JournalEntry, type ModelFile, type PortableProject, type Progress, type Query, type QueryResult, type RunLease, type SessionRef, type Stamp } from '@femlab/registry';
 import type { AppSurface } from './surface';
 import type { ReplacementSource, SessionMessage, SessionOptions, SessionRequest, SessionResponse } from './session-protocol';
 
@@ -189,6 +189,14 @@ export class SessionTransport implements EngineTransport {
     const ack = await this.dispatch({ cmd: 'mesh.export', ...spec } as Command);
     if (ack.output.type !== 'export') throw new FemError('internal', 'mesh.export did not return a file');
     return { filename: ack.output.filename, mime: ack.output.mime, bytes: new TextEncoder().encode(ack.output.text) };
+  }
+  /** One checked read owns both the portable SI project and its admission stamp. */
+  exportProject(): Promise<{ stamp: Stamp; project: PortableProject }> {
+    return this.ordered(async () => {
+      const reply = await this.channel.request({ op: 'query', context: this.context(), query: { query: 'query.portableProject' } });
+      const project = this.accept(reply) as PortableProject;
+      return { stamp: structuredClone(reply.stamp), project };
+    });
   }
   async exportFile(): Promise<ModelFile> {
     const document = await this.query({ query: 'query.document' });
