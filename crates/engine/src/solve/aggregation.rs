@@ -1425,7 +1425,7 @@ mod tests {
                         ROW_PARTITIONS * size_of::<OutputSpan<'_>>(),
                         2 * size_of::<u32>(),
                         expected.len() * size_of::<u32>(),
-                        expected.len() * size_of::<f64>()
+                        std::mem::size_of_val(expected)
                     ],
                 ),
             );
