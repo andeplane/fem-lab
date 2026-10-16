@@ -1,0 +1,250 @@
+# Assistant evaluation: twenty fixed student problems
+
+Issue: [#297](https://github.com/andeplane/fem-lab/issues/297). Parent plan:
+[#24](../plans/24-assistant-validation-materials-evals.md).
+
+Published baseline: [16 October 2026 results](./assistant-20-problems-results-2026-10-16.md).
+
+This is the fixed evaluation specification. The prompts, answers and tolerances below are versioned
+before any live run. A failing run does not change them. Every problem starts from a fresh Model and
+must be attempted once through the browser host and once through the MCP host, in this order.
+Opening an example or replaying a prepared Journal invalidates the attempt.
+The scorer rejects direct replay tools and their canonical `fem.file.open`, `fem.file.openExample`,
+`fem.example.open` and `fem.project.open` spellings inside `run_script`; this is a source check of
+ordinary generated calls, not a general proof about aliased JavaScript.
+
+## Pass rule
+
+A case passes only when all of these checks pass:
+
+1. The final Journal contains a solve of the requested procedure and the final Model has the stated
+   dimensions, material, supports and load or thermal boundary conditions. Corrections made through
+   ordinary Commands are allowed. `example.open`, `file.open` and prepared-Journal replay are not.
+2. The scored value is finite and is within the fixed tolerance in the table. Static displacement
+   is the requested signed component at the loaded end; steady temperature is probed at the stated
+   midpoint; modal frequency is the first frequency; explicit displacement is the requested signed
+   component at the final retained time.
+3. Static and steady-heat cases have `query.result.balance <= 1e-9`. For modal cases the
+   equilibrium balance is not an applicable oracle: the scorer instead requires a fixed support, no
+   loads, and a positive ascending frequency list. For explicit free fall, whose stored applied total
+   is zero by construction, every retained history row must have equal minimum and maximum
+   displacement and follow `u(t) = g t^2 / 2` within 0.5%.
+4. A named-material case calls `query.materialLibrary`, copies the selected entry's applicable
+   values and `materialAddSource` into `material.add`, and does not infer an omitted property.
+5. A validation case calls `validate_script` on the supplied bad script, receives `ok: false`, and
+   does not mutate the Journal before executing a corrected, successfully validated script.
+
+Each host must pass at least 16 of the same 20 cases. The report lists every failure and cause; it
+never drops a case, widens a tolerance or counts a fake provider/reference Journal as a live pass.
+The browser and MCP percentages are reported separately, so one host cannot hide failures in the
+other. The scorer grades the Model, Results and tool workflow; it does not grade the
+Assistant's free-text explanation or its requested hand calculation.
+
+## Fixed cases
+
+The prompts include the geometry, boundary conditions and requested output. Static and steady-heat
+prompts ask for reaction balance; modal prompts ask for positive ordered frequencies and no applied
+load; explicit prompts ask for uniform displacement following constant acceleration. Every prompt
+also asks for an independent hand calculation. They do not include the reference answer. Lengths below use x as the long direction;
+beam bending is z, and rectangular sections list y width × z height.
+
+| ID | Student problem data | Independent answer | Tolerance | Extra trace requirement |
+| --- | --- | --- | --- | --- |
+| A1 | Axial bar: L 1.2 m, 20 × 30 mm, E 200 GPa, nu 0.30, +18 kN at xmax, xmin fixed | ux = PL/EA = +0.180 mm | 2% | — |
+| A2 | Axial bar: L 0.8 m, 25 × 40 mm, E 70 GPa, nu 0.33, −7 kN at xmax, xmin fixed | ux = −0.0800 mm | 2% | — |
+| A3 | Axial bar: L 2.0 m, 50 × 50 mm, E 210 GPa, nu 0.30, +52.5 kN at xmax, xmin fixed | ux = +0.200 mm | 2% | — |
+| A4 | Axial bar: L 0.6 m, 15 × 20 mm, E 110 GPa, nu 0.29, −16.5 kN at xmax, xmin fixed | ux = −0.300 mm | 2% | — |
+| B1 | Cantilever: L 1.0 m, 100 × 100 mm, E 210 GPa, nu 0.30, −1 kN z tip load, xmin fixed | uz = PL³/(3EI) = −0.190476 mm | 5% | I = bh³/12 |
+| B2 | Cantilever: L 0.8 m, 50 × 80 mm, E 70 GPa, nu 0.33, −0.5 kN z tip load, xmin fixed | uz = −0.571429 mm | 5% | I = bh³/12 |
+| B3 | Cantilever: L 1.5 m, 120 × 180 mm, E 200 GPa, nu 0.30, −2 kN z tip load, xmin fixed | uz = −0.192901 mm | 5% | I = bh³/12 |
+| B4 | Cantilever: L 0.5 m, 40 × 60 mm, E 110 GPa, nu 0.29, +0.3 kN z tip load, xmin fixed | uz = +0.157828 mm | 5% | I = bh³/12 |
+| H1 | Steady 20 × 20 mm heat bar: L 0.20 m, ends 0 K and 100 K, E 1 GPa, nu 0.25, k 40 W/(m K) | T(L/2) = 50.0 K | 1e-8 K | linear conduction |
+| H2 | Steady 20 × 20 mm heat bar: L 0.50 m, ends 300 K and 360 K, E 1 GPa, nu 0.25, k 16 W/(m K) | T(L/2) = 330.0 K | 1e-8 K | linear conduction |
+| H3 | Steady 20 × 20 mm heat bar: L 0.12 m, ends 273.15 K and 373.15 K, E 1 GPa, nu 0.25, k 205 W/(m K) | T(L/2) = 323.15 K | 1e-8 K | linear conduction |
+| H4 | Steady 20 × 20 mm heat bar: L 1.0 m, ends 320 K and 280 K, E 1 GPa, nu 0.25, k 1.4 W/(m K) | T(L/2) = 300.0 K | 1e-8 K | linear conduction |
+| M1 | Modal cantilever: L 1.0 m, 50 × 25 mm, E 210 GPa, nu 0.30, rho 7850 kg/m³, xmin fixed | f1 = 20.8879 Hz | 5% | beta1 = 1.875104; weak-axis I |
+| M2 | Modal cantilever: L 0.6 m, 30 × 15 mm, E 70 GPa, nu 0.33, rho 2700 kg/m³, xmin fixed | f1 = 34.2717 Hz | 5% | beta1 = 1.875104; weak-axis I |
+| D1 | Unconstrained 100 mm cube, E 210 GPa, nu 0.30, rho 7800 kg/m³, in −z gravity 9.81 m/s², explicit to 1 ms | uz = gt²/2 = −0.004905 mm | 0.5% | final retained frame |
+| D2 | Unconstrained 80 mm cube, E 70 GPa, nu 0.33, rho 2700 kg/m³, in +y gravity 3.711 m/s², explicit to 2.5 ms | uy = gt²/2 = +0.0115969 mm | 0.5% | final retained frame |
+| N1 | S355J2 bar: L 1.0 m, 40 × 10 mm plate, +42 kN axial; prompt supplies no properties | ux = +0.500 mm using catalogue E = 210 GPa | 2% | material-library lookup and provenance |
+| N2 | 6061-T6 sheet bar: L 0.5 m, 20 × 5 mm, +6.83 kN axial; prompt supplies no properties | ux = +0.500 mm using catalogue E = 68.3 GPa | 2% | lookup; preserve sheet condition/provenance |
+| V1 | Axial bar: L 0.9 m, 30 × 20 mm, E 90 GPa, +12 kN. Repair supplied script whose box length is the boolean `false`. | ux = +0.200 mm | 2% | invalid validation, no mutation, corrected validation |
+| V2 | Axial bar: L 1.1 m, 25 × 25 mm, E 160 GPa, −20 kN. Repair supplied script containing nonexistent `fem.loads.forceTotal`. | ux = −0.220 mm | 2% | invalid validation, no mutation, corrected validation |
+
+The axial answers use `u = PL/(EA)`. The bending answers use Euler–Bernoulli
+`u = PL^3/(3EI)` and are allowed 5% for the continuum discretisation. The heat answers follow the
+exact linear solution between prescribed end temperatures. Modal answers use
+`f1 = beta1^2/(2 pi) sqrt(EI/(rho A L^4))`. Free fall uses `u = gt^2/2`; central difference is exact
+for constant acceleration, as documented by BENCHMARKS F2b. B1, M1 and D1 deliberately overlap
+BENCHMARKS B1, B4 and F2b so a harness regression is anchored to existing engine tests; the other
+parameters are independent formula variants rather than copies of saved example results.
+
+## Harness and artifacts
+
+One checked-in runner owns orchestration and scoring. The browser adapter starts a loopback server
+over the hashed app directory and uses its real `window.fem` registry in Chromium. The MCP adapter starts the packed
+`femlab-mcp` executable over stdio and uses the MCP SDK client. Both feed the same provider loop,
+prompt text and scorer; host-specific shortcuts are forbidden.
+
+The frozen manifest records:
+
+- git commit and dirty state, engine/schema version, SHA-256 of the app assets, Node wasm, MCP
+  package, complete isolated dependency tree and installation lock before and after the run, their stability, plus the twenty-case specification hash;
+- host (`browser` or `mcp`), OS/runtime/Chromium versions, CPU/GPU mode and engine thread count;
+- provider, exact model identifier, service tier/reasoning controls, maximum tokens/rounds and
+  timeout, with start/end timestamps;
+- each prompt, streamed assistant text, tool calls/results with timing, token usage/cost, resulting
+  Journal and model/result queries, score components and failure cause.
+
+Artifacts contain no environment values, request headers or API keys. The runner records whether
+an authorized provider credential is present and admits each request against the shared budget. If absent, it writes a lane result with
+`status: "not-run"` and `reason: "provider credential unavailable"`; it does not substitute a fake
+provider. Scripted providers and prepared Journals are used only by unit tests of event recording and
+scoring and are marked `live: false`.
+
+The dependencies remain explicit in the manifest: `query.validateScript`/#294, sourced
+`query.materialLibrary`/#295, immutable solve assumptions/#296, retained frame queries/#243 and provider accounting/#25. The
+runner may be developed against their public contracts, but a live report is produced only from one
+frozen commit containing all reviewed prerequisites. No pending branch is silently copied into the
+evaluation branch.
+
+Run the live lane from a clean commit after confirming the available credential, spending
+bound and host capacity. A successful model-list read proves access, not generation credits.
+The runner checks actual free disk before preparation, cases and every provider request.
+Fresh or unverified engine routes retain a 30 GiB floor. Fully verified WASM reuse with
+a matching staged STEP corresponding-source kit uses a 4 GiB operational floor; the
+selected route, source-kit hash and floor are sealed into the run configuration. This
+measured allowance avoids native compilation and source extraction; it is not a quota
+on arbitrary model-directed export files, tool replies, checkpoints or system swap.
+The reuse route refuses missing or mismatched receipts/source kit before preparation
+and disables STEP source reconstruction in the app prebuild. It does not automatically
+start an engine build. Use the reviewed source/runtime receipts
+when the engine source has not changed:
+
+```sh
+FEMLAB_EVAL_WASM_SOURCE_MANIFEST=/absolute/path/production-source-completeness.json \
+FEMLAB_EVAL_WASM_RUNTIME_MANIFEST=/absolute/path/staged-artifact-receipt.json \
+FEMLAB_EVAL_OUTPUT=/absolute/path/new-run.json \
+npm run live -w packages/evals
+```
+
+Runtime reuse verifies the sealed production source files, the tracked core diff against
+the producer's source revision, the raw schema and all eight browser/Node binding hashes.
+The app and isolated packed MCP package are then built from the clean evaluation commit.
+The report distinguishes this verified reuse from building the engine itself. A new native/
+WASM build additionally requires an allocated build slot and explicit
+`FEMLAB_EVAL_BUILD_ENGINE=1`; it is never inferred from a present API key.
+`FEMLAB_EVAL_PREPARE_ONLY=1` prepares and hashes artifacts without generating responses;
+its lanes are explicitly not run and cannot pass the quality gate.
+
+Both lanes share one budget. The defaults are USD 50, 400 generation requests, at most
+128,000 authoritative input tokens and 16,000 output tokens per request, 20 rounds per
+case, ten minutes per case and 90 minutes wall time. The official
+[GPT-6.1 Sol model page](https://developers.openai.com/api/docs/models/gpt-6.1-sol), checked
+2026-10-15, supports the existing Standard tariff. Before each generation the runner counts
+the same Responses payload and reserves its maximum output and worst-case cache-write
+input cost. Generation retries are disabled. Missing or inconsistent usage retains the
+reservation and stops further generation. No allowance, hosted spending or payment setting
+is changed by this runner. Set `FEMLAB_EVAL_MAX_USD`, `FEMLAB_EVAL_MAX_REQUESTS`,
+`FEMLAB_EVAL_MAX_INPUT_TOKENS`, `FEMLAB_EVAL_MAX_TOKENS`, `FEMLAB_EVAL_MAX_ROUNDS`,
+`FEMLAB_EVAL_TIMEOUT_MS` and `FEMLAB_EVAL_MAX_WALL_MS` to freeze explicit bounds in the
+manifest before a run; budget changes require a new run.
+
+Checkpoint JSON is written atomically before generation reservations, after settlement and
+after every case. Completed case prefixes remain in every later admission and request
+checkpoint, including failed observations; MCP progress retains the completed browser lane.
+A case or request still in flight cannot be resumed, and unknown billing
+requires a new run. At a clean case boundary, `FEMLAB_EVAL_RESUME=/absolute/path/run.json`
+reuses only the exact completed prefix under identical source, provider configuration,
+case specification and app/MCP artifact hashes, including isolated external dependencies and their resolution lock. Earlier failures remain scored; they are
+not replaced by retries. The previous JSON is preserved before resumption. A resource or
+budget interruption remains explicit and cannot satisfy a host's quality gate. Default
+output names include the run timestamp; existing outputs require explicit resumption.
+
+The September interrupted credit/disk attempt recorded in PR #317 remains historical
+failure evidence. It is not a valid 0/20 quality score, cannot meet the shipping gate and
+cannot be resumed onto a changed engine or harness. A current score requires a new real
+attempt of the same twenty fixed problems through both hosts.
+
+Unit tests must prove at least: a correct value and balanced reactions pass; an independently wrong
+value fails while balance passes; an otherwise correct value fails when reaction balance is above
+1e-9; a missing named-material lookup and a validation call that mutates the Journal fail their
+cases; modal support/load invariants fail independently; and an explicit history row with nonuniform
+displacement or the wrong `g t²/2` value fails; secrets are absent from serialized artifacts; and unavailable credentials produce the
+explicit not-run state. Adapter tests exercise all twenty IDs through both host interfaces. The live
+browser run must use actual Chromium, and the MCP run must use the packed stdio server.
+
+### Bounded transport recovery and cumulative spend (#731)
+
+The benchmark wrapper buffers an entire provider attempt, including text, tools and
+opaque continuation, until iteration and billing validation complete. One explicit
+retry is shared across input counting and generation, and is allowed only for an observed
+allowlisted network cause. SDK retries remain zero; authentication, schema/protocol errors,
+request cancellation, SDK timeouts, fatal TLS alerts and unrecognized transport failures
+are terminal. Input counting must succeed before a generation reservation. Resources and
+cancellation are checked again after counting, before reserving or creating a generation.
+Every generation attempt checks resources, recounts input and
+reserves a new worst-case charge. An unknown first-attempt charge remains consumed
+at its full reservation; a second failure stops generation. Attempt receipts retain
+sanitized cause chains and discarded-event counts. A checkpoint containing retained
+unknown charges cannot be silently resumed as a settled ledger.
+
+Set `FEMLAB_EVAL_PRIOR_ARTIFACTS` to a JSON array of `{ "file": "/absolute/result.json",
+"sha256": "pinned artifact SHA-256" }` for all prior attempts, including any controlled
+probe. `FEMLAB_EVAL_MAX_USD` and `FEMLAB_EVAL_MAX_REQUESTS` now describe the original
+whole-evaluation allowance. The runner verifies every parent artifact, leaves its
+stopped ledger untouched, deducts its full charged-or-reserved cost and request count,
+and seals that lineage in the new configuration. Consumption rounds up and remaining
+allowance down to microdollars. A probe consumes the same remaining allowance, never a
+fresh one. The [published 2026-10-16 run](./assistant-20-problems-results-2026-10-16.md)
+used nine immutable earlier artifacts recording 234 generation requests and $6.847697
+charged or reserved, including unresolved unknown-usage holds. Its fresh configuration
+used an explicit 800-request cumulative guard and 256,000 input / 16,000 output tokens,
+leaving 566 requests and $43.152303 before launch. The completed run added 214 requests /
+$4.331657: cumulative 448 / $11.179354, with 352 / $38.820646 remaining under the unchanged
+user-authorized $50 ceiling. The prior 400-request and 128,000-input guards were harness
+bounds; their change did not increase the dollar allowance or permit resuming an
+incompatible checkpoint. Every historical artifact remains unchanged.
+Counting requests are not priced by this generation ledger; no claim that counting is free
+or that this ledger equals the provider's complete invoice is made.
+
+Both isolated npm locks are copied byte-for-byte to an output-adjacent runtime
+receipt directory, with raw SHA-256 hashes and verified readback, before temporary
+installation cleanup. These raw provenance receipts are separate from the semantic
+runtime fingerprints used for resume comparison. Offline SDK/fake-host tests prove
+recovery and ledger behavior; they are not a live Assistant quality score.
+
+### Reusing the complete threaded runtime
+
+Threaded producer receipts declare four portable browser bindings, four Node bindings,
+and all nine threaded browser files, including package metadata, notices and the actual
+nested rayon worker module. Admission checks every byte/hash and the real JavaScript
+import, package-main and self-worker closure. The source classification must exhaustively
+partition the full immutable producer source inventory: compilation inputs remain exact;
+producer host/audit inputs may differ and their current hashes are recorded explicitly.
+Selected compiler dependencies such as Binaryen remain strict within an otherwise changed
+workspace lock. Historical eight-binding receipts keep their original full-source checks.
+
+For a threaded snapshot, set `FEMLAB_EVAL_NATIVE_MANIFESTS` to a JSON array of absolute
+helper and CLI component receipt paths. Both receipts must match the sealed source and
+include actual producer/artifact/archive identities and staged payload hashes. The current
+host helper and native CLI are checked before preparation; Linux producer support files
+remain separate and are never executed on another platform. The complete runtime/native
+receipt identity and host-input hashes enter the frozen configuration. Missing or changed
+nested helpers, notices, native files or compile inputs refuse reuse before a build starts.
+
+### Explicit HTTP transport and optional diagnostics
+
+`FEMLAB_EVAL_HTTP_TRANSPORT` selects `native-default` or `http1-connection-close`.
+The latter requires Node 22 and applies `Connection: close` to both authoritative counting
+and generation through the SDK. The selected mode is frozen in the manifest; absent or
+mismatched checkpoint transport configuration rejects resumption. Connection-close is an
+explicit experiment, not a proven elimination of intermittent provider transport failures.
+
+`FEMLAB_EVAL_COUNT_EVIDENCE_PARENT` optionally enables restricted local serialized count-body
+capture for transport diagnosis. Its bounded 128 MiB / 800-capture sink fails closed when
+exhausted. The published forty-case engineering run left that variable absent: full request-body
+capture is optional and must not become an unrelated capacity gate for the quality run.
+Ordinary sanitized transport diagnostics, tool traces, checkpoints and billing reservations
+remain enabled. Historical private diagnostic bodies and keyed cause-code evidence are
+preserved outside the repository.
