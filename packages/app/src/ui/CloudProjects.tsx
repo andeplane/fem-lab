@@ -25,7 +25,7 @@ export function CloudStorage({s,dispatch}:{s:CloudProjectState;dispatch:Dispatch
       {!storage.available?<p class="cloud-warning" role="status">Cloud storage is unavailable. Your browser copies remain available; try syncing again later.</p>:null}
     </>:<p class="cloud-muted" role="status">{sync?.refreshing?'Loading your cloud project storage…':'Sync projects to read your current storage allowance.'}</p>}
     {sync?.error?<p class="cloud-warning" role="status">{sync.error}</p>:null}
-    <p class="cloud-storage-note">Uploads in progress reserve storage. Deleted and replaced files do not count toward your included storage.</p>
+    <p class="cloud-storage-note">Uploads in progress reserve storage. After replacing or deleting a project, space for new uploads may take time to become available.</p>
   </section>;
 }
 export function ProjectSyncDetails({s,id,dispatch}:{s:CloudProjectState;id:string;dispatch:Dispatch}) {

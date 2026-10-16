@@ -37,7 +37,7 @@ These quotas use decimal units: one MB is 1,000,000 bytes and one GB is 1,000,00
 
 Each browser project bundle is limited to **128 MiB**, with at most **64 MiB** of engine JSON, **32 MiB per captured input/output file**, and **256 files**. These binary limits use 1 MiB = 1,048,576 bytes and are separate from the account quota. A large Model or result set can hit the bundle limit even when account space remains.
 
-Offline edits stay in the account's browser cache and queue for reconnect. Network, quota or validation errors do not mean the cloud copy was updated; keep/export the browser copy and inspect the status. A downgrade does not automatically delete existing projects. Reads and deletion remain available, but new writes can be refused until the project/account fits the current limits. Capacity can also remain unavailable while failed cleanup is retried.
+Offline edits stay in the account's browser cache and queue for reconnect. Network, quota or validation errors do not mean the cloud copy was updated; keep/export the browser copy and inspect the status. A downgrade does not automatically delete existing projects. Reads and deletion remain available, but new writes can be refused until the project/account fits the current limits. After replacing or deleting a project, space for new uploads may take time to become available.
 
 ## Resolve a conflict deliberately
 

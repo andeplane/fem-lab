@@ -27,7 +27,7 @@ Account totals and debits retain exact internal precision; display rounding does
 
 ## Included cloud storage
 
-Free accounts have 100 MB of cloud project space; Plus includes 2 GB, Pro 10 GB and Studio 50 GB (decimal units). This is separate from AI credits and free-AI approval. The server reports actual quota/usage. Downgrading preserves stored projects and read/delete access, but writes can be blocked above the current limit; it does not automatically delete projects. Browser bundle/file limits are separate. See [storage and recovery](./projects-storage.md#storage-limits-and-offline-work).
+Free accounts have 100 MB of cloud project space; Plus includes 2 GB, Pro 10 GB and Studio 50 GB (decimal units). This is separate from AI credits and free-AI approval. The plan cards show the included storage alongside AI credits. The server reports actual quota/usage. Space for new uploads may take time to become available after replacing or deleting a project. Downgrading preserves stored projects and read/delete access, but writes can be blocked above the current limit; it does not automatically delete projects. Browser bundle/file limits are separate. See [storage and recovery](./projects-storage.md#storage-limits-and-offline-work).
 
 ## Free monthly access
 
