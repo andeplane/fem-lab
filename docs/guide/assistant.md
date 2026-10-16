@@ -2,6 +2,8 @@
 
 The Assistant can discuss a Model, inspect it with Queries, propose changes and execute permitted registry operations. It is optional: geometry, meshing, solving and export remain available without AI. You remain responsible for deciding whether its assumptions and engineering conclusions are appropriate.
 
+The drawer follows the visible workspace below the top bar, modeling tour and any current blocker banner. It resizes as the tour is shown, dismissed or reopened. On a narrow screen, scrolling the Model panels keeps the drawer within the remaining visible workspace, so the tour's close controls and the Assistant composer stay reachable. Opening or resizing it does not send your draft; choose **Send** explicitly when ready.
+
 ## Hosted access
 
 On the public app, sign in through Account using Google or an email link. Accept the hosted-data disclosure before sending a request. You also need an available free or paid allowance; signup alone grants none. See [accounts and credits](./accounts-billing.md).

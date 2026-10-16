@@ -143,6 +143,7 @@ textarea:focus {
   min-width: 0;
 }
 .workspace {
+  anchor-name: --femlab-workspace;
   display: grid;
   /* Splitters preview these variables while a gesture is in flight. Each side is capped
      against the viewer's minimum so a wide panel cannot create page overflow at 1180 px. */
@@ -2608,8 +2609,8 @@ input.model-name:focus-visible {
 
 /* ── plan D: the Assistant drawer, mounted at the top level (issue #40) ─────────────────── */
 /* The drawer is a fixed panel rather than a column, so it exists on the start screen too and
-   survives the flip into the workspace. In the shell it starts under the 46 px top bar — the
-   design draws that bar full-width. When the three workspace tracks and drawer all fit,
+   survives the flip into the workspace. In the shell it follows the rendered workspace below
+   the top bar, optional tour and banner. When the three workspace tracks and drawer all fit,
    `.workspace` reserves the width it takes; at narrower desktop widths it replaces Properties. */
 .assistant {
   position: fixed;
@@ -2627,17 +2628,11 @@ input.model-name:focus-visible {
   left: auto;
   margin-left: 0;
 }
+.shell ~ .assistant,
 .shell ~ .resize-handle.assistant-resize.fixed {
-  top: 46px;
-}
-.shell:has(.banner) ~ .resize-handle.assistant-resize.fixed {
-  top: 78px;
-}
-.shell ~ .assistant {
-  top: 46px;
-}
-.shell:has(.banner) ~ .assistant {
-  top: 78px;
+  position-anchor: --femlab-workspace;
+  top: anchor(top);
+  bottom: anchor(bottom);
 }
 @media (min-width: 1494px) {
   #app:has(> .assistant:not([hidden])) .workspace {
@@ -2887,7 +2882,7 @@ input.model-name:focus-visible {
    reachable below it instead of forcing the desktop's three minimum-width columns to scroll. */
 @media (max-width: 1023px) {
   .under-bar {
-    overflow: auto;
+    overflow: hidden;
   }
   .resize-handle {
     display: none;
@@ -2895,7 +2890,7 @@ input.model-name:focus-visible {
   .workspace {
     display: flex;
     flex-direction: column;
-    overflow: visible;
+    overflow: auto;
   }
   .centre {
     order: -1;

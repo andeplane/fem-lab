@@ -267,25 +267,31 @@
 }
 
 .shell.with-tour { grid-template-rows: 46px auto minmax(0, 1fr); }
-.tour-callout { min-height: 0; max-height: min(38vh, 250px); overflow-y: auto; padding: 12px 20px; background: var(--bg-panel); border-bottom: 1px solid var(--cyan-border); color: var(--text-body); font-size: 13px; }
+/* The workflow tour has no dim layer: its outlined panels must stay below the Assistant. */
+.shell.with-tour [data-tutorial-target] { z-index: auto; }
+/* The guide takes vertical space; let the viewer fit it instead of scrolling the whole page. */
+.shell.with-tour .centre { grid-template-rows: minmax(0, 1fr) var(--bottom-used); }
+/* Integer line boxes keep the desktop workspace/canvas origin on whole CSS pixels. */
+.tour-callout { min-height: 0; max-height: min(38vh, 250px); overflow-y: auto; padding: 12px 20px; background: var(--bg-panel); border-bottom: 1px solid var(--cyan-border); color: var(--text-body); font-size: 13px; line-height: 19px; }
 .tour-header { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; position: sticky; top: -12px; padding-top: 4px; background: var(--bg-panel); z-index: 1; }
-.tour-header h2 { font-size: 16px; margin: 4px 0 8px; color: var(--text-high); }
+.tour-header h2 { font-size: 16px; line-height: 24px; margin: 4px 0 8px; color: var(--text-high); }
 .tour-header h2:focus { outline: 2px solid var(--accent); outline-offset: 3px; }
-.tour-progress { color: var(--text-low); font: 10px var(--mono); letter-spacing: .08em; }
-.tour-text { margin: 0 0 10px; line-height: 1.5; max-width: 110ch; }
+.tour-progress { color: var(--text-low); font: 10px/14px var(--mono); letter-spacing: .08em; }
+.tour-text { margin: 0 0 10px; line-height: 20px; max-width: 110ch; }
+.tour-callout .tutorial-btn { line-height: 18px; }
 .tour-actions, .tour-navigation { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .tour-actions { justify-content: space-between; }
 .tour-dismiss { min-width: 36px; min-height: 36px; }
-.tour-help { display: block; margin-top: 8px; color: var(--text-low); line-height: 1.4; }
+.tour-help { display: block; margin-top: 8px; color: var(--text-low); font-size: 11px; line-height: 16px; }
 .tutorial-tour { margin-bottom: 12px; text-align: left; }
 @media (max-width: 600px) {
   .shell.with-tour { grid-template-rows: auto auto minmax(0, 1fr); }
-  .tour-callout { padding: 8px 12px; max-height: 42vh; font-size: 12px; }
+  .tour-callout { padding: 8px 12px; max-height: 42vh; font-size: 12px; line-height: 18px; }
   .tour-header { top: -8px; }
   .tour-actions .tutorial-btn, .tour-dismiss { min-height: 44px; }
   .tour-actions > .tutorial-btn { flex: 1; }
   .tour-navigation { flex: 1; justify-content: flex-end; }
-  .tour-help { font-size: 10px; }
+  .tour-help { font-size: 10px; line-height: 14px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
