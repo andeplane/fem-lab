@@ -7,3 +7,4 @@ GRANT SELECT, INSERT ON credit_grants, credit_entries, credit_holds, usage_recei
 GRANT SELECT, INSERT, UPDATE ON accounts, ai_requests, billing_accounts, billing_inbox, billing_leases, billing_reviews, checkout_intents, plan_changes, account_exports, account_deletions TO femlab_api, femlab_jobs;
 GRANT DELETE ON billing_leases, checkout_intents, plan_changes TO femlab_api, femlab_jobs;
 GRANT DELETE ON account_exports TO femlab_jobs;
+GRANT SELECT, INSERT, UPDATE, DELETE ON cloud_storage_accounts, cloud_projects, cloud_project_uploads, cloud_project_chunks, cloud_project_operations, cloud_project_cleanup, cloud_project_rates TO femlab_api, femlab_jobs;

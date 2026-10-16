@@ -2,6 +2,7 @@
 import contextlib
 import io
 import os
+import re
 from pathlib import Path
 import runpy
 import subprocess
@@ -57,6 +58,19 @@ class MigrationSafety(unittest.TestCase):
         calls, _ = self.migrate('staging', pause_fails=True)
         self.assertEqual(len(calls), 2)
         self.assertEqual(Path(calls[-1][0][-1]).name, 'sql-staging-ai-paused.sql')
+
+    def test_cloud_project_tables_receive_explicit_runtime_crud_after_migration(self):
+        root = Path(__file__).resolve().parents[2]
+        migration = root / 'packages/service/migrations/011-cloud-projects.sql'
+        tables = set(re.findall(r'CREATE\s+TABLE\s+(cloud_[a-z_]+)', migration.read_text(), re.IGNORECASE))
+        self.assertEqual(tables, {'cloud_storage_accounts', 'cloud_projects', 'cloud_project_uploads', 'cloud_project_chunks', 'cloud_project_operations', 'cloud_project_cleanup', 'cloud_project_rates'})
+        sql = Path(__file__).with_name('sql-runtime-grants.sql').read_text()
+        grants = {}
+        for privileges, names in re.findall(r'GRANT\s+([^;]+?)\s+ON\s+([^;]+?)\s+TO\s+femlab_api,\s*femlab_jobs;', sql, re.IGNORECASE):
+            for table in names.split(','):
+                if table.strip() in tables:
+                    grants.setdefault(table.strip(), set()).update(value.strip().upper() for value in privileges.split(','))
+        self.assertEqual(grants, {table: {'SELECT', 'INSERT', 'UPDATE', 'DELETE'} for table in tables})
 
 
 if __name__ == '__main__':
