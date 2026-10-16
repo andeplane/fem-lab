@@ -426,6 +426,35 @@ The sanitized combined rollup is `/tmp/femlab-release-557-evidence.json`; it kee
 the dated staging source, current deployed source and final verification-source
 commit separate, with no identity, credentials, action link or export URL.
 
+### Current-unit staging acceptance, 16 October 2026
+
+At 13:01 UTC the current three-file verification slice passed against the actual staging
+origins: **1 passed in 47.7 seconds**. The API reported ready revision
+`femlab-api-re31c2aa4-f5ec22ef`; this is a runtime identity, not a claim that the current
+PR source is deployed. A read-only SQL preflight confirmed AI disabled with every global
+spending limit zero. Two fresh return-only Admin links completed real browser email-link
+sign-in without sending email.
+
+Both accounts retained zero signup/reopen credits and `review-required` status. Direct
+requests negotiated `usd-milli-v1`; profiles returned the exact 4,999.9995 monthly
+allocation. Unapproved claims returned 403 and the claim control stayed disabled. UI
+and alias completion admissions returned 503 before generation; owned exports contained
+no requests, grants, debits, holds or usage receipts. Anonymous/cross-owner export denials,
+private unsigned objects, blocked public identity deletion, logout preserving the Model
+and durable deletion with both old tokens returning 401 all passed. Both private action
+fixtures and cleanup-token state were removed. The 390px account view was inspected.
+
+The first fresh attempt exposed a stale test selector (`Your AI allowance` after the
+account heading became `Your account`). Its cleanup completed and both revoked tokens
+were independently checked before fresh fixtures were generated. The corrected run also
+fails on uncaught errors in either account's browser page. No email, eligibility change,
+credits, supplier generation, payment, budget change or deployment occurred.
+
+Sanitized current proof, bound to the test source SHA-256, is retained at
+`/Users/anderhaf/.codex/tmp/fem-lab-triage-802/599-current-staging-evidence.json`.
+Earlier dated evidence remains separate. Production sender verification in #710 still
+reports `IN_PROGRESS`; post-apply Inbox delivery remains unverified.
+
 ## Remaining release gates
 
 - Resolve production email Spam placement/custom-sender deliverability in #710, then

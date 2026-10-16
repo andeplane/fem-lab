@@ -1,7 +1,7 @@
 import {execFileSync} from 'node:child_process';
 import {readFile,stat,unlink,writeFile} from 'node:fs/promises';
 import {randomUUID} from 'node:crypto';
-import {expect,test,type Page} from '@playwright/test';
+import {expect,test,type Page} from './fixtures';
 import type {AccountInfo,AccountState} from '@femlab/registry';
 import type {CompletionBody} from '@femlab/ai';
 
@@ -41,6 +41,8 @@ test('email login has zero signup credits, staging rejects AI, exports stay owne
   const statePath=paths[0]!+'.state.json',sessions:Session[]=[];
   await writeFile(statePath,'[]',{mode:0o600,flag:'wx'});
   const otherContext=await browser.newContext(),other=await otherContext.newPage();
+  const otherErrors:string[]=[];
+  other.on('pageerror',error=>otherErrors.push(error.stack??error.message));
   const headers=(session:Session)=>({Authorization:`Bearer ${session.token}`,'Content-Type':'application/json','X-Femlab-Credit-Unit':'usd-milli-v1'});
   const request=(session:Session,path:string,body?:unknown)=>fetch(API+path,{method:body===undefined?'GET':'POST',headers:headers(session),...(body===undefined?{}:{body:JSON.stringify(body)})});
   const runJob=()=>execFileSync('gcloud',['run','jobs','execute','femlab-recover','--region=europe-west3','--project=femlab-app-staging',`--account=${process.env['FEMLAB_LIVE_GOOGLE_ACCOUNT']!}`,'--wait'],{stdio:'pipe',timeout:120000});
@@ -85,7 +87,7 @@ test('email login has zero signup credits, staging rejects AI, exports stay owne
     await page.evaluate(()=>window.fem.dispatch({cmd:'account.refresh'}));
     expect((await account(page)).profile?.usage).toMatchObject(zeroAllowance);
     await page.evaluate(()=>window.fem.dispatch({cmd:'account.open'}));
-    const dialog=page.getByRole('dialog',{name:'Your AI allowance'});
+    const dialog=page.getByRole('dialog',{name:'Your account'});
     await expect(dialog).toContainText('Free monthly AI requires an eligibility review.');
     await expect(dialog).toContainText('Signing up starts with zero credits.');
     await expect(dialog.getByRole('button',{name:'Claim this month’s free allowance',exact:true})).toBeDisabled();
@@ -133,6 +135,6 @@ test('email login has zero signup credits, staging rejects AI, exports stay owne
         for(const path of paths)await unlink(path!);
         await unlink(statePath);
       }
-    } finally {await otherContext.close()}
+    } finally {await otherContext.close();expect(otherErrors,'uncaught secondary account page errors').toEqual([])}
   }
 });
