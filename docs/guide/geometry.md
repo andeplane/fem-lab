@@ -19,6 +19,8 @@ A 2D idealisation requires compatible sheet geometry; it is not a view setting t
 
 The Geometry add menu is generated from the shape schema. It includes boxes, cylinders, spheres, sheets, extruded sketches, revolved sketches, unions, subtraction, intersection and transformations. `geometry.addBox` is a convenient box Command; `geometry.add` accepts a general shape definition. Coordinates and sizes require [length units](./units.md).
 
+In Properties, the **Shape kind** buttons form an aligned grid that adapts to the panel width. The selected kind stays highlighted; use Tab to reach a choice and Space or Enter to select it. Choosing a kind shows its fields underneath, with nested shapes indented. These edits update the draft through `form.open`; **Add body** records one geometry Command after the required fields are complete.
+
 ```ts
 await fem.geometry.addBox({ name: 'block', size: ['80 mm', '40 mm', '20 mm'] });
 ```
