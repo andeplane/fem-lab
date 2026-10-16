@@ -1,0 +1,116 @@
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { mkdtemp, readFile, readdir, stat, rm, writeFile, realpath } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { verifyReusedWasm, type ReusedWasm } from './frozen-reuse';
+
+export interface FrozenBuild {
+  appDirectory: string;
+  mcpPackageDirectory: string;
+  mcpEntry: string;
+  nodeWasm: string;
+  tarball: string;
+  dependencyDirectory: string;
+  lockfile: string;
+  commands: string[];
+  wasmProvenance?: Record<string, unknown>;
+  close(): Promise<void>;
+}
+
+const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+
+function run(command: string, args: string[], cwd: string, environment?: NodeJS.ProcessEnv): string {
+  return execFileSync(command, args, { cwd, encoding: 'utf8', timeout: 1_800_000, stdio: ['ignore', 'pipe', 'inherit'], env: { ...process.env, ...environment } });
+}
+
+/** Build HEAD, pack MCP, and install its actual tarball away from the checkout. */
+export async function prepareFrozenBuild(root: string, reusedWasm?: ReusedWasm): Promise<FrozenBuild> {
+  const directory = await mkdtemp(path.join(tmpdir(), 'femlab-assistant-build-'));
+  const commands = [reusedWasm ? 'verify sealed component source/schema/declared runtime and native component closure' : 'node tools/build-wasm.mjs', 'npm run build -w packages/app', 'npm pack + isolated npm install packages/mcp'];
+  try {
+    const wasmProvenance = reusedWasm ? await verifyReusedWasm(root, reusedWasm, reference => run('git', ['diff', '--name-only', reference, '--', 'Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml', 'crates'], root)) : undefined;
+    if (!reusedWasm) run(process.execPath, ['tools/build-wasm.mjs'], root);
+    run(npm, ['run', 'build', '-w', 'packages/app'], root, reusedWasm ? { FEMLAB_REQUIRE_STEP_SOURCE_KIT: '1' } : undefined);
+    const packedOutput = run(npm, ['pack', '--json', '--pack-destination', directory], path.join(root, 'packages/mcp'));
+    const start = packedOutput.lastIndexOf('\n[') + 1;
+    const packed = JSON.parse(packedOutput.slice(start)) as { filename: string }[];
+    if (packed.length !== 1) throw new Error(`expected one packed MCP artifact, got ${packed.length}`);
+    const tarball = path.join(directory, packed[0]!.filename);
+    await writeFile(path.join(directory, 'package.json'), JSON.stringify({ name: 'femlab-assistant-evaluation', private: true }));
+    run(npm, ['install', '--omit=dev', '--no-audit', '--no-fund', tarball], directory);
+    const installed = path.join(directory, 'node_modules/femlab-mcp');
+    const manifest = JSON.parse(await readFile(path.join(installed, 'package.json'), 'utf8')) as { bin?: Record<string, string> };
+    const entry = manifest.bin?.['femlab-mcp'];
+    if (entry === undefined) throw new Error('packed MCP package has no femlab-mcp executable');
+    return {
+      appDirectory: path.join(root, 'packages/app/dist'),
+      mcpPackageDirectory: installed,
+      mcpEntry: path.join(installed, entry),
+      nodeWasm: path.join(installed, 'dist/wasm-node/femlab_engine_wasm_bg.wasm'),
+      tarball,
+      dependencyDirectory: path.join(directory, 'node_modules'),
+      lockfile: path.join(directory, 'package-lock.json'),
+      commands,
+      ...(wasmProvenance ? { wasmProvenance } : {}),
+      close: () => rm(directory, { recursive: true, force: true }),
+    };
+  } catch (error) {
+    await rm(directory, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+async function fileHash(target: string | undefined, contentFor?: (file: string) => Promise<Buffer>): Promise<string> {
+  if (!target) return 'not-built';
+  if ((await stat(target)).isFile()) return createHash('sha256').update(await (contentFor ? contentFor(target) : readFile(target))).digest('hex');
+  const files: string[] = [];
+  const walk = async (directory: string): Promise<void> => {
+    for (const name of (await readdir(directory)).sort()) {
+      const full = path.join(directory, name);
+      if ((await stat(full)).isDirectory()) await walk(full);
+      else files.push(full);
+    }
+  };
+  await walk(target);
+  const digest = createHash('sha256');
+  for (const file of files) {
+    const contentHash = createHash('sha256').update(await (contentFor ? contentFor(file) : readFile(file))).digest('hex');
+    digest.update(path.relative(target, file)).update('\0').update(contentHash).update('\0');
+  }
+  return digest.digest('hex');
+}
+
+/** Normalize only verified local packed-package locations; raw lockfiles remain provenance. */
+async function runtimeLock(build: FrozenBuild, file: string): Promise<Buffer> {
+  const raw = await readFile(file);
+  const lock = JSON.parse(raw.toString()) as { packages?: Record<string, { resolved?: string; integrity?: string; dependencies?: Record<string, string> }> };
+  const local = lock.packages?.['node_modules/femlab-mcp'];
+  if (!local) throw new Error(`frozen runtime lock has no packed MCP package: ${file}`);
+  const tarball = await readFile(build.tarball);
+  const integrity = `sha512-${createHash('sha512').update(tarball).digest('base64')}`;
+  if (local.integrity !== integrity) throw new Error(`frozen runtime MCP tarball integrity mismatch: ${file}`);
+  const expected = await realpath(build.tarball);
+  const normalize = async (value: string | undefined): Promise<string> => {
+    if (!value?.startsWith('file:')) throw new Error(`frozen runtime MCP resolution is not local: ${file}`);
+    // npm lock paths are relative to the install root, including its hidden lock.
+    const target = path.resolve(path.dirname(build.lockfile), value.slice(5));
+    if (await realpath(target) !== expected) throw new Error(`frozen runtime MCP resolution differs from owned tarball: ${file}`);
+    return `file:sha256:${createHash('sha256').update(tarball).digest('hex')}`;
+  };
+  local.resolved = await normalize(local.resolved);
+  const rootDependencies = lock.packages?.['']?.dependencies;
+  if (rootDependencies?.['femlab-mcp'] !== undefined) rootDependencies['femlab-mcp'] = await normalize(rootDependencies['femlab-mcp']);
+  return Buffer.from(JSON.stringify(lock));
+}
+
+/** Include actual isolated externals and verified resolution metadata, independent of temp root. */
+export async function hashFrozenArtifacts(build: FrozenBuild | null) {
+  const dependencyContent = build ? (file: string) => file === path.join(build.dependencyDirectory, '.package-lock.json') ? runtimeLock(build, file) : readFile(file) : undefined;
+  const [app, nodeWasm, mcpPackage, mcpTarball, mcpDependencies, mcpLock] = await Promise.all([
+    fileHash(build?.appDirectory), fileHash(build?.nodeWasm), fileHash(build?.mcpPackageDirectory),
+    fileHash(build?.tarball), fileHash(build?.dependencyDirectory, dependencyContent),
+    fileHash(build?.lockfile, build ? file => runtimeLock(build, file) : undefined),
+  ]);
+  return { app, nodeWasm, mcpPackage, mcpTarball, mcpDependencies, mcpLock };
+}

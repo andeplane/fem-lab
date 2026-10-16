@@ -1,4 +1,5 @@
 import type OpenAI from 'openai';
+import { observeProviderFailure, startProviderObservation, type ProviderObserver } from './transport-diagnostics';
 import type { ChatEvent, ChatRequest, Message, Provider } from './provider';
 
 export const OPENAI_MODELS = ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.5', 'gpt-5.4-mini'] satisfies OpenAI.ChatModel[];
@@ -48,13 +49,16 @@ export function responseParameters(req: ChatRequest): OpenAI.Responses.ResponseC
     tools: req.tools.map(t => ({ type: 'function', name: t.name, description: t.description, parameters: t.input_schema, strict: false })),
   };
 }
-export function responsesProvider(client: OpenAILike, models: string[] = OPENAI_MODELS): Provider {
+export function responsesProvider(client: OpenAILike, models: string[] = OPENAI_MODELS, observer?: ProviderObserver): Provider {
   return {
     id: 'openai',
     models,
     async *chat(req: ChatRequest): AsyncIterable<ChatEvent> {
+      const started = startProviderObservation(observer);
+      let phase: 'request' | 'stream' = 'request';
       try {
         const stream = await client.responses.create(responseParameters(req), { signal: req.signal });
+        phase = 'stream';
         const preparing = new Map<number, { id: string; name: string; arguments: string }>();
         let terminal = false;
         for await (const event of stream) {
@@ -97,6 +101,7 @@ export function responsesProvider(client: OpenAILike, models: string[] = OPENAI_
         }
         if (!terminal) yield { type: 'error', message: 'OpenAI stream ended before the response completed' };
       } catch (e) {
+        observeProviderFailure(observer, e, phase, req.signal, started);
         if (req.signal?.aborted) return;
         yield { type: 'error', message: e instanceof Error ? e.message : String(e) };
       }

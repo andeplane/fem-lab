@@ -21,3 +21,7 @@ packages/registry/src/generated/script-declarations*.json
 /packages/app/public/third-party/step-converter/
 
 /tools/project-io/
+
+# Producer-verified native CLI copies used by evaluation admission.
+/native/*/femlab
+/native/*/femlab.exe
