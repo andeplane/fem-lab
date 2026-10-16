@@ -223,3 +223,24 @@ require full fresh replacements. The exact native bound 1,607,556 bytes exceeds 
 map peaks; supplying bound minus one initially must reach and refuse that final batch,
 without ledger mutation or padding. Energy and one/four-thread outputs remain independent
 oracles. This is a low-level Galerkin fixture, not a claim SA generates P from identity.
+
+
+The source-matched f83002a6 release66k run passes the unchanged residual/B1/equilibrium/
+direct-reference and complete displacement1/4-thread identity oracles on Metal. Its
+780300-row run reaches a later raw=PT*AP final allocation (24390²,51689832NNZ), then
+refuses8333027957 requested setup bytes against7837371816. Previous7712652121 plus
+batch[288,97564,206759328,413518656] reconciles exactly; this remains a capacity RED
+before GPU iterations, with no large-case convergence claim.
+
+The next optimization moves exactly the parent's two retired products into the immediate
+child: raw for raw output, transpose for symmetric output. AP stays fresh; local AP reuse
+remains. Eligibility is per-array current initialized length, never allocator capacity.
+Missing replacements are fully charged before allocation/mutation; all old charges and
+entry counts remain. Coarse leaves drop unused donors without credits. The old/new
+receipts bound parent rawNNZ>=103415745, exceeding both the child's51689832 entries
+and its symmetry-union bound103379664. Same-level final requests therefore fit the
+unchanged allowance, but later hierarchy/device/convergence remain unknown. Retaining
+old AP-backed arrays can extend oversized allocations into the CPU Plan, so~2.5GB is
+not an upper bound on extra live memory; future runs retain actual whole-process guards.
+Analytical two-step Gram fit/full-replacement exact-cap tests and real Poisson769
+energy/duality/thread identity precede any matching release/large resource review.

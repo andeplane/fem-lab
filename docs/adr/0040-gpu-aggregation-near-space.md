@@ -100,6 +100,22 @@ before allocation drops the old buffer. The cursor remains separate and newly ch
 This avoids a new request without changing the cumulative allowance or extending AP's
 existing lifetime across recursion. It changes neither entry counters nor transpose order.
 
+After a symmetry fill joins, its raw and transposed inputs are dead. Move these two
+owners to the immediate child as fixed-role output donors: raw supplies the child's
+raw product and transposed supplies its symmetric operator. AP remains fresh, and the
+local AP-to-transpose path above remains unchanged. No pool or role search exists.
+Each array independently reuses only an initialized, admitted logical prefix; all missing
+full replacements and output-span metadata are admitted together before mutation. Counts,
+entry caps, four partitions and numerical traversal remain unchanged. A coarse leaf drops
+unused donors before factor construction, without retiring any cumulative charge.
+
+This extends two buffers' live ranges across the next setup level. Truncation preserves
+original allocations, so logical lengths prove eligibility, not physical storage size.
+In particular an AP-backed transpose can become a retained symmetric operator and keep its
+larger allocation throughout deeper setup and upload. This trade-off removes real fresh
+requests under the same cumulative contract; it does not establish an RSS bound. Device
+runs require separate host resource admission and actual peak-memory guards.
+
 The initial private setup/device payload caps differ between native and wasm32 hosts; they
 remain experimental construction guards until measured on 66k. The near-space handoff has a
 separate 256 MiB construction bound. Exact diagonal systems skip both metadata and hierarchy

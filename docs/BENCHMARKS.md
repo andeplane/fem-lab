@@ -3284,3 +3284,16 @@ The frozen `312eb31d` 780k diagnostic identified a later AP allocation with outp
 row-pointer reuse guarantees 674,212 bytes; clearing that shortfall additionally needs
 at least 96,807,044 raw entries fitting the original AP entry extents. Those sizes are
 unobserved, so this optimization carries no whole-780k fit or scientific acceptance claim.
+
+
+The immediate-child aggregation reuse witnesses consume both products from actual prior
+Galerkin work under the same ledger. With root I8 and P0=[I4;I4], the first operator is
+2I4; child rows e1,e2,(1,1),(1,1) give [[6,4],[4,6]], whose energy is
+5(x+y)^2+(x-y)^2. Both role-specific array identities must survive, all old charges remain,
+and full CSR outputs agree at one/four workers. A second flow starts with2I258 and
+P1=[ones;I257], giving2(I+11ᵀ). Its sparse retired entry arrays cannot fit the dense child
+outputs: full replacements must be admitted, the initial exact cap passes and one byte
+less refuses the final symmetric batch, and energy is2(||x||²+(Σx)²). These are analytical
+Galerkin fixtures, not claims that SA constructs those P matrices from an identity root.
+A real Poisson769 hierarchy has sizes769/97/13, exercises the two-Fine-level handoff,
+retains Dirichlet energy/transfer duality and is exactly identical at one/four workers.
