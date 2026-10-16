@@ -154,12 +154,12 @@ function Picker({ field, value, candidates, onChange, command, dispatch, armed }
   );
 }
 
-function Segmented({ options, active, onPick }: { options: string[]; active: (o: string) => boolean; onPick(o: string): void }) {
+function Segmented({ label, options, active, onPick }: { label: string; options: string[]; active: (o: string) => boolean; onPick(o: string): void }) {
   return (
-    <div class="segmented wide" role="group">
+    <div class="segmented wide" role="group" aria-label={label}>
       {options.map((o) => (
         <button key={o} type="button" data-cmd="form.open" aria-pressed={active(o)} onClick={() => onPick(o)}>
-          {o}
+          {o.split(/(?=[A-Z][a-z])/).flatMap((part, i) => i === 0 ? [part] : [<wbr key={i} />, part])}
         </button>
       ))}
     </div>
@@ -215,6 +215,7 @@ function FieldView(props: FieldProps) {
     return (
       <Row field={field} error={error}>
         <Segmented
+          label={field.label}
           options={field.options}
           active={(o) => (field.multi ? many.includes(o) : value === o)}
           onPick={(o) => onChange(field.multi ? (many.includes(o) ? many.filter((m) => m !== o) : [...many, o]) : o)}
@@ -225,7 +226,7 @@ function FieldView(props: FieldProps) {
   if (field.kind === 'boolean') {
     return (
       <Row field={field} error={error}>
-        <Segmented options={['yes', 'no']} active={(o) => (o === 'yes') === (value === true)} onPick={(o) => onChange(o === 'yes')} />
+        <Segmented label={field.label} options={['yes', 'no']} active={(o) => (o === 'yes') === (value === true)} onPick={(o) => onChange(o === 'yes')} />
       </Row>
     );
   }
@@ -251,7 +252,7 @@ function FieldView(props: FieldProps) {
     const chosen = field.variants.find((v) => v.kind === kind);
     return (
       <Row field={field} error={error}>
-        <Segmented options={field.variants.map((v) => v.kind)} active={(o) => o === kind} onPick={(o) => set([...field.path, 'kind'], o)} />
+        <Segmented label={`${field.label} kind`} options={field.variants.map((v) => v.kind)} active={(o) => o === kind} onPick={(o) => set([...field.path, 'kind'], o)} />
         <div class="sub">
           {(chosen?.fields ?? []).map((f) => (
             <FieldView key={f.path.join('.')} {...props} field={f} />

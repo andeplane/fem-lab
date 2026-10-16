@@ -331,14 +331,34 @@ textarea:focus {
   color: var(--text-high);
 }
 .segmented.wide {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 76px), 1fr));
+  grid-auto-rows: 1fr;
+  gap: 4px;
   width: 100%;
+  border: 0;
+  border-radius: 0;
+  overflow: visible;
 }
 .segmented.wide button {
-  flex: 1;
-  height: 27px;
+  min-width: 0;
+  min-height: 32px;
+  height: auto;
+  padding: 6px 4px;
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius);
   font-family: var(--sans);
   font-size: 11.5px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.segmented.wide button:last-child {
+  border-right: 1px solid var(--border-control);
+}
+.segmented.wide button[aria-pressed='true'] {
+  border-color: var(--cyan-border);
+  background: var(--cyan-bg);
+  color: var(--cyan-text);
 }
 
 /* Keep the complete desktop action set in the 46 px row. These tighter values preserve the
@@ -1210,23 +1230,27 @@ textarea:focus {
   line-height: 1.5;
 }
 .field {
+  min-width: 0;
   margin-bottom: 13px;
 }
 .field-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
-  gap: 8px;
+  gap: 2px 8px;
   margin-bottom: 4px;
 }
 .field-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
   font-size: 11.5px;
   color: var(--text-low);
 }
 .field-dim {
   font-size: 10px;
   color: var(--text-dim);
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 .qty {
   display: flex;
@@ -1340,9 +1364,16 @@ textarea:focus {
   line-height: 1.5;
 }
 .sub {
-  margin-top: 8px;
-  padding-left: 10px;
+  min-width: 0;
+  margin-top: 12px;
+  padding-left: 12px;
   border-left: 1px solid var(--border-divider);
+}
+.sub .sub {
+  padding-left: 8px;
+}
+.sub > .field:last-child {
+  margin-bottom: 0;
 }
 .surface {
   display: flex;
@@ -1820,15 +1851,6 @@ textarea:focus {
   height: 26px;
   padding: 0 8px;
   font-size: 11.5px;
-}
-
-/* A multi-select enum (a Step's `output`) has more cells than fit one row. */
-.segmented.wide {
-  flex-wrap: wrap;
-}
-.segmented.wide button {
-  flex: 1 0 auto;
-  min-width: 72px;
 }
 
 /* ── results: the viewer chrome (design §Viewer chrome, states 4–7) ────────────────────── */
