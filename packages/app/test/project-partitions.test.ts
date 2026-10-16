@@ -28,6 +28,9 @@ for (const backend of ['memory', 'indexeddb'] as const) describe(`immutable acco
     expect(await base.read('same')).toEqual(legacy);
     expect(await a.read('same')).toEqual(row('same', 'A'));
     expect(await b.read('same')).toEqual(row('same', 'B'));
+    expect(await a.scan()).toEqual([row('same', 'A')]);
+    expect(await b.scan()).toEqual([row('same', 'B')]);
+    expect(await anonymous.scan()).toEqual([legacy]);
     expect(await partitionedAtomicProjects(base, 'owner-a').read('same')).toEqual(row('same', 'A'));
     const exposed = (await a.read('same'))!;
     exposed.meta!.name = 'mutated'; exposed.cmds.length = 0;
@@ -73,6 +76,9 @@ for (const backend of ['memory', 'indexeddb'] as const) describe(`immutable acco
     const tombstone = await a.read('same');
     expect(tombstone).toEqual({ ...captured, generation: 'deleted-generation', meta: null, cmds: [] });
     expect(await a.list()).toEqual([]);
+    expect(await a.scan()).toEqual([tombstone]);
+    expect(await b.scan()).toEqual([row('same', 'B')]);
+    expect(await anonymous.scan()).toEqual([]);
     await expect(repo.save({ id: 'same', generation: captured.generation!, version: captured.version, meta: captured.meta!, cmds: captured.cmds, journal: { entries: [] } } as Parameters<ProjectRepository['save']>[0])).rejects.toMatchObject({ code: 'session.conflict' });
     expect(await a.read('same')).toEqual(tombstone);
     expect(await b.read('same')).toEqual(row('same', 'B'));
@@ -116,7 +122,7 @@ for (const backend of ['memory', 'indexeddb'] as const) describe(`immutable acco
     const { base } = setup();
     let resume!: () => void;
     const gate = new Promise<void>(resolve => { resume = resolve; });
-    const delayed: AtomicProjects = { list: () => base.list(), read: id => base.read(id), update: async (id, change) => { await gate; return base.update(id, change); } };
+    const delayed: AtomicProjects = {scan:()=>base.scan(), list: () => base.list(), read: id => base.read(id), update: async (id, change) => { await gate; return base.update(id, change); } };
     let current = partitionedAtomicProjects(delayed, 'A');
     const pending = current.update('late', () => row('late', 'A'));
     current = partitionedAtomicProjects(base, 'B');
@@ -135,5 +141,7 @@ for (const backend of ['memory', 'indexeddb'] as const) describe(`immutable acco
     for (const key of [prefix + 'invalid', prefix + '["owner-a", "space"]', prefix + '["owner-a",5]', prefix + '["owner-a","id","extra"]', prefix + '["other","foreign"]', prefix + JSON.stringify(['owner-a', physical])]) await base.update(key, () => row(key));
     expect(await a.list()).toEqual([meta('known')]);
     expect(await anonymous.list()).toEqual([]);
+    expect(await a.scan()).toEqual([row('known')]);
+    expect(await anonymous.scan()).toEqual([]);
   });
 });

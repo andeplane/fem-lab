@@ -31,6 +31,7 @@ export function partitionedAtomicProjects(storage: AtomicProjects, owner: string
     ...copy(row), id, meta: row.meta === null ? null : { ...copy(row.meta), id },
   };
   return {
+    scan:async()=>(await storage.scan()).flatMap(row=>{const id=logicalId(row.id);return id===null?[]:[decode(row,id)!];}),
     list: async () => (await storage.list()).flatMap(row => {
       const id = logicalId(row.id);
       return id === null ? [] : [{ ...copy(row), id }];
