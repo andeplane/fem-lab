@@ -27,7 +27,7 @@ use crate::solve::aggregation::{
     Limits,
 };
 use crate::solve::pcg::{inv_diagonal, CpuPcg};
-use crate::solve::{refine::refine, LinearSolve, SolveInfo, SolveOptions};
+use crate::solve::{refine, LinearSolve, SolveInfo, SolveOptions};
 
 /// Slots in the `scalars` buffer; the same names are `const`s in `cg_vec.wgsl`.
 const RZ_OLD: u64 = 0;
@@ -174,12 +174,13 @@ pub(crate) async fn solve_refined_with_space(
     if k.n == 0 {
         return Ok((Vec::new(), SolveInfo { solver: "gpu-pcg", iterations: 0, rel_residual: 0.0, time_ms: 0.0 }));
     }
-    let device_solver = GpuCg::new_with_space(gpu, k, opts, pool, space).await?;
+    let correction_bytes = refine::correction_bytes(k.n, opts.max_outer, SETUP_BYTES)?;
+    let device_solver = GpuCg::new_with_space(gpu, k, opts, pool, space, correction_bytes).await?;
     if !progress(Progress { phase: "solve", fraction: 0.5, message: device_solver.setup_message.clone() }) {
         return Err(Error::cancelled());
     }
     let mut inner = Inner::Gpu(Box::new(device_solver));
-    refine(k, b, &mut inner, "gpu-pcg", opts.rel_tol, opts.max_outer, progress).await
+    refine::refine_gcr(k, b, &mut inner, "gpu-pcg", opts.rel_tol, opts.max_outer, progress).await
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -342,7 +343,7 @@ pub struct GpuCg<'a> {
 impl<'a> GpuCg<'a> {
     /// Scale `k` symmetrically, cast it to f32 and upload it once.
     pub async fn new(gpu: &'a Gpu, k: &Csr, opts: &SolveOptions) -> Result<GpuCg<'a>, Error> {
-        Self::new_with_space(gpu, k, opts, None, None).await
+        Self::new_with_space(gpu, k, opts, None, None, 0).await
     }
 
     async fn new_with_space(
@@ -351,9 +352,12 @@ impl<'a> GpuCg<'a> {
         opts: &SolveOptions,
         pool: Option<&Pool>,
         space: Option<&PhysicalSpace<'_>>,
+        correction_bytes: usize,
     ) -> Result<GpuCg<'a>, Error> {
+        let mut setup = setup_limits(k);
+        setup.max_bytes -= correction_bytes;
         let limits = InputLimits {
-            setup: setup_limits(k),
+            setup,
             device_bytes: DEVICE_BYTES,
             physical_bytes: NEAR_SPACE_BYTES,
             max_buffer_bytes: gpu.max_buffer_bytes(),

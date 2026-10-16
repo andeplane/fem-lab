@@ -1,12 +1,16 @@
-//! f64 iterative refinement around an approximate inner solver (ADR 0002, plan A §5.3).
+//! f64 correction around an approximate inner solver (ADR0002 and ADR0045).
+//!
+//! CPU solves use stationary `refine`; GPU solves use bounded flexible `refine_gcr`.
+//! The stationary loop below requires contraction; GCR minimizes over retained directions.
 //!
 //! `x = 0; loop { r = b − K x in f64; if ‖r‖/‖b‖ < rel_tol, done; d = inner.solve(r); x += d }`.
-//! The residual, the norms and the correction are f64 whatever the inner solver works in, so a
-//! single-precision inner solve — the GPU's — still lands on a double-precision answer as long
-//! as it reduces the residual by some fixed factor each time (Göddeke–Strzodka–Turek 2007).
+//! In the stationary CPU loop, the residual, norms and correction are f64, so a
+//! lower-precision inner solve can reach a double-precision answer if it contracts the
+//! residual by a fixed factor each time (Göddeke–Strzodka–Turek 2007). The GPU path
+//! instead uses GCR below, since its approximate inner inverse need not contract.
 //!
-//! The loop stops when the residual stops falling — after `max_outer` steps or three that fail
-//! to halve it — and then says which of the two things happened: it reached the arithmetic
+//! The stationary CPU loop stops after `max_outer` steps or three that fail to halve
+//! the residual — and then says which of the two things happened: it reached the arithmetic
 //! floor and the answer stands, or it never got near the tolerance, which is `solve.stalled`
 //! naming the Command that solves the problem instead of grinding at it.
 
@@ -106,4 +110,169 @@ fn finish(
     )
     .at("solve")
     .suggest("solve.run { solver: 'cpu-direct' }"))
+}
+
+/// Fixed correction history; extra outer iterations reuse its arrays after a restart.
+const CORRECTION_HISTORY: usize = 8;
+const MAX_CORRECTION_BYTES: usize = 256 << 20;
+
+/// Admit all requested f64 arrays and metadata before the GPU setup/upload starts.
+pub(crate) fn correction_bytes(n: usize, max_outer: usize, available: usize) -> Result<usize, Error> {
+    let width = max_outer.min(CORRECTION_HISTORY);
+    let bytes = (n as u128) * (4 + 2 * width as u128) * 8 + 1024;
+    if bytes > available.min(MAX_CORRECTION_BYTES) as u128 {
+        return Err(Error::new(
+            ErrorCode::SolveTooLarge,
+            "the f64 correction workspace exceeds its admitted storage bound",
+        )
+        .at("solve/refinement")
+        .suggest("mesh.generate with a coarser size, or solve.run { solver: 'cpu-direct' }"));
+    }
+    Ok(bytes as usize)
+}
+
+/// Match `par::dot`'s fixed reduction order without its length-dependent Vec.
+/// The 512 stack bytes, eight (Vec, Vec, f64) headers and history Vec header
+/// occupy 984 bytes on 64-bit targets, within the 1024-byte allowance.
+fn correction_dot(a: &[f64], b: &[f64]) -> f64 {
+    let mut partials = [0.0; 64];
+    let chunks = a.len().div_ceil(par::DOT_CHUNK);
+    let mut total = 0.0;
+    for base in (0..chunks).step_by(partials.len()) {
+        let count = (chunks - base).min(partials.len());
+        par::for_each_chunk_mut(&mut partials[..count], 1, |offset, out| {
+            let lo = (base + offset) * par::DOT_CHUNK;
+            let hi = (lo + par::DOT_CHUNK).min(a.len());
+            let mut sum = 0.0;
+            for i in lo..hi {
+                sum += a[i] * b[i];
+            }
+            out[0] = sum;
+        });
+        for partial in &partials[..count] {
+            total += partial;
+        }
+    }
+    total
+}
+
+/// Flexible GCR around an approximate inner solve (ADR0045). Each retained pair satisfies
+/// q = K z in f64. Two fixed Gram-Schmidt passes make the q directions orthogonal; the
+/// update minimizes the true residual over their span. The GPU still supplies every z.
+/// Only the recomputed f64 residual and the original floor/budget can accept a solution.
+pub async fn refine_gcr(
+    k: &Csr,
+    b: &[f64],
+    inner: &mut Inner<'_>,
+    name: &'static str,
+    rel_tol: f64,
+    max_outer: usize,
+    progress: OnProgress<'_>,
+) -> Result<(Vec<f64>, SolveInfo), Error> {
+    correction_bytes(k.n, max_outer, MAX_CORRECTION_BYTES)?;
+    let n = k.n;
+    let width = max_outer.min(CORRECTION_HISTORY);
+    let norm_b = correction_dot(b, b).sqrt().max(f64::MIN_POSITIVE);
+    let mut x = vec![0.0; n];
+    let mut r = vec![0.0; n];
+    let mut q = vec![0.0; n];
+    let mut z = vec![0.0; n];
+    let mut pairs = Vec::with_capacity(width);
+    for _ in 0..width {
+        pairs.push((vec![0.0; n], vec![0.0; n], 0.0));
+    }
+    let mut used = 0;
+    let mut outer = 0;
+    loop {
+        k.spmv(&x, &mut q);
+        for i in 0..n {
+            r[i] = b[i] - q[i];
+        }
+        let rel_residual = correction_dot(&r, &r).sqrt() / norm_b;
+        if rel_residual < rel_tol {
+            return Ok((x, SolveInfo { solver: name, iterations: outer, rel_residual, time_ms: 0.0 }));
+        }
+        if !rel_residual.is_finite() || outer == max_outer {
+            return finish(x, name, rel_residual, outer, rel_tol, "the bounded correction budget ended");
+        }
+        if !progress(Progress {
+            phase: "solve",
+            fraction: 0.5,
+            message: format!("f64 GCR correction {}: relative residual {rel_residual:e}", outer + 1),
+        }) {
+            return Err(Error::cancelled());
+        }
+        inner.solve(&r, &mut z, &mut *progress).await?;
+        k.spmv(&z, &mut q);
+        if used == width {
+            used = 0;
+        }
+        for _ in 0..2 {
+            for (previous_z, previous_q, previous_q_dot_q) in &pairs[..used] {
+                let projection = correction_dot(&q, previous_q) / previous_q_dot_q;
+                for i in 0..n {
+                    q[i] -= projection * previous_q[i];
+                    z[i] -= projection * previous_z[i];
+                }
+            }
+        }
+        let q_dot_q = correction_dot(&q, &q);
+        if q_dot_q == 0.0 || !q_dot_q.is_finite() {
+            return finish(
+                x,
+                name,
+                rel_residual,
+                outer,
+                rel_tol,
+                "the correction directions lost finite independent rank",
+            );
+        }
+        // Keep the direction unnormalized: when Kz = r, identical dot products
+        // give alpha = 1 without a square-root/division rounding roundtrip.
+        let alpha = correction_dot(&r, &q) / q_dot_q;
+        for i in 0..n {
+            x[i] += alpha * z[i];
+        }
+        pairs[used].0.copy_from_slice(&z);
+        pairs[used].1.copy_from_slice(&q);
+        pairs[used].2 = q_dot_q;
+        used += 1;
+        outer += 1;
+    }
+}
+
+#[cfg(test)]
+mod correction_admission_tests {
+    use super::*;
+
+    #[test]
+    fn bounded_dot_preserves_fixed_order_across_stack_blocks_and_threads() {
+        let n = 65 * par::DOT_CHUNK + 17;
+        let a: Vec<f64> = (0..n).map(|i| (i % 7) as f64 - 3.0).collect();
+        let b = vec![1.0; n];
+        // Every complete seven-entry group sums to zero.
+        let expected: f64 = (0..n % 7).map(|i| i as f64 - 3.0).sum();
+        for threads in [1, 4] {
+            let value = par::Pool::new(threads).install(|| correction_dot(&a, &b));
+            assert_eq!(value, expected);
+            assert_eq!(value.to_bits(), par::dot(&a, &b).to_bits());
+        }
+        assert_eq!(correction_dot(&[], &[]), 0.0);
+    }
+
+    #[test]
+    fn correction_arrays_are_bounded_before_allocation_and_restarts_do_not_grow_storage() {
+        let pair_header = std::mem::size_of::<(Vec<f64>, Vec<f64>, f64)>();
+        let history_header = std::mem::size_of::<Vec<(Vec<f64>, Vec<f64>, f64)>>();
+        let dot_stack = std::mem::size_of::<[f64; 64]>();
+        assert!(8 * pair_header + history_header + dot_stack <= 1024);
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!((pair_header, history_header, dot_stack), (56, 24, 512));
+        let exact = (4 + 2 * 8) * 11 * 8 + 1024;
+        assert_eq!(correction_bytes(11, 8, exact).unwrap(), exact);
+        assert_eq!(correction_bytes(11, usize::MAX, exact).unwrap(), exact);
+        assert_eq!(correction_bytes(11, 8, exact - 1).unwrap_err().code, ErrorCode::SolveTooLarge);
+        assert_eq!(correction_bytes(usize::MAX, 8, usize::MAX).unwrap_err().code, ErrorCode::SolveTooLarge);
+        assert_eq!(correction_bytes(0, 0, 1024).unwrap(), 1024);
+    }
 }

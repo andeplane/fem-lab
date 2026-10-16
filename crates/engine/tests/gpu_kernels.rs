@@ -833,6 +833,24 @@ fn the_million_dof_cantilever_meets_b1_and_the_f64_residual() {
 #[test]
 fn the_gpu_solver_reports_a_matrix_too_big_for_the_device_and_obeys_a_cancel() {
     let mut g = gpu();
+    {
+        // A valid sparse identity costs only 27 MB here. Its requested f64 history is
+        // over the fixed bound and must refuse before any solver buffer is uploaded.
+        let n = 1_700_000;
+        let identity =
+            Csr { n, row_ptr: (0..=n as u32).collect(), col_idx: (0..n as u32).collect(), vals: vec![1.0; n] };
+        let error = pollster::block_on(femlab_engine::gpu::cg::solve_refined(
+            Some(&g),
+            &identity,
+            &vec![1.0; n],
+            &SolveOptions::default(),
+            &mut nop,
+        ))
+        .unwrap_err();
+        assert_eq!(error.code, ErrorCode::SolveTooLarge);
+        assert_eq!(error.where_.as_deref(), Some("solve/refinement"));
+    }
+
     let (k, f) = cantilever([16, 4, 4]);
     let pool = Pool::new(2);
     // Both actual hierarchy construction and a completed inner correction are cancellable.
