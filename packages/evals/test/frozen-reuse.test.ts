@@ -44,9 +44,9 @@ it('requires sealed production source, schema and every browser/Node binding bef
     await writeFile(path.join(vendor, 'manifest.json'), JSON.stringify({ artifacts: { sourceKit: { path: 'corresponding-source.tar.gz', sha256: sha(kit), bytes: Buffer.byteLength(kit) } } }));
     await writeFile(path.join(vendor, 'corresponding-source.tar.gz'), kit);
     const verified = await preparationPolicy(root, reuse, changes);
-    expect(verified).toEqual({ minimumFreeGiB: 24, preparationRoute: 'verified-wasm-and-staged-step-kit', stepSourceKitSha256: sha(kit) });
-    expect(() => requireFreeDisk(23.9 * 2 ** 30, verified.minimumFreeGiB * 2 ** 30)).toThrow('24 GiB');
-    expect(() => requireFreeDisk(24 * 2 ** 30, verified.minimumFreeGiB * 2 ** 30)).not.toThrow();
+    expect(verified).toEqual({ minimumFreeGiB: 4, preparationRoute: 'verified-wasm-and-staged-step-kit', stepSourceKitSha256: sha(kit) });
+    expect(() => requireFreeDisk((4 * 2 ** 30 - 1), verified.minimumFreeGiB * 2 ** 30)).toThrow('4 GiB');
+    expect(() => requireFreeDisk(4 * 2 ** 30, verified.minimumFreeGiB * 2 ** 30)).not.toThrow();
     await writeFile(path.join(vendor, 'corresponding-source.tar.gz'), 'mismatch');
     await expect(preparationPolicy(root, reuse, changes).then(build)).rejects.toThrow('differs');
     expect(build).not.toHaveBeenCalled();
