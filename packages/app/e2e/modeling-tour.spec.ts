@@ -93,6 +93,7 @@ test.describe('@cpu modeling tour', () => {
       if (step === 0) {
         // The tour never creates a body itself or blocks the actual Add/form controls.
         await highlighted.click();
+        await page.locator('.tree .add-menu [data-opens="geometry.addBox"]').click();
         await expect(page.locator('.props')).toBeVisible();
         await page.locator('.props input:not([type=checkbox])').first().click();
         await expect(page.locator('.props input:not([type=checkbox])').first()).toBeFocused();

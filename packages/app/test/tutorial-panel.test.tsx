@@ -427,8 +427,10 @@ describe('Tour', () => {
     render(<Tour store={next.store} dispatch={next.dispatch} />, root);
     await afterEffects();
     expect(root.querySelector('.tour-callout')).toBeNull();
+    next.store.togglePanel('tree.geometry', false);
     await next.dispatch({ cmd: 'tour.show' });
     await waitForText(() => root.querySelector('h2'), 'Add geometry');
+    expect(next.store.state.panels['tree.geometry']).toBe(true);
     expect(localStorage.getItem(TOUR_DISMISSED_KEY)).toBe('1');
   });
 
