@@ -32,7 +32,7 @@ For a local build, serve the app through its documented development/preview serv
 
 ## Sign-in, credits and files
 
-An iCloud Passwords or other password-manager popup in the analysis prompt comes from your browser or password manager. The prompt and project name are plain text and request that autofill be turned off; FEM Lab sign-in uses Google or an email link and does not ask for a password. Password managers can ignore autofill hints. Dismiss an unrelated popup with Escape; use the actual **Sign in for AI** action when you want to sign in.
+An iCloud Passwords or other password-manager popup in the analysis prompt comes from your browser or password manager. The prompt and project name are plain text and request that autofill be turned off; FEM Lab sign-in uses Google or an email link and does not ask for a password. Password managers can ignore autofill hints. Dismiss an unrelated popup with Escape; use the actual **Sign in** action when you want to sign in.
 
 Use the newest email link, check Spam, and return to the requesting browser. Google sign-in offers another configured route. Report repeated failures with the error code, not the private link. Zero signup credits, review-required free access and disabled claims can be expected policy states; see [accounts](./accounts-billing.md).
 
