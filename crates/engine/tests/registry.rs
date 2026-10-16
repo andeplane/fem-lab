@@ -14836,3 +14836,9 @@ mod imported_regions;
 
 #[path = "registry/abaqus_assembly.rs"]
 mod abaqus_assembly;
+
+#[path = "registry/portable.rs"]
+mod portable;
+
+#[path = "registry/portable_optional.rs"]
+mod portable_optional;

@@ -1,4 +1,5 @@
 import type {PublicCreditUnit} from './credit-units';
+import type {CloudStorageStatus} from './cloud-project-types';
 /** Public host/account state. Tokens, provider keys and payment customer IDs are never included. */
 export type AccountPlan='free'|'plus'|'pro'|'studio';
 /** Declared use of a subscription, fixed for its lifetime. */
@@ -9,6 +10,8 @@ export interface FreeAllowance {
   credits:number;periodStartsAt:string;periodEndsAt:string;
 }
 export interface AccountInfo {
+  /** Absent on older services; storage is independent of AI credit eligibility. */
+  storage?:CloudStorageStatus;
   /** Applies to usage and freeAllowance; absent on legacy hosts using weighted-token credits. */
   creditUnit?:PublicCreditUnit;
   id:string;email:string;createdAt:string;status:'active';billingAvailable?:boolean;

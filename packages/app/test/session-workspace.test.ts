@@ -66,7 +66,7 @@ it('saves and exports the checked SI document under unreadable display units and
     for (const command of commands.slice(1)) ack = await transport.dispatch(command);
     assert(ack);
     const before = await transport.query({ query: 'query.document' });
-    assert('file' in before);
+    assert('file' in before && 'hash' in before && 'revision' in before);
     const validate = new Ajv({ strict: false }).compile(schema.queryResult);
     expect(validate(JSON.parse(JSON.stringify(before))), JSON.stringify(validate.errors)).toBe(true);
     expect(schema.queries.oneOf.find(q => q.properties.query.const === 'query.document')).toMatchObject({ 'x-execution': 'modelRead', 'x-returns': 'ModelDocument' });

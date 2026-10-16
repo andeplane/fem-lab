@@ -5,10 +5,11 @@ import {ServiceFailure} from './errors';
 import {transaction,type Database} from './transactions';
 import {PUBLIC_CREDIT_UNIT} from '@femlab/registry';
 import {CREDIT_SCALE,PUBLIC_CREDIT_SCALE} from './credits';
+import type {CloudProjects} from './cloud-projects';
 export interface ExportObjects {write(name:string,json:string,expires:Date):Promise<void>;url(name:string,expires:Date):Promise<string>;remove(name:string):Promise<void>}
 export interface PrivacyIdentity {remove(uid:string):Promise<void>}
 export interface PrivacyPayments {stopRenewal(accountId:string,customerId:string|null,key:string):Promise<void>}
-interface Dependencies {db:Database;account(header:string|undefined):Promise<Account>;recentIdentity(header:string|undefined):Promise<Identity>;objects:ExportObjects;identity:PrivacyIdentity;payments?:PrivacyPayments;now():Date;newId():string}
+interface Dependencies {db:Database;account(header:string|undefined):Promise<Account>;recentIdentity(header:string|undefined):Promise<Identity>;objects:ExportObjects;identity:PrivacyIdentity;payments?:PrivacyPayments;projects?:Pick<CloudProjects,'purge'|'metadata'>;now():Date;newId():string}
 class PendingDeletion extends Error {}
 const active=['preflight','reserved','dispatched','pending_reconciliation'];
 /** Durable account jobs hold no prompt, chat, model file, image or export URL. */
@@ -60,6 +61,7 @@ export function accountPrivacy(deps:Dependencies) {
     data.free_eligibility_identities=(await sql.query('SELECT i.* FROM free_eligibility_identities i JOIN free_eligibilities e ON e.id=i.eligibility_id WHERE e.account_id=$1 LIMIT 100001',[accountId])).rows;
     if((data.free_eligibility_identities as unknown[]).length>100000)throw new Error('Account export requires support for larger eligibility history.');
     data.requests=(await sql.query('SELECT id,model,plan,state,created_at,updated_at FROM ai_requests WHERE account_id=$1 ORDER BY created_at LIMIT 100001',[accountId])).rows;
+    if(deps.projects)data.cloud_projects=await deps.projects.metadata(accountId);
     if((data.requests as unknown[]).length>100000)throw new Error('Account export requires support for a larger ledger.');
     const json=JSON.stringify(data);if(Buffer.byteLength(json)>32*1024*1024)throw new Error('Account export requires support for a larger ledger.');return json;
   }
@@ -77,6 +79,8 @@ export function accountPrivacy(deps:Dependencies) {
       // Wait for accepted AI work to be reconciled. Freezing the account prevents new admissions.
       if((await db.query('SELECT id FROM ai_requests WHERE account_id=$1 AND state=ANY($2) LIMIT 1',[accountId,active])).rows.length)throw new PendingDeletion('Accepted AI requests are still pending reconciliation.');
       const exports=(await db.query('SELECT object_name FROM account_exports WHERE account_id=$1',[accountId])).rows;
+      if(deps.projects){if(!await deps.projects.purge(accountId))throw new PendingDeletion('Cloud project cleanup is still pending.');}
+      else if((await db.query("SELECT to_regclass('cloud_projects') name")).rows[0]?.name&&(await db.query('SELECT 1 FROM cloud_projects WHERE account_id=$1 LIMIT 1',[accountId])).rows.length)throw new PendingDeletion('Cloud project storage must be configured before deleting this account.');
       for(const artifact of exports)if(artifact.object_name)await deps.objects.remove(String(artifact.object_name));
       if(row.state!=='identity_deleted'){await deps.identity.remove(String(row.firebase_uid));await db.query("UPDATE account_deletions SET state='identity_deleted',updated_at=$2 WHERE account_id=$1",[accountId,now()])}
       await transaction(db,async sql=>{

@@ -131,6 +131,7 @@ test('@sw cold Pages bootstrap waits for real SW control and downloads only the 
     await expect.poll(async () => (await status()).pending).toBe(1);
     const before = await status();
     expect(before.requests.filter(body => /(?:session\.worker-[^/]+\.js|\.wasm)$/.test(body.file))).toEqual([]);
+    expect(before.requests.filter(body => /(?:^|\/)(?:viewer|three)-[^/]+\.js$/.test(body.file))).toEqual([]);
     await request.post(`${origin}/__femlab_test__/release`);
     await page.waitForFunction(() => crossOriginIsolated && window.fem !== undefined, undefined, { timeout: 30_000 });
     expect((await page.evaluate(() => window.fem.query.capabilities())).threads).toBe(4);
@@ -141,6 +142,9 @@ test('@sw cold Pages bootstrap waits for real SW control and downloads only the 
     expect(engineBodies[0]!.sha256).toBe(createHash('sha256').update(expected).digest('hex'));
     expect(engineBodies[0]!.bytes).toBe(expected.length);
     expect(engineBodies[0]!.completed).toBe(true);
+    for (const name of ['viewer', 'three']) {
+      expect(after.requests.filter(body => new RegExp(`(?:^|/)${name}-[^/]+\\.js$`).test(body.file))).toHaveLength(1);
+    }
     // Same JS/CSS/document/engine budget as size-check, counting repeated response bodies
     // through both navigations instead of deduplicating URLs. Charge even interrupted
     // responses at their full size, giving a conservative upper bound on transferred bodies.
