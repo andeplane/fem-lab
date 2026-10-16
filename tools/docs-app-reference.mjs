@@ -13,12 +13,17 @@ function metadata(node,source){
   return '{'+node.properties.filter(p=>key(p)!=='run').map(p=>p.getText(source)).join(',')+'}';
 }
 function declaration(source,name){let result;function visit(node){if(ts.isVariableDeclaration(node)&&node.name.getText(source)===name)result=node.initializer;ts.forEachChild(node,visit);}visit(source);if(!result)throw new Error(`Documentation cannot find ${name} in ${source.fileName}`);return result;}
-function definitions(source,functionName){
+function definitions(source,functionName,registeredFactories=[]){
   const declaration=source.statements.find(node=>ts.isFunctionDeclaration(node)&&node.name?.text===functionName);
   if(!declaration?.body)throw new Error(`Documentation cannot find ${functionName}`);
   const returned=declaration.body.statements.find(ts.isReturnStatement)?.expression,array=returned&&unwrap(returned);
-  if(!array||!ts.isArrayLiteralExpression(array)||array.elements.some(node=>!ts.isObjectLiteralExpression(unwrap(node))))throw new Error(`Documentation needs explicit ${functionName} definitions; update its source reader for this registration shape.`);
-  return array.elements.map(node=>metadata(node,source));
+  if(!array||!ts.isArrayLiteralExpression(array))throw new Error(`Documentation needs explicit ${functionName} definitions; update its source reader for this registration shape.`);
+  for(const factory of registeredFactories)if(array.elements.filter(node=>ts.isSpreadElement(node)&&ts.isCallExpression(node.expression)&&node.expression.expression.getText(source)===factory).length!==1)throw new Error(`Documentation needs exactly one ${factory} registration in ${functionName}.`);
+  return array.elements.flatMap(node=>{
+    if(ts.isObjectLiteralExpression(unwrap(node)))return [metadata(node,source)];
+    if(ts.isSpreadElement(node)&&ts.isCallExpression(node.expression)&&registeredFactories.includes(node.expression.expression.getText(source)))return [];
+    throw new Error(`Documentation needs explicit ${functionName} definitions; update its source reader for this registration shape.`);
+  });
 }
 function checkMainRegistrations(source){
   let found=0;
@@ -44,17 +49,18 @@ function checkMainRegistrations(source){
 }
 export async function appReferenceSource(){
   const parse=async name=>ts.createSourceFile(name,await readFile(path.join(root,name),'utf8'),ts.ScriptTarget.Latest,true,name.endsWith('tsx')?ts.ScriptKind.TSX:ts.ScriptKind.TS);
-  const [host,startup,main,ui]=await Promise.all(['packages/app/src/host.ts','packages/app/src/startup.ts','packages/app/src/main.tsx','packages/app/src/ui/schema.ts'].map(parse));
+  const [host,startup,main,ui,tour]=await Promise.all(['packages/app/src/host.ts','packages/app/src/startup.ts','packages/app/src/main.tsx','packages/app/src/ui/schema.ts','packages/app/src/tutorial/tour-state.ts'].map(parse));
   checkMainRegistrations(main);
-  const commands=definitions(host,'appHostCommands'),queries=definitions(host,'appHostQueries'),startupDefinitions=[];
+  const commands=definitions(host,'appHostCommands',['tourCommands']),queries=definitions(host,'appHostQueries'),tourDefinitions=definitions(tour,'tourCommands'),startupDefinitions=[];
   function visit(node){if(ts.isObjectLiteralExpression(node)&&property(node,'name')&&property(node,'schema'))startupDefinitions.push(metadata(node,startup));ts.forEachChild(node,visit);}
   visit(startup);
   if(!startupDefinitions.length)throw new Error('Documentation could not read startup registry metadata.');
   return `
     const MATERIAL_PHYSICS=${declaration(ui,'MATERIAL_PHYSICS').getText(ui)};
+    const TOUR_STOPS=${declaration(tour,'TOUR_STOPS').getText(tour)};
     const FORM_OPEN=${metadata(declaration(host,'FORM_OPEN'),host)};
-    const appCommands=[${commands.join(',')}],appQueries=[${queries.join(',')}],startupDefinitions=[${startupDefinitions.join(',')}];
+    const appCommands=[${commands.join(',')}],appQueries=[${queries.join(',')}],tourDefinitions=[${tourDefinitions.join(',')}],startupDefinitions=[${startupDefinitions.join(',')}];
     const metadataRows=(entries,kind,provider,sourceFile)=>entries.map(d=>({name:d.name,description:d.description,schema:z.toJSONSchema(d.schema),execution:d.execution,journaled:false,tool:d.tool,kind:kind??(d.name.startsWith('query.')?'query':'command'),provider,sourceFile}));
-    const appEntries=[...metadataRows(appCommands,'command','browser-app','packages/app/src/host.ts'),...metadataRows(appQueries,'query','browser-app','packages/app/src/host.ts'),...metadataRows(startupDefinitions,null,'startup','packages/app/src/startup.ts')];
+    const appEntries=[...metadataRows(appCommands,'command','browser-app','packages/app/src/host.ts'),...metadataRows(appQueries,'query','browser-app','packages/app/src/host.ts'),...metadataRows(tourDefinitions,'command','browser-app','packages/app/src/tutorial/tour-state.ts'),...metadataRows(startupDefinitions,null,'startup','packages/app/src/startup.ts')];
   `;
 }

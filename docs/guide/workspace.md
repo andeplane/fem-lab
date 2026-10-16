@@ -22,6 +22,12 @@ Use **Search commands** or **Ctrl+K / Command+K**. Search for a Command such as 
 
 The bottom panels expose Results, Checks, Script, Journal and other analysis views. Examples and Tutorials open guided overlays. Escape closes the active supported overlay. You can resize docked panels; view changes do not change the engine Journal.
 
+## Revisit the modeling sequence
+
+Open **Tutorials → Modeling tour** for the eight-stage workflow guide, including when a tutorial is already open. The guide uses its own row above the workspace, so you can still use the highlighted controls and Properties form. At small window sizes, the workspace scrolls to the relevant control. It is a guide, not a checklist that edits or validates your Model.
+
+Use **Continue on my own**, the close button, or **Escape** to dismiss it. You can reopen it at any time; existing dismissal preferences are preserved. The last stage offers **Build the cantilever tutorial**. Opening it leaves the current Model intact, but the tutorial's explicit first modeling action replaces it, so use a new project to keep earlier work.
+
 ## Inspect the viewer
 
 Use the camera controls to orbit, pan, zoom and fit. With focus outside an editable field, **Shift+1** selects isometric, **Shift+2** front, **Shift+3** top and **Shift+4** fits the Model. The matching Commands are `view.preset` and `view.fit`. Viewer options control mesh edges, visibility, clipping, deformation scale and the legend.

@@ -62,7 +62,11 @@ test('API inventory is exhaustive for current engine, shared browser, app and st
   const inventory=await loadReference(),schema=JSON.parse(await readFile(new URL('../packages/registry/src/generated/engine.schema.json',import.meta.url),'utf8'));
   assert.equal(inventory.entries.filter(entry=>entry.provider==='engine'&&entry.kind==='command').length,schema.commands.oneOf.length);
   assert.equal(inventory.entries.filter(entry=>entry.provider==='engine'&&entry.kind==='query').length,schema.queries.oneOf.length);
-  for(const name of ['form.open','form.edit','form.pick','palette.resolve','view.setMode','chat.setDraft','file.openExample','file.compare','example.filter','query.journalComparison','query.workspaceStatus','workspace.retryStartup','workspace.cancelStartup'])assert.ok(inventory.entries.some(entry=>entry.name===name),name);
+  for(const name of ['form.open','form.edit','form.pick','palette.resolve','view.setMode','chat.setDraft','file.openExample','file.compare','example.filter','query.journalComparison','query.workspaceStatus','workspace.retryStartup','workspace.cancelStartup','tour.show','tour.dismiss','tour.startCantilever'])assert.ok(inventory.entries.some(entry=>entry.name===name),name);
+  const tour=inventory.entries.find(entry=>entry.name==='tour.show');
+  assert.equal(tour.sourceFile,'packages/app/src/tutorial/tour-state.ts');
+  assert.equal(tour.schema.properties.step.maximum,7);
+  assert.equal(tour.journaled,false);
   const site=fixture({reference:inventory}),api=site.files.get('docs/api-reference/index.html');
   assert.equal([...api.matchAll(/data-api-entry=/g)].length,inventory.entries.length);
   assert.ok(!site.files.get('docs/index.html').includes('data-api-entry='));

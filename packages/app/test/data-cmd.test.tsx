@@ -339,10 +339,9 @@ describe('the shell', () => {
 
   it('puts a `data-cmd` on every button, so nothing can do something the registry cannot', () => {
     const { root } = mount();
-    // ADR 0003 binds the shell in `src/ui/**`. The tutorial card and the first-run tour are
-    // self-contained panels whose own doc comments say they are not Commands; they are mounted
-    // here, not written here, so this check skips their subtrees rather than their module.
-    const bare = [...root.querySelectorAll('button')].filter((b) => !b.hasAttribute('data-cmd') && !b.closest('.tutorial-panel, .tour-callout'));
+    // The modeling tour follows the same Command rule as the shell. The existing tutorial
+    // runner has its own Journal-watching action tests, so only that panel is exempt here.
+    const bare = [...root.querySelectorAll('button')].filter((b) => !b.hasAttribute('data-cmd') && !b.closest('.tutorial-panel'));
     expect(bare.map((b) => b.textContent)).toEqual([]);
   });
 
