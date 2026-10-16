@@ -455,30 +455,50 @@ Sanitized current proof, bound to the test source SHA-256, is retained at
 Earlier dated evidence remains separate. Production sender verification in #710 still
 reports `IN_PROGRESS`; post-apply Inbox delivery remains unverified.
 
-### Account-partitioned staging contract (prepared 17 October 2026)
+### Account-partitioned staging acceptance, 17 October 2026
+
+At 23:15 UTC on 16 October (01:15 Oslo on 17 October), the revised smoke passed
+against the deployed staging client: **1 passed in 60.0 seconds** (61.6 seconds
+including the runner). Its test SHA-256 is
+`1a722a18c2c7bb54699b6546a11c295c59aa2d37dab3b2c2bca6a9c56e860705`.
+The mini-built client source was `bad659e25b17271f48059726fb4d38bfc182a314`,
+Hosting release `1792192244673000`; the API remained
+`femlab-api-re31c2aa4-f5ec22ef`. The published HTML matched the verified artifact.
 
 The cloud client in #775 changes sign-out intentionally: private account Models and
-project lists must disappear, while anonymous browser work remains recoverable. The
-older dated runs above predate that client and do not establish the new boundary.
-The prepared smoke now saves an anonymous boxed Model before either login, then
-creates a distinct private project after authentication and waits for its actual
-cloud sync to finish. Sign-out must hide the private Model/project; reopening the
-anonymous project must recover its original Model. Owned account exports must include
-the private project only for its owner. Waiting for completed sync also avoids
-revoking an active chunk writer during durable fixture cleanup.
+project lists disappear, while anonymous browser work remains recoverable. The smoke
+saved an anonymous boxed Model before login, created a distinct private project after
+authentication and waited for actual cloud sync. Sign-out hid the private Model/project;
+reopening the anonymous project recovered its original Model and body. Owned exports
+included the private project only for its owner. Earlier dated runs predate this client
+and do not establish that boundary.
 
-This is a prepared assertion update, not a new deployed pass. It requires the #775
-client release, type/discovery checks and fresh disposable staging fixtures before
-its source-bound result can be recorded. It creates no production account, AI
-completion, credit grant or payment. The historical zero-spend evidence stays dated.
+A read-only SQL preflight again verified AI disabled and all monetary caps zero. Both
+fresh disposable email-link SDK sessions retained zero credits and review-required
+eligibility; unapproved monthly claims were denied, AI admissions returned 503 without
+generation, exports stayed private and both identities were durably deleted. Both old
+tokens returned 401. Private action-link and cleanup-state files were removed. The
+390px account view was inspected. No email, AI generation, credit grant or payment occurred.
+
+The first attempt encountered the intentionally expired anonymous session while
+Firebase restored its owner during reload. Its two disposable identities were deleted;
+both still-unexpired tokens were independently rejected before new fixtures were made.
+The test now retries only explicit session-expired/transitioning errors during account
+polling. Persistent expiry still times out; all other errors and uncaught page errors
+remain fatal. Types and test discovery passed on the mini before the deployed rerun.
+
+Source-bound sanitized evidence is retained at
+`/Users/anderhaf/.codex/tmp/fem-lab-triage-802/599-partition-staging-evidence.json`.
+This establishes staging behavior with disposable accounts. #775's production owned-account
+browser acceptance and #710's actual sender delivery remain separate release gates.
 
 ## Remaining release gates
 
 - Resolve production email Spam placement/custom-sender deliverability in #710, then
   verify actual Inbox delivery. Receipt and SPF/DKIM checks passed; Google's owner
   chooser/consent return is already verified on both environments.
-- Run the account-partitioned staging contract after #775 is released; retain the
-  earlier dated results separately.
+- Complete #775's production owned-account browser acceptance; the new staging
+  result above does not substitute for that check.
 - Complete required exact-head CI and review for the final three-file verification
   source. Recorded deployed acceptance is separate from that source gate.
 

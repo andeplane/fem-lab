@@ -12,6 +12,10 @@ interface Session {token:string;firebaseKey:string;email:string;accountId?:strin
 interface AccountExport {account:{id:string;email:string};requests:unknown[];credit_grants:unknown[];credit_entries:unknown[];credit_holds:unknown[];usage_receipts:unknown[]}
 const account=(page:Page)=>page.evaluate(()=>window.fem.registry.query({query:'query.account'})) as Promise<AccountState>;
 const zeroAllowance={plan:'free',totalCredits:0,availableCredits:0,reservedCredits:0};
+// A reload can publish a ready anonymous session before Firebase restores its
+// owner. Re-read the current facade until that explicit identity reset settles;
+// persistent expiry still times out, and all other errors remain fatal.
+const accountDuringTransition=(page:Page)=>account(page).catch(error=>{if(error instanceof Error&&/session\.(?:expired|transitioning):/.test(error.message))return null;throw error});
 const ready=async(page:Page)=>{await page.waitForFunction(()=>Boolean(window.fem),undefined,{timeout:60000});await expect.poll(()=>page.evaluate(()=>window.fem.registry.query({query:'query.workspaceStatus'})).catch(()=>null),{timeout:60000}).toMatchObject({ready:true})};
 
 test('email login has zero credits, private projects stay isolated, anonymous work survives and deletion is durable',async({page,browser},testInfo)=>{
@@ -71,10 +75,10 @@ test('email login has zero credits, private projects stay isolated, anonymous wo
       const claim=await request(session,'/v1/account/free-allowance',{});
       expect(claim.status).toBe(403);expect(await claim.json()).toMatchObject({code:'eligibility-required',where:'free-allowance'});
       await ready(current);
-      await expect.poll(()=>account(current),{timeout:30000}).toMatchObject({status:'active',email:fixture.email,profile:{id:session.accountId,usage:zeroAllowance}});
+      await expect.poll(()=>accountDuringTransition(current),{timeout:30000}).toMatchObject({status:'active',email:fixture.email,profile:{id:session.accountId,usage:zeroAllowance}});
       await current.reload();
       await ready(current);
-      await expect.poll(()=>account(current),{timeout:30000}).toMatchObject({status:'active',profile:{id:session.accountId,usage:zeroAllowance}});
+      await expect.poll(()=>accountDuringTransition(current),{timeout:30000}).toMatchObject({status:'active',profile:{id:session.accountId,usage:zeroAllowance}});
       await current.evaluate(()=>window.fem.dispatch({cmd:'account.refresh'}));
       expect((await account(current)).profile).toMatchObject({creditUnit:'usd-milli-v1',usage:zeroAllowance,freeAllowance:{status:'review-required',credits:4999.9995}});
     }
@@ -108,7 +112,7 @@ test('email login has zero credits, private projects stay isolated, anonymous wo
     await page.setViewportSize({width:390,height:844});await page.screenshot({path:testInfo.outputPath('zero-signup-account-390.png')});
     await dialog.getByRole('button',{name:'Sign out',exact:true}).click();
     await ready(page);
-    await expect.poll(()=>account(page)).toMatchObject({status:'anonymous',uid:null,profile:null,disclosureAccepted:false});
+    await expect.poll(()=>accountDuringTransition(page)).toMatchObject({status:'anonymous',uid:null,profile:null,disclosureAccepted:false});
     await expect(page.locator('aside.assistant .messages')).toBeEmpty();
     const afterLogout=await page.evaluate(()=>window.fem.query.model());
     expect(afterLogout.name).not.toBe(privateName);expect(afterLogout.bodies.some(body=>body.name==='staging-private-only')).toBe(false);
