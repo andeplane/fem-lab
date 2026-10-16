@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 import schema from '../src/generated/runtime-schema';
 import { FemError } from '../src/error';
 import { HOST_COMMANDS, HOST_QUERIES } from '../src/host-commands';
 import { Registry, type EngineSchema } from '../src/registry';
 import { EXPORT_FORMATS, extremesCsv, pathCsv, reactionsCsv } from '../src/host-commands';
+import { unretainedFile } from '../src/file-delivery';
 import { ACK, AUTOSAVES, FOLDER, MODEL_FILE, PATH, PROJECT, RESULT, TETRA_STL, fakeHost, fakeTransport } from './fakes';
 
 const engineSchema = schema as unknown as EngineSchema;
@@ -60,6 +62,8 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   'geometry.cancelStep': { name: 'part' },
   'file.save': {},
   'file.export': { spec: { format: 'vtu' } },
+  'file.download': { id: 'sample' },
+  'query.fileDelivery': { id: 'sample' },
   'file.cancelAnimationCapture': {},
   'file.shareLink': {},
   'file.autosave': { on: true },
@@ -183,7 +187,8 @@ describe('Registry', () => {
   });
 
   it('dispatches every host Command to the HostContext and none to the transport', async () => {
-    const { registry, transport } = make();
+    const { registry, transport, host } = make();
+    host.files.completed = { capture: () => unretainedFile, info: () => null, download: () => ({ name: 'sample', to: 'download', bytes: 0, mime: 'text/plain' }), clear: () => undefined, dispose: () => undefined };
     for (const h of HOST_COMMANDS) {
       expect(SAMPLES, `missing sample for ${h.name}`).toHaveProperty(h.name);
       await registry.dispatch({ cmd: h.name, ...SAMPLES[h.name] });
@@ -210,7 +215,7 @@ describe('Registry', () => {
 
   it('host Queries read the HostContext and query.capabilities merges engine and browser facts', async () => {
     const { registry, host } = make(true);
-    await expect(registry.query({ query: 'query.capabilities' })).resolves.toEqual({ gpu: false, threads: 4, engineVersion: '0', schemaVersion: '1', webgpu: true, crossOriginIsolated: true, userAgent: 'test', engine: 'local' });
+    await expect(registry.query({ query: 'query.capabilities' })).resolves.toEqual({ gpu: false, threads: 1, engineVersion: '0', schemaVersion: '1', webgpu: true, crossOriginIsolated: true, userAgent: 'test', engine: 'local' });
     await expect(registry.query({ query: 'query.selection' })).resolves.toMatchObject({ refs: ['body:beam', 'face:beam.top'] });
     await expect(registry.query({ query: 'query.skills' })).resolves.toEqual([{ name: 'beam-theory-check', description: expect.any(String), when: 'a beam', source: 'builtin' }]);
     await expect(registry.query({ query: 'query.folder' })).resolves.toEqual(FOLDER);
@@ -313,15 +318,15 @@ describe('Registry', () => {
 
   it('file.save and file.export deliver to the open folder when there is one, else download', async () => {
     const closed = make(false);
-    await expect(closed.registry.dispatch({ cmd: 'file.save' })).resolves.toEqual({ name: 'beam.femlab.json', to: 'download' });
+    await expect(closed.registry.dispatch({ cmd: 'file.save' })).resolves.toEqual({ name: 'beam.femlab.json', to: 'download', bytes: 125, mime: 'application/json', unavailable: 'unsupported' });
     expect(closed.host.files.download).toHaveBeenCalledWith('beam.femlab.json', 'application/json', expect.stringContaining('"femlab/1"'));
-    await expect(closed.registry.dispatch({ cmd: 'file.export', spec: { format: 'vtu' } })).resolves.toEqual({ name: 'beam.vtu', to: 'download' });
+    await expect(closed.registry.dispatch({ cmd: 'file.export', spec: { format: 'vtu' } })).resolves.toEqual({ name: 'beam.vtu', to: 'download', bytes: 2, mime: 'application/xml', unavailable: 'unsupported' });
     expect(closed.host.files.download).toHaveBeenCalledWith('beam.vtu', 'application/xml', new Uint8Array([1, 2]));
 
     const open = make(true);
-    await expect(open.registry.dispatch({ cmd: 'file.save', name: 'v2.json' })).resolves.toEqual({ name: 'v2.json', to: 'folder' });
+    await expect(open.registry.dispatch({ cmd: 'file.save', name: 'v2.json' })).resolves.toEqual({ name: 'v2.json', to: 'folder', bytes: 125, mime: 'application/json', unavailable: 'unsupported' });
     expect(open.host.folder.writeText).toHaveBeenCalledWith('v2.json', expect.any(String));
-    await expect(open.registry.dispatch({ cmd: 'file.save', name: 'reports\\v3.json' })).resolves.toEqual({ name: 'reports/v3.json', to: 'folder' });
+    await expect(open.registry.dispatch({ cmd: 'file.save', name: 'reports\\v3.json' })).resolves.toEqual({ name: 'reports/v3.json', to: 'folder', bytes: 125, mime: 'application/json', unavailable: 'unsupported' });
     expect(open.host.folder.writeText).toHaveBeenCalledWith('reports/v3.json', expect.any(String));
     await open.registry.dispatch({ cmd: 'file.export', spec: { format: 'vtu' } });
     expect(open.host.folder.writeBytes).toHaveBeenCalledWith('beam.vtu', new Uint8Array([1, 2]));
@@ -382,7 +387,7 @@ describe('Registry', () => {
     await expect(registry.dispatch({ cmd: 'file.read', path: 'AGENTS.md' })).resolves.toEqual({ text: 'content of AGENTS.md' });
     await expect(registry.dispatch({ cmd: 'file.read', path: 'big.txt' })).rejects.toMatchObject({ code: 'unsupported' });
     await expect(registry.dispatch({ cmd: 'file.read', path: '/etc/passwd' })).rejects.toMatchObject({ code: 'file.scope' });
-    await expect(registry.dispatch({ cmd: 'file.write', path: 'a\\b.md', text: 'x' })).resolves.toEqual({ name: 'a/b.md', to: 'folder' });
+    await expect(registry.dispatch({ cmd: 'file.write', path: 'a\\b.md', text: 'x' })).resolves.toEqual({ name: 'a/b.md', to: 'folder', bytes: 1, mime: 'text/plain;charset=utf-8', unavailable: 'unsupported' });
     expect(host.folder.writeText).toHaveBeenCalledWith('a/b.md', 'x');
     await expect(registry.dispatch({ cmd: 'file.write', path: '../b.md', text: 'x' })).rejects.toMatchObject({ code: 'file.scope' });
   });
@@ -433,7 +438,7 @@ describe('Registry', () => {
       return query(q);
     });
 
-    await expect(registry.dispatch({ cmd: 'file.export', spec: { format: 'script' } })).resolves.toEqual({ name: 'beam.ts', to: 'download' });
+    await expect(registry.dispatch({ cmd: 'file.export', spec: { format: 'script' } })).resolves.toEqual({ name: 'beam.ts', to: 'download', bytes: 31, mime: 'text/typescript', unavailable: 'unsupported' });
     expect(wrote()).toEqual(['beam.ts', 'text/typescript', 'fem.model.new({ name: "beam" })']);
 
     await registry.dispatch({ cmd: 'file.export', spec: { format: 'journal' } });
@@ -627,4 +632,44 @@ it('forwards explicit subscription use while preserving legacy direct checkout a
   expect(host.account!.checkout).toHaveBeenCalledTimes(3);
   await expect(registry.dispatch({cmd:'account.changePlan',plan:'studio',purchaseUse:'business'})).rejects.toMatchObject({code:'schema'});
   expect(host.account!.changePlan).not.toHaveBeenCalled();
+});
+
+
+it('binds a transport-free host phase through the same schemas, metadata and router', async () => {
+  const context = { count: 0, reads: 0 };
+  let retired = false;
+  const unavailable = () => new FemError('session.transitioning', 'the actual engine is still starting', 'workspace', 'query.workspaceStatus');
+  const registry = Registry.hostOnly({
+    schema: engineSchema, context,
+    guard: () => { if (retired) throw new FemError('session.expired', 'landing host was published'); },
+    unavailable,
+    hostCommands: [{ name: 'workspace.retryStartup', execution: 'workspace', tool: false,
+      description: 'Retry the owned startup attempt without sending an engine command.',
+      schema: z.object({ attempt: z.number().int().positive() }),
+      run: (input: { attempt: number }, host) => { host.count += input.attempt; return host.count; } }],
+    hostQueries: [{ name: 'query.workspaceStatus', execution: 'workspace', tool: true,
+      description: 'Read the actual host startup status without an engine or model.',
+      schema: z.object({}), run: (_input, host) => { host.reads++; return { attempts: host.count }; } }],
+  });
+  expect(registry.describe('workspace.retryStartup')).toMatchObject({ provider: 'host', execution: 'workspace', journaled: false, schema: { required: ['attempt'] } });
+  expect(registry.list().commands).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'geometry.addBox', provider: 'engine' })]));
+  await expect(registry.dispatch({ cmd: 'workspace.retryStartup', attempt: 2 })).resolves.toBe(2);
+  await expect(registry.query({ query: 'query.workspaceStatus' })).resolves.toEqual({ attempts: 2 });
+  await expect(registry.dispatch({ cmd: 'workspace.retryStartup', attempt: -1 })).rejects.toMatchObject({ code: 'schema', where: 'attempt' });
+  expect(context.count).toBe(2);
+  await expect(registry.dispatch({ cmd: 'model.new', name: 'early' })).rejects.toMatchObject({ code: 'session.transitioning', where: 'workspace' });
+  await expect(registry.query({ query: 'query.model' })).rejects.toMatchObject({ code: 'session.transitioning', where: 'workspace' });
+  await expect(registry.dispatch({ cmd: 'not-a-command' })).rejects.toMatchObject({ code: 'not-found', where: 'cmd' });
+  await expect(registry.query({ query: 'not-a-query' })).rejects.toMatchObject({ code: 'not-found', where: 'query' });
+  const describedCommand = registry.describe('workspace.retryStartup').run!;
+  const describedQuery = registry.describe('query.workspaceStatus').run!;
+  const listedCommand = registry.list().commands.find(command => command.name === 'workspace.retryStartup')!.run!;
+  const listedQuery = registry.list().queries.find(query => query.name === 'query.workspaceStatus')!.run!;
+  retired = true;
+  const retained = [describedCommand({ attempt: 9 }), listedCommand({ attempt: 9 }), describedQuery({}), listedQuery({})];
+  await Promise.all(retained.map(result => expect(result).rejects.toMatchObject({ code: 'session.expired' })));
+  expect(context.reads).toBe(1);
+  await expect(registry.dispatch({ cmd: 'workspace.retryStartup', attempt: 1 })).rejects.toMatchObject({ code: 'session.expired' });
+  await expect(registry.query({ query: 'query.workspaceStatus' })).rejects.toMatchObject({ code: 'session.expired' });
+  expect(context.count).toBe(2);
 });

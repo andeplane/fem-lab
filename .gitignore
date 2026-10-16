@@ -5,6 +5,7 @@ dist/
 coverage/
 lcov.info
 packages/app/src/generated/wasm/
+packages/app/src/generated/wasm-threads/
 tools/wasm-node/
 proptest-regressions/
 packages/registry/src/generated/script-declarations*.json

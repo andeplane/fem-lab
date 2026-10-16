@@ -153,6 +153,47 @@ fn start() {
     console_error_panic_hook::set_once();
 }
 
+// A wasm module has one Rayon pool, scoped to its owning session Worker. Replacement
+// candidates reuse it. Do not query Rayon before initialization: that would try std::thread.
+#[cfg(all(target_arch = "wasm32", feature = "wasm-threads"))]
+static THREADS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Initialize the host's worker pool before constructing a session. One pool per wasm module.
+#[cfg(all(target_arch = "wasm32", feature = "wasm-threads"))]
+#[wasm_bindgen(js_name = initCpuThreadPool)]
+pub async fn init_thread_pool(threads: u32) -> Result<(), JsValue> {
+    use std::sync::atomic::Ordering;
+    if threads == 0 || THREADS.compare_exchange(0, usize::MAX, Ordering::AcqRel, Ordering::Acquire).is_err() {
+        return Err(throw(
+            &femlab_engine::Error::schema("Initialize the CPU pool once with a positive thread count").at("threads"),
+        ));
+    }
+    wasm_bindgen_futures::JsFuture::from(wasm_bindgen_rayon::init_thread_pool(threads as usize)).await?;
+    THREADS.store(threads as usize, Ordering::Release);
+    Ok(())
+}
+
+fn session_threads(requested: usize) -> Result<usize, JsValue> {
+    #[cfg(all(target_arch = "wasm32", feature = "wasm-threads"))]
+    {
+        let actual = THREADS.load(std::sync::atomic::Ordering::Acquire);
+        if actual == 0 || actual != requested.max(1) {
+            return Err(throw(
+                &femlab_engine::Error::schema(
+                    "Initialize the CPU pool with the requested thread count before creating a session",
+                )
+                .at("threads"),
+            ));
+        }
+        Ok(actual)
+    }
+    #[cfg(not(all(target_arch = "wasm32", feature = "wasm-threads")))]
+    {
+        let _ = requested;
+        Ok(1)
+    }
+}
+
 /// Checked session surface. Hosts must capture a RunLease and send its context on every call.
 /// There is no unchecked live-engine export. Replay is confined to private candidates.
 #[wasm_bindgen]
@@ -167,7 +208,7 @@ impl SessionEngine {
         let inner = femlab_engine::session_owner::SessionOwner::new(
             None,
             Box::new(JsHost),
-            threads.max(1) as usize,
+            session_threads(threads as usize)?,
             backend_epoch,
         )
         .map_err(|e| throw(&e))?;
@@ -457,7 +498,7 @@ async fn session_device(opts: JsValue) -> Result<(Option<femlab_engine::Gpu>, us
     } else {
         None
     };
-    Ok((gpu, threads))
+    Ok((gpu, session_threads(threads)?))
 }
 
 fn render_surface(view: femlab_engine::RenderView<'_>) -> Result<JsValue, JsValue> {
