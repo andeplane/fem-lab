@@ -87,3 +87,24 @@ test('complete bundle import, local reopen and download preserve signed-zero ret
   expect(await page.evaluate(async({bytes,index})=>{const {decodeProjectArtifact}=await import(/* @vite-ignore */new URL('src/project-artifact.ts',document.baseURI).href);const artifact=decodeProjectArtifact(new Uint8Array(bytes));const project=artifact.engine as import('@femlab/registry').PortableProject;return {negative:Object.is(project.results[0]!.result.fields.displacement!.data[index],-0),files:artifact.files.map((file: {name:string;data:Uint8Array})=>({name:file.name,data:Array.from(file.data)}))};},{bytes:Array.from(bytes),index:fixture.index})).toEqual({negative:true,files:[{name:'source.bin',data:[0,255,13,10,128]}]});
   expect(server.writes).toBe(0);expect(server.operations.size).toBe(0);
 });
+
+test('cancellation keeps one owned cloud project and restores its recovered revision in another browser',async({page,browser})=>{
+  const server=new CloudFixtureServer();await server.install(page.context());await page.addInitScript(()=>localStorage.setItem('femlab.tour.dismissed','1'));await page.goto('./');await ready(page);await identify(page,'fixture-A');
+  const local=await page.evaluate(()=>window.fem.dispatch({cmd:'project.new',name:'cloud cancellation'})) as {id:string};
+  await page.evaluate(()=>window.fem.dispatch({cmd:'project.save'}));
+  await expect.poll(()=>server.owners.get('fixture-A')?.size??0).toBe(1);
+  const remote=[...server.owners.get('fixture-A')!.values()][0]!.project.id;
+  await page.evaluate(()=>window.fem.dispatch({cmd:'model.setName',name:'acknowledged cloud recovery'}));
+  await page.evaluate(()=>window.fem.dispatch({cmd:'geometry.addBox',name:'recovered-box',size:['1 m','1 m','1 m']}));
+  await page.evaluate(()=>window.fem.dispatch({cmd:'journal.undo',steps:1}));
+  await page.evaluate(()=>window.fem.dispatch({cmd:'solve.cancel'}));
+  expect(await page.evaluate(()=>window.fem.registry.query({query:'query.project'}))).toMatchObject({id:local.id});
+  await page.evaluate(()=>window.fem.dispatch({cmd:'journal.redo',steps:1}));
+  await page.evaluate(()=>window.fem.dispatch({cmd:'project.save'}));await page.evaluate(()=>window.fem.dispatch({cmd:'account.syncProjects'}));
+  await expect.poll(()=>server.modelName('fixture-A','cloud cancellation')).toBe('acknowledged cloud recovery');
+  expect(server.owners.get('fixture-A')!.size).toBe(1);expect([...server.owners.get('fixture-A')!.values()][0]!.project.id).toBe(remote);
+  const second=await browser.newContext();await server.install(second);const other=await second.newPage();await other.addInitScript(()=>localStorage.setItem('femlab.tour.dismissed','1'));await other.goto('http://localhost:'+new URL(page.url()).port+'/fem-lab/');await ready(other);await identify(other,'fixture-A');
+  await expect.poll(async()=>(await projects(other)).some(row=>row.name==='cloud cancellation')).toBe(true);
+  const recovered=(await projects(other)).find(row=>row.name==='cloud cancellation')!;await other.evaluate(id=>window.fem.dispatch({cmd:'project.open',id}),recovered.id);
+  expect(await other.evaluate(()=>window.fem.query.model())).toMatchObject({name:'acknowledged cloud recovery',bodies:[expect.objectContaining({name:'recovered-box'})]});await second.close();
+});

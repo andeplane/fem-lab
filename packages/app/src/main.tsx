@@ -107,6 +107,7 @@ class Bundle {
   private savedMeta: ProjectMeta | null = null;
   private projects: ProjectMeta[] = [];
   private latest: SaveJob | null = null;
+  private recoverySyncPending = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private saving: Promise<unknown> = Promise.resolve();
   private refreshing: Promise<void> = Promise.resolve();
@@ -182,7 +183,8 @@ class Bundle {
     this.freshStart=source===undefined;
     await this.history.read();
     const restored=source?restoredArtifacts.get(source):undefined;
-    this.artifactFailure=restored?null:(source?sourceRecovery.get(source)?.error:undefined)??source?.project?.expected?.artifactError??null;
+    const recovering=Boolean(source&&recoveredFiles.has(source));
+    this.artifactFailure=restored?null:(source?sourceRecovery.get(source)?.error:undefined)??(recovering?null:source?.project?.expected?.artifactError??null);
     if(this.artifactFailure)this.store.set({projectArtifactError:this.artifactFailure});
     if(restored)this.inventory.replace(restored.artifact.files);
     if(sourceInputs.has(source!))this.inventory.replace([...this.inventory.snapshot(),...sourceInputs.get(source!)!]);
@@ -195,7 +197,15 @@ class Bundle {
     if (snapshot.results.records.length) this.store.set({ viewMode: 'results', tab: 'results' });
     if (source&&!(source.kind==='commands'&&source.commands.length===0)) {
       const target = source.project ?? { meta: nextMeta(snapshot.model.name), expected: null };
-      this.binding = await this.repository.claim(target.meta, snapshot, target.expected,restored?{artifact:restored.bytes,artifactTag:await hashBytes(restored.bytes),artifactError:undefined,cloud:restored.cloud,restoreDeleted:restored.restoreDeleted}:sourceRecovery.has(source)?{artifact:sourceRecovery.get(source)!.artifact,artifactTag:sourceRecovery.get(source)!.artifactTag,artifactError:sourceRecovery.get(source)!.error,cloud:this.ownerUid?{remote:null,dirty:true,deleted:false}:undefined}:{});
+      let recoveredArchive:Pick<SaveJob,'artifact'|'artifactTag'|'artifactError'>|undefined;
+      if(recovering){
+        // The cancelled Worker is closed. Only this fresh private session can export it.
+        const exported=await this.transport.exportProject();
+        if(exported.stamp.stateVersion!==snapshot.stamp.stateVersion)throw new FemError('session.conflict','recovered project changed while taking its complete snapshot','project','project.save');
+        recoveredArchive=await this.archiveSnapshot(exported.project,target.meta,this.inventory.snapshot());
+        this.recoverySyncPending=this.autosave&&this.ownerUid!==null;
+      }
+      this.binding = await this.repository.claim(target.meta, snapshot, target.expected,recoveredArchive??(restored?{artifact:restored.bytes,artifactTag:await hashBytes(restored.bytes),artifactError:undefined,cloud:restored.cloud,restoreDeleted:restored.restoreDeleted}:sourceRecovery.has(source)?{artifact:sourceRecovery.get(source)!.artifact,artifactTag:sourceRecovery.get(source)!.artifactTag,artifactError:sourceRecovery.get(source)!.error,cloud:this.ownerUid?{remote:null,dirty:true,deleted:false}:undefined}:{}));
       this.savedMeta = target.meta;
       if (source.kind !== 'commands' || source.commands.length !== 1 || source.commands[0]?.cmd !== 'model.new') this.store.markOpened(snapshot.file.journal);
     }
@@ -264,13 +274,20 @@ class Bundle {
     return this.savedMeta?.id ?? null;
   }
   async recoverySource(source: ReplacementSource): Promise<ReplacementSource> {
-    if (this.projectDeleted || !this.binding) { recoveredFiles.set(source, this.completedFiles); return source; }
-    if (this.autosave) await this.save();
+    if(this.timer!==undefined)clearTimeout(this.timer);this.timer=undefined;
+    // Cancellation already terminated the Worker; keep captured host bytes without RPC.
     await this.saving;
-    const expected = await this.repository.read(this.binding.meta.id);
-    const recovery = { ...source, project: { meta: expected.meta!, expected } };
-    recoveredFiles.set(recovery, this.completedFiles);
+    const expected=this.projectDeleted||!this.binding?undefined:await this.repository.read(this.binding.meta.id);
+    const recovery=expected?{...source,project:{meta:expected.meta!,expected}}:source;
+    if(this.artifactFailure)sourceRecovery.set(recovery,{error:this.artifactFailure});
+    recoveredFiles.set(recovery,this.completedFiles);
     return recovery;
+  }
+  activateProjectSync():void {
+    if(!this.recoverySyncPending||!this.ownerUid||!this.currentId)return;
+    this.recoverySyncPending=false;
+    // Cloud work starts only after the replacement and its atomic cache claim publish.
+    void sync.changed(this.ownerUid,this.currentId).catch(error=>{if(!this.revoked&&!this.disposed)this.fail(error);});
   }
   activateFiles(previous?: Bundle): void {
     if (previous?.completedFiles === this.completedFiles) previous.ownsFiles = false;
@@ -296,6 +313,17 @@ class Bundle {
     this.store.set({ projects: this.projects, project: this.savedMeta ? { ...this.savedMeta, saving: false, autosave: this.autosave } : null });
     return this.projects;
   }
+  private async archiveSnapshot(engine:ProjectArtifact['engine'],meta:ProjectMeta,files:ProjectAsset[]):Promise<Pick<SaveJob,'artifact'|'artifactTag'|'artifactError'>> {
+    try{
+      if(this.artifactFailure)throw new Error(this.artifactFailure);
+      const artifact=encodeProjectArtifact({name:meta.name,createdAt:meta.createdAt??meta.at,engine,files});
+      return {artifact,artifactTag:await hashBytes(artifact),artifactError:undefined};
+    }catch(error){
+      const cause=error instanceof Error?error.message:'The complete project snapshot could not be retained.';
+      if(!this.revoked)this.store.set({projectArtifactError:cause});
+      return {artifactError:cause};
+    }
+  }
   async save() {
     const binding = this.binding; let job = this.latest;
     if (!binding || !job) return null;
@@ -306,8 +334,7 @@ class Bundle {
     const exported=await this.transport.exportProject();
     const snapshot=await this.transport.snapshot();if(snapshot.stamp.stateVersion!==exported.stamp.stateVersion)throw new FemError('session.conflict','project changed while taking its complete snapshot','project','project.save');job=binding.capture(snapshot,Date.now());
     const files=this.inventory.snapshot();
-    try{if(this.artifactFailure)throw new Error(this.artifactFailure);const artifact=encodeProjectArtifact({name:job.meta.name,createdAt:job.meta.createdAt??job.meta.at,engine:exported.project,files});job={...job,artifact,artifactTag:await hashBytes(artifact)};}
-    catch(error){const cause=error instanceof Error?error.message:'The complete project snapshot could not be retained.';job={...job,artifactError:cause};if(!this.revoked)this.store.set({projectArtifactError:cause});}
+    job={...job,...await this.archiveSnapshot(exported.project,job.meta,files)};
     const captured=job;
     const operation = binding.save(captured);
     this.saving = operation.catch(() => undefined);
@@ -619,6 +646,7 @@ const workspace = new SessionWorkspace<Bundle>({
     startup.retire();
     detachStartupAccount();
     render(<App sessionKey={bundle.transport.stamp.session.backendEpoch} store={bundle.store} dispatch={dispatch} query={query => ui.registry.query(query)} viewer={bundle.viewer} rightViewer={bundle.rightViewer} comparison={bundle.comparison} commands={ui.registry.list().commands} registry={ui.registry} />, root);
+    bundle.activateProjectSync();
     if(priorPublication&&bundle.freshStart)queueMicrotask(()=>{void resumeAccountReturn(bundle).catch(error=>bundle.fail(error));});
   },
 });
