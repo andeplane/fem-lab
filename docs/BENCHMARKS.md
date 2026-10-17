@@ -791,7 +791,7 @@ checked beyond aggregate counts.
 | D2 | Axisymmetric thermal stress, heated solid cylinder (**substitute for NAFEMS LE11**) | σzz(0) = −58.654 MPa (Timoshenko §151) | 3 % | thermal stress in axisymmetric, chained from a heat Step | green |
 | D3 | NAFEMS FV52 simply-supported solid plate, modal | 45.897, 109.44, 109.44, 167.89, 193.59, 206.19 Hz (Ansys) vs Abaqus row 44.092, 106.66, … — **resolve** | 3 % | 3D eigen | |
 | D4 | Manufactured solution, elasticity and Poisson: every element kind on the lattice mesher (Kuhn-split simplices) in every idealisation, tri3/tri6 on the free mesher, hex8/quad4 in both formulations | `u = ∇φ`, `T = φ` for a harmonic φ (`sin x cosh y`, `sin x sin y cosh √2 z`, `r⁴ − 8r²z² + 8/3 z⁴` axisymmetric), the exact field on every boundary DOF; L2 rate p+1, full-gradient H1 seminorm rate p, plus retained engineering-strain rate p, over the two finest of h = 1/2, 1/4, 1/8 | rate ± 0.1 | an element is the order it claims: quadrature degree, shape-function order, mid-node placement, every strain term in `B` | engine test |
-| D5 | 780,300-equation incompatible-mode Hex8 cantilever (`[100,50,50]`, ignored real-device run) and its 66k CI sibling (`[50,20,20]`) | B1 Timoshenko tip deflection; direct factorisation as secondary 66k cross-check | Unchanged 2% B1 tip gate and f64 residual below 1e-8; global force/moment residual below .001 N/.001 N m for the 1 kN load; 66k displacement `‖u_gpu − u_direct‖ ≤ 1e-8 ‖u‖`; repeated 1/4-thread fields exactly equal. Historical stationary-correction aggregation 66k passed on real Metal in debug/release at residual 4.802661830863288e-10; current flexible correction requires fresh 66k and 780,300 actual GPU acceptance | GPU PCG + bounded flexible f64 correction at scale, without CPU fallback | pending #3 |
+| D5 | 780,300-equation incompatible-mode Hex8 cantilever (`[100,50,50]`, ignored real-device run) and its 66k CI sibling (`[50,20,20]`) | B1 Timoshenko tip deflection; direct factorisation as secondary 66k cross-check | Unchanged 2% B1 tip gate and f64 residual below 1e-8; global force/moment residual below .001 N/.001 N m for the 1 kN load; 66k displacement `‖u_gpu − u_direct‖ ≤ 1e-8 ‖u‖`; repeated 1/4-thread fields exactly equal. Translated-row/FGMRES candidate passed real Metal at 66k residual 5.222915328431264e-10 and 780k residual 2.267548104643227e-9; final-source coverage and CI remain required | GPU PCG + bounded flexible f64 correction at scale, without CPU fallback | pending #3 |
 | D6 | Lamé thick cylinder as a 90° CSG revolve (#22), free **tet10** | reaction balance and Result freshness gate; σθθ, σrr and u_r at r = 0.15 m (mid-wall) recorded against the closed form 55.5556 MPa, −15.5556 MPa, 4.246667e-5 m | balance 1e-8; stress/displacement recorded, not gated | the free tet mesher's isosurface-stuffed mesh on a curved boundary; Set survival across a mesher swap | green |
 | D7 | the same CSG revolve, free **tet4** | same | recorded, not gated — the element-order lesson | the free tet mesher with constant-strain elements | green |
 | D8 | patch test on the free tet mesher's own unstructured mesh of a CSG box with a cylindrical bore, tet4 and tet10, all six constant-strain modes | exact constant stress and strain | 1e-9 rel | the mesher's irregular connectivity and curved boundary, not just the synthetic structured lattice A1 already covers | engine test |
@@ -3340,39 +3340,46 @@ field layout, unsupported version and oversized artifacts fail without advancing
 session or changing its model. This is a persistence regression around an existing numerical
 capability, not a new physical procedure or an independent accuracy claim for its coarse mesh.
 
-### Bounded flexible f64 GPU correction (#3 / PR #706, provisional)
+### Bounded flexible f64 GPU correction and translation coordinates (#3 / PR #706)
 
-ADR0045 replaces the GPU path's stationary correction with flexible GCR, retaining
-at most eight unnormalized correction/image pairs with stored squared image
-norms and two fixed orthogonalization passes. Projections and residual-minimizing
-updates divide by those squared norms. The exact-inner identity witness requires
-bit-exact `(0.25,-0.5)` and `(1,1)`, zero true residual and one correction at one/four threads;
-the two existing exact small-GPU oracles remain unchanged.
-`f64_gcr_corrects_an_inaccurate_inner_operator_without_changing_the_physical_system`
-checks K=[[4,1],[1,3]], b=(6,7), x=(1,2) against an inaccurate diagonal inner
-operator for which stationary refinement fails. It checks exact one/four-thread
-fields. The ten-dimensional diagonal case has exact x=(1,...,1), exercises
-restart beyond eight steps and retains its true-residual gate. Separate tests
-cover zero RHS, cancellation, budgets, zero/nonfinite rank, inner failure and
-preallocation admission. A multi-block reduction witness uses a repeating
-seven-entry zero-sum sequence, checks its closed-form remainder, and checks
-fixed-order dot-product bits at one/four threads with a fixed stack workspace.
-The valid 1.7-million-row diagonal GPU admission test
-must reject the correction workspace before solver upload.
+ADR0045 uses right flexible GMRES with at most eight raw Arnoldi/direction
+pairs, stored squared norms, two modified Gram–Schmidt passes and weighted
+Hessenberg QR. The first-column direct projection preserves an exact inner
+correction without a normalization roundtrip. The existing two small GPU exact
+oracles retain their bit-exact fields and zero residual.
 
-These algebraic tests supplement rather than replace D1/D5, imported references,
-physical patches and mesh-convergence studies. The prior stationary-correction
-780k hardware run failed numerically (true residual 3765.703286884391); no accepted
-780k result is claimed for flexible GCR. The default target, factor-100 floor,
-66k direct comparison, B1 tip and equilibrium tolerances remain unchanged.
+`f64_fgmres_corrects_an_inaccurate_inner_operator_without_changing_the_physical_system`
+checks K=[[4,1],[1,3]], b=(6,7), x=(1,2) against an inaccurate inner inverse for
+which stationary refinement fails. The identity cases require exact `(0.25,-0.5)`
+and `(1,1)` at one/four workers. A ten-dimensional diagonal system exercises
+restart beyond eight steps with known solution `(1,...,1)`. Separate cases cover
+zero RHS, cancellation, rank/nonfinite directions, inner failure, budgets and
+preallocation admission. Multi-block fixed-order reduction retains its closed-
+form seven-entry zero-sum remainder and one/four-thread bit identity. The valid
+1.7-million-row diagonal request still rejects its workspace before GPU upload.
 
-Final unnormalized-source verification on home-mini (17 October 2026, Oslo): all
-21 active Metal GPU tests and the unchanged 66,150-equation release benchmark
-passed. The latter retained direct-displacement `1e-8`, B1, force/moment equilibrium
-and complete one/four-thread field checks; peak RSS was 1,667,072,000 bytes, with no
-external guard stop. Strict engine/geometry LLVM coverage including GPU tests was
-100% of 74,461 regions, 3,966 functions and 35,143 lines, with zero misses.
-Source hashes and the actual release-binary hash bind those receipts. A subsequent
-780,300-equation attempt was refused before launch by the mini's declared host
-admission (60% free of 16 GiB, below 70%). No 780k result is inferred. The resource
-hold and earlier stationary-correction numerical failure remain separate evidence.
+`physical_row_coordinates_preserve_spring_forces_under_translation_and_chunking`
+executes the shared production WGSL against independent springs of stiffness
+1 and 2^-26. Symmetric scaling is S=diag(1,1/2,2). The ordinary rounded CSR loses
+2^-26 from K00=1+2^-26, producing force -2^-26 under uniform physical translation;
+the translation-coordinate path must return exactly zero. Exact deformations,
+their rigid offsets, all three component indices and split/rebased chunks check
+the known spring forces. CPU metadata cases retain partially prescribed nodes,
+row moments, one/four-worker bits and exact memory/buffer/range boundaries.
+
+These tests supplement D1/D5, imported references, physical patches and mesh-
+convergence studies. The default eight outer steps, 5000 inner iterations,
+factor-100 floor, 66k direct `1e-8`, 2% B1 and .001 force/moment gates are unchanged.
+No CPU fallback or emulated-f64 GPU operator is introduced.
+
+Dated translated-row candidate verification on 17 October 2026: all 21 then-active
+Metal GPU tests passed on home-mini. The unchanged 66,150-equation case passed
+B1, equilibrium, direct comparison and complete one/four-worker field identity,
+with true residual 5.222915328431264e-10. The unchanged 780,300-equation Apple M1
+Max Metal case passed B1, force/moment equilibrium and true f64 residual below
+1e-8: 2.267548104643227e-9 after six accepted corrections and 1642 GPU updates.
+The run took 528.66 s with peak RSS 10,643,292,160 bytes; the unchanged 10 GiB
+guard did not fire. These receipts precede explicit early release of uploaded
+host arrays and do not replace final-source strict coverage or software-GPU CI.
+Historical failed stationary and unbalanced flexible runs remain numerical
+failures; the new spring counterexample records the rounding mechanism repaired.

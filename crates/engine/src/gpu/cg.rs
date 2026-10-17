@@ -180,7 +180,7 @@ pub(crate) async fn solve_refined_with_space(
         return Err(Error::cancelled());
     }
     let mut inner = Inner::Gpu(Box::new(device_solver));
-    refine::refine_gcr(k, b, &mut inner, "gpu-pcg", opts.rel_tol, opts.max_outer, progress).await
+    refine::refine_fgmres(k, b, &mut inner, "gpu-pcg", opts.rel_tol, opts.max_outer, progress).await
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -202,7 +202,7 @@ struct FineAdmission {
 /// Cardinality-only admission precedes all scaled copies. Widening usize/u64 to u128
 /// makes every product exact on the supported 32/64-bit hosts; cast only after bounds.
 fn admit_fine_payload(n: usize, nnz: usize, setup_limit: usize, device_limit: u64) -> Result<FineAdmission, Error> {
-    let device_bytes = (n as u128) * 44 + (nnz as u128) * 8 + 8192;
+    let device_bytes = (n as u128) * 60 + (nnz as u128) * 8 + 8192;
     if device_bytes > device_limit as u128 {
         return Err(Error::new(ErrorCode::GpuTooLarge, "the fine GPU system exceeds its admitted payload budget")
             .at("solve/aggregation")
@@ -249,6 +249,75 @@ struct PreparedInput {
     spans: Vec<(usize, usize)>,
     plan: Option<aggregation::AdmittedPlan>,
     message: String,
+    balance: Option<BalancedRows>,
+}
+
+#[derive(Debug)]
+struct BalancedRows {
+    indices: Vec<u32>,
+    values: Vec<f32>,
+}
+
+// Evaluate elastic rows in local translation coordinates using original f64 row moments.
+// This stores one f32 coefficient per entry; it is not paired-float arithmetic.
+fn balance_input(
+    k: &Csr,
+    scale: &[f64],
+    space: Option<&PhysicalSpace<'_>>,
+    fine: &mut FineAdmission,
+    limits: &InputLimits,
+) -> Result<Option<BalancedRows>, Error> {
+    let Some(input) = space else {
+        return Ok(None);
+    };
+    if input.dofs_per_node != 3 || *input.idealisation != crate::model::Idealisation::Solid3d {
+        return Ok(None);
+    }
+    let full = input.mesh.n_nodes() as u128 * 3;
+    let setup = k.n as u128 * 32 + full * 4 + 1024;
+    let device = k.n as u128 * 32;
+    if setup + fine.setup_bytes as u128 > limits.setup.max_bytes as u128 || device > fine.remaining_device_bytes as u128
+    {
+        return Err(Error::new(ErrorCode::SolveTooLarge, "translation-coordinate rows exceed the admitted payload")
+            .at("solve/aggregation")
+            .suggest("mesh.generate with a coarser size"));
+    }
+    check_buffer_bytes(k.n as u64 * 16, limits.max_buffer_bytes)?;
+    if input.free.len() != k.n || input.free.iter().any(|&d| d as u128 >= full) {
+        return Err(Error::schema("physical rows must match the reduced operator").at("solve/aggregation"));
+    }
+    let n = k.n;
+    let mut lookup = vec![u32::MAX; full as usize];
+    for (row, &dof) in input.free.iter().enumerate() {
+        lookup[dof as usize] = row as u32;
+    }
+    let mut indices = vec![0; 4 * n];
+    let mut values = vec![0.0f32; 4 * n];
+    for row in 0..n {
+        let node = input.free[row] as usize / 3;
+        indices[3 * row..3 * row + 3].copy_from_slice(&lookup[3 * node..3 * node + 3]);
+        indices[3 * n + row] = input.free[row] % 3;
+        values[row] = scale[row] as f32;
+    }
+    crate::par::for_each_chunk_mut(&mut values[n..], 3, |row, sums| {
+        let mut exact = [0.0; 3];
+        for entry in k.row_ptr[row] as usize..k.row_ptr[row + 1] as usize {
+            exact[(input.free[k.col_idx[entry] as usize] % 3) as usize] += k.vals[entry];
+        }
+        for c in 0..3 {
+            let anchor = indices[3 * row + c];
+            sums[c] = if anchor == u32::MAX { 0.0 } else { (scale[row] * exact[c] * scale[anchor as usize]) as f32 };
+        }
+    });
+    if values[..n].iter().any(|v| !v.is_finite() || *v <= 0.0) || values[n..].iter().any(|v| !v.is_finite()) {
+        return Err(Error::new(ErrorCode::SolveStalled, "translation-coordinate coefficients exceed f32 range")
+            .at("solve")
+            .suggest("solve.run { solver: 'cpu-direct' }"));
+    }
+    fine.setup_bytes += setup as usize;
+    fine.device_bytes += device as u64;
+    fine.remaining_device_bytes -= device as u64;
+    Ok(Some(BalancedRows { indices, values }))
 }
 
 fn prepare_input(
@@ -259,7 +328,7 @@ fn prepare_input(
 ) -> Result<PreparedInput, Error> {
     // The fine admission precedes even the per-chunk span Vec. Physical candidates
     // stay borrowed until this GPU-only boundary has admitted every full column.
-    let fine = admit_fine_payload(k.n, k.nnz(), limits.setup.max_bytes, limits.device_bytes)?;
+    let mut fine = admit_fine_payload(k.n, k.nnz(), limits.setup.max_bytes, limits.device_bytes)?;
     let spans = CgContext::admit(k, chunk_rows, limits.max_buffer_bytes)?;
     let mut scale = inv_diagonal(k);
     // Reuse the admitted f64 diagonal allocation explicitly, rather than relying
@@ -275,6 +344,7 @@ fn prepare_input(
             vals[e] = scaled[e] as f32;
         }
     }
+    let balance = balance_input(k, &scale, space, &mut fine, &limits)?;
     let (plan, message) = if setup::needs_aggregation(k) {
         let physical = if setup::uses_candidates(k.n) {
             space.map(|input| input.materialize(limits.physical_bytes)).transpose()?
@@ -294,7 +364,7 @@ fn prepare_input(
             ),
         )
     };
-    Ok(PreparedInput { scale, vals, spans, plan, message })
+    Ok(PreparedInput { scale, vals, spans, plan, message, balance })
 }
 
 const CG_KEYS: &[(&str, &str)] = &[
@@ -363,7 +433,7 @@ impl<'a> GpuCg<'a> {
             max_buffer_bytes: gpu.max_buffer_bytes(),
         };
         let prepare = || prepare_input(k, opts.gpu_chunk_rows, space, limits);
-        let PreparedInput { scale, vals, spans, plan, message: setup_message } = match pool {
+        let PreparedInput { scale, vals, spans, plan, message: setup_message, balance } = match pool {
             Some(pool) => pool.install(prepare),
             None => prepare(),
         }?;
@@ -375,7 +445,9 @@ impl<'a> GpuCg<'a> {
         }
         let mut pipelines = gpu.pipelines(&keys).await?;
         let vectors = pipelines.split_off(CG_KEYS.len());
-        let mut ctx = CgContext::upload(gpu, k, &vals, spans, pipelines);
+        let mut ctx = CgContext::upload(gpu, k, &vals, spans, pipelines, balance);
+        // Upload owns its copy; release the fine values before recursive hierarchy upload.
+        drop(vals);
         if let Some(plan) = plan {
             ctx.preconditioner = Some(aggregation::DevicePlan::new(gpu, &ctx, plan, &ctx._kept[0], &ctx.z, vectors));
             gpu.queue.write_buffer(&ctx._kept[2], 4, bytemuck::bytes_of(&1u32));
@@ -439,7 +511,7 @@ struct Chunk {
     bind: wgpu::BindGroup,
     grid: [u32; 2],
     /// Kept alive for the bind group.
-    _buffers: [wgpu::Buffer; 4],
+    _buffers: [wgpu::Buffer; 6],
 }
 
 /// Every pipeline, buffer and bind group one CG on one matrix needs.
@@ -538,7 +610,7 @@ impl CgContext {
     pub async fn new(gpu: &Gpu, k: &Csr, vals: &[f32], chunk_rows: Option<usize>) -> Result<CgContext, Error> {
         let spans = Self::admit(k, chunk_rows, gpu.max_buffer_bytes())?;
         let pipelines = gpu.pipelines(CG_KEYS).await?;
-        Ok(Self::upload(gpu, k, vals, spans, pipelines))
+        Ok(Self::upload(gpu, k, vals, spans, pipelines, None))
     }
 
     fn upload(
@@ -547,6 +619,7 @@ impl CgContext {
         vals: &[f32],
         spans: Vec<(usize, usize)>,
         pipelines: Vec<wgpu::ComputePipeline>,
+        balance: Option<BalancedRows>,
     ) -> CgContext {
         let storage = wgpu::BufferUsages::STORAGE;
         let zeros = vec![0.0f32; k.n];
@@ -572,6 +645,17 @@ impl CgContext {
             wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         );
 
+        let balanced = u32::from(balance.is_some());
+        let (balance_indices, balance_values) = match balance {
+            Some(data) => (
+                gpu.buffer_u32("physical row indices", &data.indices, storage),
+                gpu.buffer_f32("physical row coordinates", &data.values, storage),
+            ),
+            None => (
+                gpu.buffer_u32("unused row indices", &[0], storage),
+                gpu.buffer_f32("unused row coordinates", &[0.0], storage),
+            ),
+        };
         let mut chunks = Vec::with_capacity(spans.len());
         for (row0, rows) in spans {
             let (lo, hi) = (k.row_ptr[row0] as usize, k.row_ptr[row0 + rows] as usize);
@@ -580,7 +664,13 @@ impl CgContext {
                 gpu.buffer_u32("csr row_ptr", &rebased, storage),
                 gpu.buffer_u32("csr col_idx", &k.col_idx[lo..hi], storage),
                 gpu.buffer_f32("csr vals", &vals[lo..hi], storage),
-                gpu.buffer_u32("spmv params", &[row0 as u32, rows as u32], wgpu::BufferUsages::UNIFORM),
+                gpu.buffer_u32(
+                    "spmv params",
+                    &[row0 as u32, rows as u32, k.n as u32, balanced],
+                    wgpu::BufferUsages::UNIFORM,
+                ),
+                balance_indices.clone(),
+                balance_values.clone(),
             ];
             let entries: Vec<wgpu::BindGroupEntry> = [
                 bufs[0].as_entire_binding(),
@@ -589,6 +679,8 @@ impl CgContext {
                 p.as_entire_binding(),
                 q.as_entire_binding(),
                 bufs[3].as_entire_binding(),
+                bufs[4].as_entire_binding(),
+                bufs[5].as_entire_binding(),
             ]
             .into_iter()
             .enumerate()
@@ -899,9 +991,9 @@ mod admission_tests {
                 .unwrap_err();
         assert_eq!(error.code, ErrorCode::SolveTooLarge);
         assert!(error.cause.contains("level"));
-        // Fine payload=8312; this actual two-row factor needs another168 bytes.
-        prepare_input(&k, None, None, InputLimits { device_bytes: 8480, ..limits }).unwrap();
-        let error = prepare_input(&k, None, None, InputLimits { device_bytes: 8479, ..limits }).unwrap_err();
+        // Fine payload=8344; this actual two-row factor needs another232 bytes.
+        prepare_input(&k, None, None, InputLimits { device_bytes: 8576, ..limits }).unwrap();
+        let error = prepare_input(&k, None, None, InputLimits { device_bytes: 8575, ..limits }).unwrap_err();
         assert_eq!(error.code, ErrorCode::GpuTooLarge);
         assert!(error.cause.contains("aggregation payload"));
         assert_eq!(error.where_.as_deref(), Some("solve/aggregation"));
@@ -946,20 +1038,129 @@ mod admission_tests {
 
     #[test]
     fn fine_construction_and_device_limits_are_independent_exact_cardinality_guards() {
-        // Two rows/four entries: device 44n+8nnz+8192, setup 24n+12nnz+8192.
+        // Two rows/four entries: device 60n+8nnz+8192, setup 24n+12nnz+8192.
         assert_eq!(
-            admit_fine_payload(2, 4, 8288, 8312).unwrap(),
-            FineAdmission { device_bytes: 8312, remaining_device_bytes: 0, setup_bytes: 8288 }
+            admit_fine_payload(2, 4, 8288, 8344).unwrap(),
+            FineAdmission { device_bytes: 8344, remaining_device_bytes: 0, setup_bytes: 8288 }
         );
-        let device = admit_fine_payload(2, 4, 8288, 8311).unwrap_err();
+        let device = admit_fine_payload(2, 4, 8288, 8343).unwrap_err();
         assert_eq!(device.code, ErrorCode::GpuTooLarge);
         assert_eq!(device.where_.as_deref(), Some("solve/aggregation"));
         assert!(device.suggestion.unwrap().contains("coarser"));
-        let setup = admit_fine_payload(2, 4, 8287, 8312).unwrap_err();
+        let setup = admit_fine_payload(2, 4, 8287, 8344).unwrap_err();
         assert_eq!(setup.code, ErrorCode::SolveTooLarge);
         assert_eq!(setup.where_.as_deref(), Some("solve/aggregation"));
         assert!(setup.suggestion.unwrap().contains("coarser"));
         // No giant Vec or invalid CSR is needed to prove widened products fail closed.
         assert_eq!(admit_fine_payload(usize::MAX, usize::MAX, 1024, 1024).unwrap_err().code, ErrorCode::GpuTooLarge);
+    }
+
+    #[test]
+    fn translation_rows_keep_partial_node_components_and_exact_scaled_identity() {
+        use crate::model::Idealisation;
+        use femlab_geometry::{ElementKind, Structured};
+        let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([1.0, 1.0, 1.0]);
+        let physical =
+            PhysicalSpace { mesh: &mesh, idealisation: &Idealisation::Solid3d, free: &[0, 2, 4], dofs_per_node: 3 };
+        let k = Csr { n: 3, row_ptr: vec![0, 1, 2, 3], col_idx: vec![0, 1, 2], vals: vec![4.0, 16.0, 64.0] };
+        let limits = InputLimits {
+            setup: Limits { max_bytes: 9516, ..input_limits(&k).setup },
+            device_bytes: 8492,
+            ..input_limits(&k)
+        };
+        let mut fine = admit_fine_payload(3, 3, limits.setup.max_bytes, limits.device_bytes).unwrap();
+        let rows = balance_input(&k, &[0.5, 0.25, 0.125], Some(&physical), &mut fine, &limits).unwrap().unwrap();
+        let absent = u32::MAX;
+        assert_eq!(rows.indices, [0, absent, 1, 0, absent, 1, absent, 2, absent, 0, 2, 1]);
+        assert_eq!(rows.values, [0.5, 0.25, 0.125, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0]);
+        assert_eq!(fine.setup_bytes, 9516);
+        assert_eq!(fine.device_bytes, 8492);
+        assert_eq!(fine.remaining_device_bytes, 0);
+        for (setup_bytes, device_bytes) in [(9515, 8492), (9516, 8491)] {
+            let short =
+                InputLimits { setup: Limits { max_bytes: setup_bytes, ..limits.setup }, device_bytes, ..limits };
+            let mut fine = admit_fine_payload(3, 3, short.setup.max_bytes, short.device_bytes).unwrap();
+            let error = balance_input(&k, &[0.5, 0.25, 0.125], Some(&physical), &mut fine, &short).unwrap_err();
+            assert_eq!(error.code, ErrorCode::SolveTooLarge);
+        }
+    }
+
+    #[test]
+    fn translation_rows_preserve_spring_translation_moments_and_thread_bits() {
+        use crate::model::Idealisation;
+        use femlab_geometry::{ElementKind, Structured};
+        let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([1.0, 1.0, 1.0]);
+        let physical = PhysicalSpace {
+            mesh: &mesh,
+            idealisation: &Idealisation::Solid3d,
+            free: &[0, 1, 2, 3, 4, 5],
+            dofs_per_node: 3,
+        };
+        // Three independent node-to-node springs: uniform translation creates zero force.
+        let k = Csr {
+            n: 6,
+            row_ptr: vec![0, 2, 4, 6, 8, 10, 12],
+            col_idx: vec![0, 3, 1, 4, 2, 5, 0, 3, 1, 4, 2, 5],
+            vals: vec![4.0, -4.0, 16.0, -16.0, 64.0, -64.0, -4.0, 4.0, -16.0, 16.0, -64.0, 64.0],
+        };
+        let scale = [0.5, 0.25, 0.125, 0.5, 0.25, 0.125];
+        let limits = input_limits(&k);
+        let mut answers = Vec::new();
+        for threads in [1, 4] {
+            let rows = Pool::new(threads).install(|| {
+                let mut fine = admit_fine_payload(k.n, k.nnz(), limits.setup.max_bytes, limits.device_bytes).unwrap();
+                balance_input(&k, &scale, Some(&physical), &mut fine, &limits).unwrap().unwrap()
+            });
+            assert_eq!(&rows.values[..6], &scale.map(|s| s as f32));
+            assert_eq!(&rows.values[6..], &[0.0; 18]);
+            answers.push((rows.indices, rows.values.iter().map(|v| v.to_bits()).collect::<Vec<_>>()));
+        }
+        assert_eq!(answers[0], answers[1]);
+    }
+
+    #[test]
+    fn translation_row_validation_and_admission_precede_storage_and_gpu_use() {
+        use crate::model::Idealisation;
+        use femlab_geometry::{ElementKind, Structured};
+        let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([1.0, 1.0, 1.0]);
+        let physical =
+            PhysicalSpace { mesh: &mesh, idealisation: &Idealisation::Solid3d, free: &[0, 2, 4], dofs_per_node: 3 };
+        let k = Csr { n: 3, row_ptr: vec![0, 1, 2, 3], col_idx: vec![0, 1, 2], vals: vec![4.0, 16.0, 64.0] };
+        let limits = input_limits(&k);
+        for unsupported in [
+            None,
+            Some(PhysicalSpace { dofs_per_node: 2, ..physical }),
+            Some(PhysicalSpace { idealisation: &Idealisation::PlaneStrain, ..physical }),
+        ] {
+            let mut fine = admit_fine_payload(3, 3, limits.setup.max_bytes, limits.device_bytes).unwrap();
+            assert!(balance_input(&k, &[0.5, 0.25, 0.125], unsupported.as_ref(), &mut fine, &limits)
+                .unwrap()
+                .is_none());
+        }
+        for invalid in [PhysicalSpace { free: &[0], ..physical }, PhysicalSpace { free: &[0, 2, 24], ..physical }] {
+            let mut fine = admit_fine_payload(3, 3, limits.setup.max_bytes, limits.device_bytes).unwrap();
+            assert_eq!(
+                balance_input(&k, &[0.5, 0.25, 0.125], Some(&invalid), &mut fine, &limits).unwrap_err().code,
+                ErrorCode::Schema
+            );
+        }
+        for bad in [f64::MAX, 1e-300, 1e30] {
+            let mut fine = admit_fine_payload(3, 3, limits.setup.max_bytes, limits.device_bytes).unwrap();
+            assert_eq!(
+                balance_input(&k, &[bad, 0.25, 0.125], Some(&physical), &mut fine, &limits).unwrap_err().code,
+                ErrorCode::SolveStalled
+            );
+        }
+        let short_buffer = InputLimits { max_buffer_bytes: 47, ..limits };
+        let mut fine = admit_fine_payload(3, 3, limits.setup.max_bytes, limits.device_bytes).unwrap();
+        assert_eq!(
+            balance_input(&k, &[0.5, 0.25, 0.125], Some(&physical), &mut fine, &short_buffer).unwrap_err().code,
+            ErrorCode::GpuTooLarge
+        );
+        let impossible = Csr { n: usize::MAX, row_ptr: vec![], col_idx: vec![], vals: vec![] };
+        assert_eq!(
+            balance_input(&impossible, &[], Some(&physical), &mut fine, &limits).unwrap_err().code,
+            ErrorCode::SolveTooLarge
+        );
     }
 }

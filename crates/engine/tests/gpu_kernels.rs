@@ -495,21 +495,34 @@ fn gpu_cg_reports_updates_budget_and_rounded_operator_breakdown() {
     assert_eq!(report.submitted_iterations, 25);
     assert_eq!(report.relative_residual, 1.0);
     assert_eq!(x, [0.0, 0.0]);
-    // The public solver applies C then CT. Allowed fused arithmetic can perturb
-    // (1,-1) out of the rounded operator's null space, so that fixture cannot
-    // independently require its preconditioned inner solve to make zero updates.
-    // The true f64 outer acceptance must still refuse this rank-lost calculation.
-    let error = pollster::block_on(femlab_engine::gpu::cg::solve_refined(
+    // Preconditioning/fused arithmetic can perturb this direction out of the
+    // uploaded null space. Only the original f64 equation decides acceptance:
+    // an accepted answer must equal the independent eigenvector solution, while
+    // a device that cannot produce a usable direction must report SolveStalled.
+    let outcome = pollster::block_on(femlab_engine::gpu::cg::solve_refined(
         Some(&g),
         &k,
         &[1.0, -1.0],
         &SolveOptions::default(),
         &mut nop,
-    ))
-    .unwrap_err();
-    assert_eq!(error.code, ErrorCode::SolveStalled);
-    assert_eq!(error.where_.as_deref(), Some("solve"));
-    assert_eq!(error.suggestion.as_deref(), Some("solve.run { solver: 'cpu-direct' }"));
+    ));
+    match outcome {
+        Ok((answer, info)) => {
+            let exact = 1.0 / delta;
+            assert!((answer[0] / exact - 1.0).abs() < 1e-12);
+            assert!((answer[1] / exact + 1.0).abs() < 1e-12);
+            let mut product = [0.0; 2];
+            k.spmv(&answer, &mut product);
+            let residual = ((1.0 - product[0]).powi(2) + (-1.0 - product[1]).powi(2)).sqrt() / 2.0f64.sqrt();
+            assert!(residual < 1e-9, "true f64 residual {residual}");
+            assert_eq!(info.rel_residual, residual);
+        }
+        Err(error) => {
+            assert_eq!(error.code, ErrorCode::SolveStalled);
+            assert_eq!(error.where_.as_deref(), Some("solve"));
+            assert_eq!(error.suggestion.as_deref(), Some("solve.run { solver: 'cpu-direct' }"));
+        }
+    }
 
     // Exact negative curvature is invariant here: Jacobi uses scale1 for d=-1,
     // the diagonal specialization is identity, p=1 and p*A*p=-1. No preconditioned
@@ -816,6 +829,7 @@ fn the_small_cantilever_solves_on_the_gpu_and_matches_the_direct_solver() {
 fn the_million_dof_cantilever_meets_b1_and_the_f64_residual() {
     let g = gpu();
     let adapter = g.adapter.clone();
+    println!("D5 adapter before solve: {adapter}");
     let mut e = Engine::new(Some(g), Box::new(NoClock), 4);
     let result = solve_cantilever_model(&mut e, [100, 50, 50]);
     check_cantilever_reference(&mut e, &result);
@@ -1156,5 +1170,92 @@ fn all_prescribed_affine_cube_gpu_preserves_recovery_and_journal() {
             serde_json::to_value(e.query(query.clone()).unwrap()).unwrap(),
             serde_json::to_value(replayed.query(query).unwrap()).unwrap()
         );
+    }
+}
+
+/// Two springs, stiffnesses 1 and 2^-26, connecting three retained coordinates.
+/// Their closed-form forces are unchanged by rigid translation. Rounding the
+/// assembled diagonal loses the weak spring; local displacement differences do
+/// not. Dyadic coordinate scaling makes every expected force exactly representable.
+#[test]
+fn physical_row_coordinates_preserve_spring_forces_under_translation_and_chunking() {
+    let g = gpu();
+    let pipeline = pollster::block_on(g.pipelines(&[("spmv_csr.wgsl", "spmv")])).unwrap().pop().unwrap();
+    let delta = 2.0f32.powi(-26);
+    assert_eq!((1.0f64 + f64::from(delta)) as f32, 1.0);
+    let offsets = [0u32, 3, 5, 7];
+    let columns = [0u32, 1, 2, 0, 1, 0, 2];
+    // S=diag(1,1/2,2), uploaded A=S K S. Only K00's weak term is lost.
+    let coefficients = [1.0, -0.5, -2.0 * delta, -0.5, 0.25, -2.0 * delta, 4.0 * delta];
+    let coordinates = [1.0f32, 0.5, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    let cases = [
+        // Control: the ordinary rounded CSR loses the exact force-free translation.
+        (0u32, [1.0f32, 2.0, 0.5], [-delta, 0.0, 0.0]),
+        (1, [1.0, 2.0, 0.5], [0.0, 0.0, 0.0]),
+        (1, [0.0, 2.0, 0.0], [-1.0, 0.5, 0.0]),
+        (1, [0.0, 0.0, 0.5], [-delta, 0.0, 2.0 * delta]),
+        (1, [8.0, 18.0, 4.0], [-1.0, 0.5, 0.0]),
+    ];
+    for component in 0..3 {
+        let mut indices = [u32::MAX; 12];
+        for row in 0..3 {
+            indices[3 * row + component] = row as u32;
+            indices[9 + row] = component as u32;
+        }
+        for chunks in [&[(0usize, 3usize)][..], &[(0, 1), (1, 2)][..]] {
+            for (physical, input, expected) in cases {
+                let storage = wgpu::BufferUsages::STORAGE;
+                let x = g.buffer_f32("spring displacement", &input, storage);
+                let y = g.buffer_f32("spring force", &[f32::NAN; 3], storage | wgpu::BufferUsages::COPY_SRC);
+                let anchors = g.buffer_u32("spring anchors", &indices, storage);
+                let moments = g.buffer_f32("spring coordinates", &coordinates, storage);
+                for &(row0, rows) in chunks {
+                    let lo = offsets[row0] as usize;
+                    let hi = offsets[row0 + rows] as usize;
+                    let local: Vec<u32> = offsets[row0..=row0 + rows].iter().map(|p| p - lo as u32).collect();
+                    let row_ptr = g.buffer_u32("spring offsets", &local, storage);
+                    let col_idx = g.buffer_u32("spring columns", &columns[lo..hi], storage);
+                    let vals = g.buffer_f32("spring coefficients", &coefficients[lo..hi], storage);
+                    let params = g.buffer_u32(
+                        "spring rows",
+                        &[row0 as u32, rows as u32, 3, physical],
+                        wgpu::BufferUsages::UNIFORM,
+                    );
+                    let entries: Vec<wgpu::BindGroupEntry> = [
+                        row_ptr.as_entire_binding(),
+                        col_idx.as_entire_binding(),
+                        vals.as_entire_binding(),
+                        x.as_entire_binding(),
+                        y.as_entire_binding(),
+                        params.as_entire_binding(),
+                        anchors.as_entire_binding(),
+                        moments.as_entire_binding(),
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(binding, resource)| wgpu::BindGroupEntry { binding: binding as u32, resource })
+                    .collect();
+                    let bind = g.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("translated spring operator"),
+                        layout: &pipeline.get_bind_group_layout(0),
+                        entries: &entries,
+                    });
+                    let mut encoder = g.device.create_command_encoder(&Default::default());
+                    {
+                        let mut pass = encoder.begin_compute_pass(&Default::default());
+                        pass.set_pipeline(&pipeline);
+                        pass.set_bind_group(0, &bind, &[]);
+                        pass.dispatch_workgroups(1, 1, 1);
+                    }
+                    g.queue.submit([encoder.finish()]);
+                }
+                let bytes = pollster::block_on(g.read_back(&y, 12)).unwrap();
+                assert_eq!(
+                    bytemuck::cast_slice::<u8, f32>(&bytes),
+                    &expected,
+                    "component {component}, physical {physical}, input {input:?}, chunks {chunks:?}"
+                );
+            }
+        }
     }
 }

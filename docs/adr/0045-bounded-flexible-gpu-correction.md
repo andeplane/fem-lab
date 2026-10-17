@@ -1,86 +1,115 @@
 ---
 status: proposed
-date: 2026-10-16
+date: 2026-10-17
 issue: https://github.com/andeplane/fem-lab/issues/3
 ---
 
-# Bound flexible f64 correction around the f32 GPU solve
+# Bound flexible f64 correction and preserve translation forces in the f32 operator
 
 The stationary update `x += inner(b-Kx)` need not contract when the inner solve
-is inaccurate. The combined-source real-device 780,300-equation run reached
-true residuals 1, 38.82875659079523, 440.73465384030953 and
-3765.703286884391 despite meeting the f32 recurrence targets. This is numerical
-failure, not evidence of resource exhaustion or successful D5 acceptance.
+is inaccurate. The 780,300-equation cantilever failed both stationary correction
+and bounded flexible correction around an independently rounded CSR operator.
+The latter reached a true f64 residual of 0.9996519469439982 after eight outer
+steps. A better outer iteration alone did not repair the inner operator's lost
+low-energy displacement modes.
 
 ## Decision
 
-For `gpu-pcg`, use right flexible GCR with the existing GPU inner solver as the
-approximate inverse. Compute `z = inner(r)` and `q = K z` using the original f64
-physical operator. Apply two fixed modified Gram–Schmidt passes to both members
-of each pair against retained `(z,q,q dot q)` tuples, dividing each projection
-by the stored squared norm. Keep the vectors unnormalized and update x by
-`((r dot q)/(q dot q)) z`. When `Kz=r`, the numerator and denominator are
-identical, so alpha is exactly one without a square-root normalization roundtrip. Recompute `b-Kx` in f64 before every stopping decision. In exact
-arithmetic this minimizes the residual over the retained correction span; finite
-precision and an ineffective inner inverse still permit failure. No convergence
-or speed guarantee follows for the large cantilever.
+Use right flexible GMRES for `gpu-pcg`: apply the existing approximate GPU inverse
+to successive Arnoldi basis vectors, multiply its returned directions by the
+original f64 physical K, and perform two fixed modified Gram–Schmidt passes.
+Keep the Arnoldi vectors unnormalized, retain their squared norms, and weight
+the Hessenberg rows by those norms before Givens QR and back substitution.
+For the first direction, compute `(r dot Kz)/(Kz dot Kz)` directly, preserving
+bit-exact corrections when `Kz=r`. Recompute `b-Kx` in f64 before acceptance.
 
-Keep at most eight `(z,q,q dot q)` tuples. Restart by discarding the active history while
-keeping x; reuse the allocated arrays. The existing default eight outer steps,
-requested tolerance and factor-100 arithmetic-floor acceptance remain unchanged.
-Zero or nonfinite squared direction norm reports stalled unless the already recomputed
-physical residual meets the existing floor. Propagate inner errors and cancellation.
-CPU iterative refinement is unchanged. The GPU operator, hierarchy and all
-physical/reference gates are unchanged; there is no CPU solve fallback or
-emulated-f64 GPU operator. Solver internals remain outside the plugin extension
-points (ADR0010), and the registry and Journal formats do not change.
+Keep at most eight Arnoldi/direction pairs, restarting from the current solution
+when a larger outer budget is explicitly requested. The default eight outer
+steps, 5000 inner iterations and factor-100 arithmetic-floor allowance remain
+unchanged. Zero or nonfinite direction/rank reports `solve.stalled` unless the
+already measured physical residual meets that allowance. Cancellation and inner
+errors propagate. CPU refinement, solver selection and Journal formats do not change.
+
+For a reduced `Solid3d` displacement system with three DOFs per node, evaluate
+the fine f32 operator in local translation coordinates. Let S be the symmetric
+Jacobi scale, and a(i,c) the free component-c DOF at row i's node, if present.
+Compute the three row moments in fixed-order f64:
+
+```
+m(i,c) = S_i * sum_{j in component c} K_ij * S_a(i,c)
+```
+
+The shared WGSL gathers each row as
+
+```
+sum_c f32(m(i,c)) * p_a(i,c)
+  + sum_j f32(S_i K_ij S_j) * (p_j - (f32(S_a)/f32(S_j))*p_a)
+```
+
+For an absent anchor its contribution is simply the ordinary scaled CSR term.
+Before rounding this is exactly `S K S p`: the added anchor moments cancel the
+subtracted anchor terms. This algebraic identity does not claim exact symmetry
+after f32 rounding. It avoids subtracting large independently rounded stiffness
+forces for a nearly uniform physical translation. All WGSL coefficients,
+operations and vectors remain single f32, with one value per CSR entry; there
+is no paired-float or emulated-f64 operator (ADR0002).
+
+Matrix-only callers, other idealisations, coarse operators and transfers keep
+ordinary CSR. The hierarchy is still constructed in f64 from the original
+physical K and scaled coefficients. Only the original physical f64 residual,
+plus the established physical benchmark gates, can accept a result. This is
+an internal solver change, not a new plugin extension point (ADR0010).
 
 ## Resource boundary
 
-Before solver setup or upload, admit
-`(4 + 2*min(max_outer,8))*n*8 + 1024` bytes for four f64 vectors,
-the retained pairs and bounded metadata. GCR dot products use a fixed 64-entry
-stack workspace, preserving the existing 4096-entry chunk sums and ordered
-accumulation without a length-dependent partial-sum allocation. The 512-byte
-workspace, eight 56-byte tuple headers and the 24-byte history Vec header
-total 984 bytes on 64-bit targets (checked with `size_of`), within the 1024-byte allowance. Reject above 256 MiB or the available
-setup allowance. Deduct that charge from the unchanged cumulative setup cap.
-Admission is not an RSS estimate: host free-memory, swap and measured peak-memory
-guards remain necessary for large hardware tests. At max_outer=0 the loop exits
-before requesting an inner direction or indexing the empty history.
+Before setup/upload, admit `(4 + 2*min(max_outer,8))*n*8 + 4096` correction bytes,
+including four work vectors, retained pairs, bounded Hessenberg/QR arrays and
+fixed dot-product workspace. Keep the separate 256 MiB correction cap, charged
+against the unchanged native 8 GiB / wasm 1536 MiB setup allowance. Dot products
+retain the fixed 4096-entry chunk sums and ordered accumulation at one/N workers.
+At max_outer=0 the loop exits before indexing the empty history.
+
+Translation coordinates add `32*n` device bytes, and admit `32*n + 4*full_dofs +
+1024` host bytes before allocating metadata. Check the metadata buffers against
+the actual adapter limit. Conservative fine/device matrix charges include
+the extended uniforms and dummy bindings. The native 4 GiB / wasm 1 GiB device
+caps and all hierarchy limits remain unchanged. Uploaded fine/transfer/coarse
+arrays are released before recursive hierarchy upload once device buffers own
+their copies. These accounting bounds do not guarantee available host memory;
+large hardware tests retain independent free-memory, swap, disk and peak guards.
 
 ## Evidence and limits
 
-Closed-form tests solve the two-dimensional system with exact solution `(1,2)`
-using an inner inverse for which stationary refinement fails; a ten-dimensional
-diagonal system exercises restart. Tests retain exact one/four-thread fields,
-zero RHS, budget, cancellation, rank, nonfinite, inner error and admission gates.
-Exact-inner identity-system tests require bit-exact `(0.25,-0.5)` and `(1,1)`
-and zero residual at one/four threads. The latter also detects the normalization
-roundtrip in a CPU-only run. The first normalized implementation
-failed two unchanged small-GPU exact oracles: residual zero became
-2.775557561562891e-15 and `(0.25,-0.5)` became
-`(0.25000000000000006,-0.5000000000000001)` (19 other tests passed,
-2 ignored; RSS 168 MB, footprint 235 MB, no resource guard fired). Those
-failures motivate removing normalization. The final unnormalized source passed
-all 21 active real Metal GPU tests and the unchanged 66,150-equation benchmark on
-home-mini, including direct-displacement, B1, force/moment equilibrium and complete
-one/four-thread field checks. No external resource guard fired. Strict LLVM coverage
-including GPU execution passed with zero misses: 74,461 regions, 3,966 functions
-and 35,143 lines, each 100%. These results are bound to the tested source hashes;
-they do not establish the 780k D5 gate.
+Closed-form CPU tests cover exact identity, an inaccurate inverse with known
+two-dimensional solution `(1,2)`, restart on a diagonal system, cancellation,
+rank/nonfinite failures, budgets and preallocation admission. Exact-inner cases
+require bit-identical solutions at one/four workers. Metadata tests cover
+partially prescribed nodes, translation-null spring rows, thread identity,
+range checks and exact admission boundaries.
 
-The prepared 780,300-equation run was refused before launch: only 60% of the mini's
-16 GiB was available, below the predeclared 70% host-admission threshold. Prior
-measured peak RSS was about 9.3 GB. This is neither a numerical result nor a reason
-to lower the engine or host guards. The original 780k B1/equilibrium/true-residual
-test remains mandatory and unaccepted. No larger-case convergence or performance
-claim follows from the smaller tests.
+The actual shared WGSL is checked against two independent springs of stiffness
+1 and 2^-26. Independently rounding `1 + 2^-26` loses the weak spring and creates
+a spurious force under uniform translation; translation coordinates give exact
+zero. Deformed and rigid-offset cases check exact spring forces in all three
+components, with unequal dyadic scaling and rebased chunks.
+
+On 17 October 2026 the translated-row candidate passed the unchanged 66,150-
+equation B1, direct-comparison, equilibrium and one/four-thread gates on Metal
+(true residual 5.222915328431264e-10). On Apple M1 Max Metal the unchanged 780,300-
+equation case passed its 2% B1, force/moment equilibrium and true f64 residual
+below 1e-8 gates: residual 2.267548104643227e-9 after six accepted corrections
+and 1642 GPU updates. Its measured peak RSS was 10,643,292,160 bytes, below the
+unchanged 10 GiB guard; no resource guard fired. This dated candidate receipt
+precedes the explicit host-array lifetime change. Final-source rerun, strict
+coverage and software-adapter CI remain required before merge. No general
+convergence, speed, browser-capacity or larger-mesh claim follows from these cases.
 
 ## Primary references
 
-- [PETSc KSPGCR](https://petsc.org/release/manualpages/KSP/KSPGCR/):
-  right flexible preconditioning, bounded restart history and restart from x.
-- [Carson and Higham, 2018](https://epubs.siam.org/doi/10.1137/17M1140819):
-  mixed-precision refinement and Krylov correction. Its GMRES/LU analysis is
-  motivation, not a proof of convergence for this GCR/aggregation combination.
+- [PETSc KSPFGMRES](https://petsc.org/release/manualpages/KSP/KSPFGMRES/)
+  documents right flexible preconditioning with a nonlinear inner Krylov solve.
+  The raw-basis representation and translation-coordinate evaluation above are
+  this implementation's choices, not claims about PETSc's implementation.
+- [Carson and Higham, 2018](https://epubs.siam.org/doi/10.1137/17M1140819)
+  motivates mixed-precision Krylov refinement; its GMRES/LU analysis is not a
+  convergence proof for this operator and aggregation hierarchy.

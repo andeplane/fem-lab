@@ -10,7 +10,7 @@ use crate::solve::aggregation::{Plan, RectCsr};
 /// Per row: two offsets (8), a uniform (8), and two dummy words if empty (8).
 /// The actual nonzero columns and values add eight bytes each. No allocation/RSS claim.
 fn matrix_bytes(rows: usize, nnz: usize) -> u64 {
-    (rows as u64).saturating_mul(24).saturating_add((nnz as u64).saturating_mul(8))
+    (rows as u64).saturating_mul(40).saturating_add((nnz as u64).saturating_mul(8))
 }
 
 pub(super) fn device_bytes(plan: &Plan) -> u64 {
@@ -207,7 +207,7 @@ pub(super) fn admit(plan: Plan, max_device_bytes: u64, max_buffer_bytes: u64) ->
 }
 
 struct MatrixChunk {
-    buffers: [wgpu::Buffer; 4],
+    buffers: [wgpu::Buffer; 6],
     grid: [u32; 2],
 }
 
@@ -223,7 +223,7 @@ struct Gather {
 fn bind_chunk(
     gpu: &Gpu,
     pipeline: &wgpu::ComputePipeline,
-    buffers: &[wgpu::Buffer; 4],
+    buffers: &[wgpu::Buffer; 6],
     input: &wgpu::Buffer,
     output: &wgpu::Buffer,
 ) -> wgpu::BindGroup {
@@ -234,6 +234,8 @@ fn bind_chunk(
         input.as_entire_binding(),
         output.as_entire_binding(),
         buffers[3].as_entire_binding(),
+        buffers[4].as_entire_binding(),
+        buffers[5].as_entire_binding(),
     ];
     let entries: Vec<wgpu::BindGroupEntry> = resources
         .into_iter()
@@ -274,7 +276,13 @@ impl Matrix {
                     gpu.buffer_u32("aggregation row_ptr", &offsets, storage),
                     gpu.buffer_u32("aggregation col_idx", columns, storage),
                     gpu.buffer_f32("aggregation values", &values, storage),
-                    gpu.buffer_u32("aggregation matrix rows", &[row0 as u32, rows as u32], wgpu::BufferUsages::UNIFORM),
+                    gpu.buffer_u32(
+                        "aggregation matrix rows",
+                        &[row0 as u32, rows as u32, matrix.n_rows as u32, 0],
+                        wgpu::BufferUsages::UNIFORM,
+                    ),
+                    gpu.buffer_u32("unused row indices", &[0], storage),
+                    gpu.buffer_f32("unused row coordinates", &[0.0], storage),
                 ],
                 grid: grid(rows),
             });
@@ -468,6 +476,9 @@ impl Node {
                 };
                 let p_matrix = Matrix::upload(gpu, &p, max_buffer_bytes);
                 let pt_matrix = Matrix::upload(gpu, &pt, max_buffer_bytes);
+                // Device matrices own the transfers; do not retain host copies across recursion.
+                drop(p);
+                drop(pt);
                 let prolong = p_matrix.bind(gpu, spmv, &coarse_solution, &ax);
                 let restrict = pt_matrix.bind(gpu, spmv, &residual, &coarse_rhs);
                 let coarse_values = RectCsr {
@@ -478,6 +489,7 @@ impl Node {
                     vals: coarse_operator.vals,
                 };
                 let coarse_matrix = Matrix::upload(gpu, &coarse_values, max_buffer_bytes);
+                drop(coarse_values);
                 let child = Box::new(Self::upload(
                     gpu,
                     context,
@@ -635,7 +647,7 @@ mod tests {
                     assert_eq!(columns, [0]);
                     assert_eq!(values, [0.0]);
                     // Last chunk's actual offsets + dummy column/value + uniform are 24 bytes.
-                    assert_eq!(matrix_bytes(1, 0), 24);
+                    assert_eq!(matrix_bytes(1, 0), 40);
                     let nonempty = p.row_ptr[1] as usize;
                     let (columns, values) = packed_chunk(&p.col_idx[..nonempty], &p.vals[..nonempty]);
                     assert_eq!(columns, &p.col_idx[..nonempty]);
@@ -724,8 +736,8 @@ mod tests {
     #[test]
     fn payload_bound_counts_two_coarse_factors_and_work_vector() {
         let plan = diagonal_plan(2, 1.0);
-        assert_eq!(device_bytes(&plan), 168);
-        assert_eq!(matrix_bytes(2, 4), 80);
-        assert_eq!(matrix_bytes(1, 0), 24);
+        assert_eq!(device_bytes(&plan), 232);
+        assert_eq!(matrix_bytes(2, 4), 112);
+        assert_eq!(matrix_bytes(1, 0), 40);
     }
 }

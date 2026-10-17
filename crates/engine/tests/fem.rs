@@ -17371,10 +17371,10 @@ fn mean_dilatation_does_not_alias_other_element_kinds_or_finite_strain() {
 /// The injected inner operator is deliberately inaccurate: ordinary refinement diverges,
 /// while the exact two-dimensional solution remains x=(1,2). No device is simulated here.
 #[test]
-fn f64_gcr_corrects_an_inaccurate_inner_operator_without_changing_the_physical_system() {
+fn f64_fgmres_corrects_an_inaccurate_inner_operator_without_changing_the_physical_system() {
     use femlab_engine::gpu::cg::Inner;
     use femlab_engine::solve::pcg::CpuPcg;
-    use femlab_engine::solve::refine::{refine, refine_gcr};
+    use femlab_engine::solve::refine::{refine, refine_fgmres};
     let a = Csr { n: 2, row_ptr: vec![0, 2, 4], col_idx: vec![0, 1, 0, 1], vals: vec![4.0, 1.0, 1.0, 3.0] };
     let approximate = Csr { n: 2, row_ptr: vec![0, 1, 2], col_idx: vec![0, 1], vals: vec![0.1, 1.0] };
     let b = [6.0, 7.0];
@@ -17385,7 +17385,7 @@ fn f64_gcr_corrects_an_inaccurate_inner_operator_without_changing_the_physical_s
     for threads in [1, 4] {
         let (x, info) = Pool::new(threads).install(|| {
             let mut inner = Inner::Cpu(CpuPcg::new(&approximate, 1e-14, 4));
-            pollster::block_on(refine_gcr(&a, &b, &mut inner, "test", 1e-12, 8, &mut nop)).unwrap()
+            pollster::block_on(refine_fgmres(&a, &b, &mut inner, "test", 1e-12, 8, &mut nop)).unwrap()
         });
         close(&x, &[1.0, 2.0], 1e-12);
         assert_eq!(info.iterations, 2);
@@ -17397,16 +17397,16 @@ fn f64_gcr_corrects_an_inaccurate_inner_operator_without_changing_the_physical_s
 
 /// An exact inner correction must survive the outer minimization bit-for-bit.
 #[test]
-fn f64_gcr_preserves_an_exact_inner_correction_without_normalization() {
+fn f64_fgmres_preserves_an_exact_inner_correction_without_normalization() {
     use femlab_engine::gpu::cg::Inner;
     use femlab_engine::solve::pcg::CpuPcg;
-    use femlab_engine::solve::refine::refine_gcr;
+    use femlab_engine::solve::refine::refine_fgmres;
     let a = Csr { n: 2, row_ptr: vec![0, 1, 2], col_idx: vec![0, 1], vals: vec![1.0, 1.0] };
     for b in [[0.25, -0.5], [1.0, 1.0]] {
         for threads in [1, 4] {
             let (x, info) = Pool::new(threads).install(|| {
                 let mut inner = Inner::Cpu(CpuPcg::new(&a, 1e-14, 4));
-                pollster::block_on(refine_gcr(&a, &b, &mut inner, "test", 1e-12, 8, &mut nop)).unwrap()
+                pollster::block_on(refine_fgmres(&a, &b, &mut inner, "test", 1e-12, 8, &mut nop)).unwrap()
             });
             assert_eq!(x, b);
             assert_eq!(info.rel_residual, 0.0);
@@ -17416,63 +17416,118 @@ fn f64_gcr_preserves_an_exact_inner_correction_without_normalization() {
 }
 
 #[test]
-fn f64_gcr_restarts_reuse_a_bounded_history_and_keep_the_known_diagonal_solution() {
+fn f64_fgmres_restarts_reuse_a_bounded_history_and_keep_the_known_diagonal_solution() {
     use femlab_engine::gpu::cg::Inner;
     use femlab_engine::solve::pcg::CpuPcg;
-    use femlab_engine::solve::refine::refine_gcr;
+    use femlab_engine::solve::refine::refine_fgmres;
     let a =
         Csr { n: 10, row_ptr: (0..=10).collect(), col_idx: (0..10).collect(), vals: (1..=10).map(f64::from).collect() };
     let approximate = Csr { n: 10, row_ptr: (0..=10).collect(), col_idx: (0..10).collect(), vals: vec![1.0; 10] };
     let mut inner = Inner::Cpu(CpuPcg::new(&approximate, 1e-14, 2));
-    let (x, info) = pollster::block_on(refine_gcr(&a, &a.vals, &mut inner, "test", 1e-12, 64, &mut nop)).unwrap();
+    let (x, info) = pollster::block_on(refine_fgmres(&a, &a.vals, &mut inner, "test", 1e-12, 64, &mut nop)).unwrap();
     close(&x, &[1.0; 10], 1e-10);
     assert!(info.iterations > 8);
     assert!(info.rel_residual < 1e-12);
 }
 
 #[test]
-fn f64_gcr_zero_rhs_budgets_cancellation_rank_and_nonfinite_failures_are_honest() {
+fn f64_fgmres_zero_rhs_budgets_cancellation_rank_and_nonfinite_failures_are_honest() {
     use femlab_engine::gpu::cg::Inner;
     use femlab_engine::solve::pcg::CpuPcg;
-    use femlab_engine::solve::refine::refine_gcr;
+    use femlab_engine::solve::refine::refine_fgmres;
     let a = Csr { n: 2, row_ptr: vec![0, 2, 4], col_idx: vec![0, 1, 0, 1], vals: vec![4.0, 1.0, 1.0, 3.0] };
     let approximate = Csr { n: 2, row_ptr: vec![0, 1, 2], col_idx: vec![0, 1], vals: vec![0.1, 1.0] };
     let mut inner = Inner::Cpu(CpuPcg::new(&approximate, 1e-14, 4));
-    let (zero, info) = pollster::block_on(refine_gcr(&a, &[0.0; 2], &mut inner, "test", 1e-12, 8, &mut nop)).unwrap();
+    let (zero, info) =
+        pollster::block_on(refine_fgmres(&a, &[0.0; 2], &mut inner, "test", 1e-12, 8, &mut nop)).unwrap();
     assert_eq!(zero, vec![0.0; 2]);
     assert_eq!(info.iterations, 0);
-    let budget = pollster::block_on(refine_gcr(&a, &[6.0, 7.0], &mut inner, "test", 1e-12, 0, &mut nop)).unwrap_err();
+    let budget =
+        pollster::block_on(refine_fgmres(&a, &[6.0, 7.0], &mut inner, "test", 1e-12, 0, &mut nop)).unwrap_err();
     assert_eq!(budget.code, ErrorCode::SolveStalled);
     assert!(budget.cause.contains("budget"));
     for at in 0..2 {
         let mut stop = cancel_on(at);
         let error =
-            pollster::block_on(refine_gcr(&a, &[6.0, 7.0], &mut inner, "test", 1e-12, 8, &mut stop)).unwrap_err();
+            pollster::block_on(refine_fgmres(&a, &[6.0, 7.0], &mut inner, "test", 1e-12, 8, &mut stop)).unwrap_err();
         assert_eq!(error.code, ErrorCode::Cancelled);
     }
     let mut zero_inner = Inner::Cpu(CpuPcg::new(&approximate, 1e-14, 0));
     let rank =
-        pollster::block_on(refine_gcr(&a, &[6.0, 7.0], &mut zero_inner, "test", 1e-12, 8, &mut nop)).unwrap_err();
+        pollster::block_on(refine_fgmres(&a, &[6.0, 7.0], &mut zero_inner, "test", 1e-12, 8, &mut nop)).unwrap_err();
     assert_eq!(rank.code, ErrorCode::SolveStalled);
     assert!(rank.cause.contains("rank"));
     let nonfinite =
-        pollster::block_on(refine_gcr(&a, &[1e300; 2], &mut inner, "test", 1e-12, 8, &mut nop)).unwrap_err();
+        pollster::block_on(refine_fgmres(&a, &[1e300; 2], &mut inner, "test", 1e-12, 8, &mut nop)).unwrap_err();
     assert_eq!(nonfinite.code, ErrorCode::SolveStalled);
     let enormous = Csr { n: 1, row_ptr: vec![0, 1], col_idx: vec![0], vals: vec![1e300] };
     let identity = Csr { n: 1, row_ptr: vec![0, 1], col_idx: vec![0], vals: vec![1.0] };
     let mut exact_inner = Inner::Cpu(CpuPcg::new(&identity, 1e-14, 1));
     let rank =
-        pollster::block_on(refine_gcr(&enormous, &[1.0], &mut exact_inner, "test", 1e-12, 8, &mut nop)).unwrap_err();
+        pollster::block_on(refine_fgmres(&enormous, &[1.0], &mut exact_inner, "test", 1e-12, 8, &mut nop)).unwrap_err();
     assert_eq!(rank.code, ErrorCode::SolveStalled);
     assert!(rank.cause.contains("rank"));
     let negative = Csr { n: 2, row_ptr: vec![0, 1, 2], col_idx: vec![0, 1], vals: vec![-1.0; 2] };
     let mut bad_inner = Inner::Cpu(CpuPcg::new(&negative, 1e-14, 1));
     let error =
-        pollster::block_on(refine_gcr(&a, &[6.0, 7.0], &mut bad_inner, "test", 1e-12, 8, &mut nop)).unwrap_err();
+        pollster::block_on(refine_fgmres(&a, &[6.0, 7.0], &mut bad_inner, "test", 1e-12, 8, &mut nop)).unwrap_err();
     assert_eq!(error.code, ErrorCode::SolveNotPositiveDefinite);
     // Resource admission reads dimensions before allocating vectors or inspecting coefficients.
     let unallocatable = Csr { n: usize::MAX, row_ptr: vec![], col_idx: vec![], vals: vec![] };
     let error =
-        pollster::block_on(refine_gcr(&unallocatable, &[], &mut inner, "test", 1e-12, 8, &mut nop)).unwrap_err();
+        pollster::block_on(refine_fgmres(&unallocatable, &[], &mut inner, "test", 1e-12, 8, &mut nop)).unwrap_err();
     assert_eq!(error.code, ErrorCode::SolveTooLarge);
+}
+
+/// Rank-deficient and extreme-range systems must retain honest physical residuals.
+#[test]
+fn f64_fgmres_reports_projected_rank_and_range_failures_after_a_partial_correction() {
+    use femlab_engine::gpu::cg::Inner;
+    use femlab_engine::solve::pcg::CpuPcg;
+    use femlab_engine::solve::refine::refine_fgmres;
+    let cases = [
+        (
+            "projected",
+            Csr { n: 2, row_ptr: vec![0, 1, 2], col_idx: vec![0, 1], vals: vec![1.0, 0.0] },
+            vec![1.0, 1.0],
+            8,
+            1e-12,
+        ),
+        (
+            "correction",
+            Csr { n: 2, row_ptr: vec![0, 1, 1], col_idx: vec![1], vals: vec![1.0] },
+            vec![0.0, 1.0],
+            8,
+            1e-12,
+        ),
+        (
+            "Arnoldi directions",
+            Csr { n: 1, row_ptr: vec![0, 1], col_idx: vec![0], vals: vec![f64::MAX] },
+            vec![1e-160],
+            8,
+            1e-12,
+        ),
+        ("exhausted", Csr { n: 1, row_ptr: vec![0, 1], col_idx: vec![0], vals: vec![49.0] }, vec![1.0], 8, 1e-20),
+        (
+            "budget",
+            Csr { n: 2, row_ptr: vec![0, 1, 2], col_idx: vec![0, 1], vals: vec![1.0, 2.0] },
+            vec![1.0, 1.0],
+            1,
+            1e-12,
+        ),
+    ];
+    for (cause, k, b, budget, tolerance) in cases {
+        let identity = Csr {
+            n: k.n,
+            row_ptr: (0..=k.n as u32).collect(),
+            col_idx: (0..k.n as u32).collect(),
+            vals: vec![1.0; k.n],
+        };
+        let mut inner = Inner::Cpu(CpuPcg::new(&identity, 1e-14, 2));
+        let error =
+            pollster::block_on(refine_fgmres(&k, &b, &mut inner, "test", tolerance, budget, &mut nop)).unwrap_err();
+        println!("{cause}: {}", error.cause);
+        assert_eq!(error.code, ErrorCode::SolveStalled);
+        assert!(error.cause.contains(cause), "{}", error.cause);
+    }
 }
