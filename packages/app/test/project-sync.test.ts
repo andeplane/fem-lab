@@ -254,6 +254,35 @@ describe('durable account-owned project sync', () => {
     expect(final.artifactTag).toBe('snapshot-2'); expect(final.cloud?.remote?.revision).toBe('2'); expect(final.cloud?.dirty).toBe(false);
   });
 
+  it.each(['own receipt', 'newer remote'] as const)('reconciles a reconnect listing with an in-flight upload: %s', async kind => {
+    const f = setup(); const base = remote();
+    await f.seed(local('local', { cloud: { remote: base, dirty: false, deleted: false } }));
+    f.remotes.set('A', [base]); f.activate(); await f.settled();
+    const gate = deferred<CloudProject>(); f.upload.mockImplementationOnce(() => gate.promise);
+    await f.controller.changed('A', 'local'); await vi.waitFor(() => expect(f.upload).toHaveBeenCalledOnce());
+    await f.storage('A').update('local', previous => ({ ...previous!, version: '2', artifact: new Uint8Array([4, 5, 6]), artifactTag: 'snapshot-2' }));
+    await f.controller.changed('A', 'local');
+    // The server committed our older bytes, but the receipt is still in flight.
+    // Reconnect can list that revision before the original upload resolves.
+    const receipt = remote({ revision: '2', name: 'Browser local' });
+    const listed = kind === 'own receipt' ? receipt : remote({ revision: '3', name: 'Another browser edit' });
+    f.remotes.set('A', [listed]); const refresh = f.controller.refresh();
+    await vi.waitFor(() => expect(f.controller.current.projects.local?.phase).toBe('conflict'));
+    gate.resolve(receipt); await refresh;
+    if (kind === 'own receipt') {
+      await vi.waitFor(() => expect(f.upload).toHaveBeenCalledTimes(2)); await f.settled();
+      expect(f.upload.mock.calls[1]![1]).toMatchObject({ id: REMOTE, baseRevision: '2', bytes: new Uint8Array([4, 5, 6]) });
+      expect(f.controller.current.projects.local?.phase).toBe('synced');
+    } else {
+      await f.settled(); expect(f.upload).toHaveBeenCalledOnce();
+      expect(f.controller.current.projects.local?.phase).toBe('conflict');
+    }
+    const saved = (await f.storage('A').read('local'))!;
+    expect(saved.artifact).toEqual(new Uint8Array([4, 5, 6])); expect(saved.artifactTag).toBe('snapshot-2');
+    expect(saved.cloud?.conflict).toEqual(kind === 'own receipt' ? undefined : listed);
+    expect(saved.cloud?.dirty).toBe(kind !== 'own receipt');
+  });
+
   it('preserves local artifact/base on upload conflict and blocks automatic overwrite', async () => {
     const f = setup(); const base = remote(); const changed = remote({ revision: '2', name: 'Other browser' });
     await f.seed(local('local', { cloud: { remote: base, dirty: true, deleted: false } }));

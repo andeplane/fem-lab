@@ -41,6 +41,8 @@ Offline edits stay in the account's browser cache and queue for reconnect. Netwo
 
 ## Resolve a conflict deliberately
 
+A reconnect may observe an upload before its confirmation returns. When the confirmation identifies that exact revision as your own upload, sync continues with any newer browser edits. A revision from a later remote edit still requires conflict resolution.
+
 Cloud revisions prevent one tab or device from silently overwriting a newer revision. A conflict preserves the browser bytes and identifies the remote version. **Use cloud version** explicitly restores that version; export or **Keep browser copy** first if you need the local changes. Keeping a copy creates a separate project rather than merging engineering Journals automatically.
 
 Existing anonymous projects remain independent. **Upload a copy** makes an account-owned copy and leaves the anonymous original in place. It does not transfer ownership, remove the original or upload your other projects.
