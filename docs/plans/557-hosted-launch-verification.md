@@ -492,6 +492,37 @@ Source-bound sanitized evidence is retained at
 This establishes staging behavior with disposable accounts. #775's production owned-account
 browser acceptance and #710's actual sender delivery remain separate release gates.
 
+
+### Current project-sync client acceptance, 17 October 2026
+
+At 00:19:53 UTC (02:19 Oslo), the same smoke passed again against client source
+`17823a0a8a9807097f312537bab7c2599d88bdb8`, Hosting release
+`1792196250720000`, with the API still at `femlab-api-re31c2aa4-f5ec22ef`.
+The runner completed in 59.9 seconds. The clean verification source was
+`b0a480a4fa945d120e148423e8c1c7c20f5a60da`; its test SHA-256 remains
+`1a722a18c2c7bb54699b6546a11c295c59aa2d37dab3b2c2bca6a9c56e860705`.
+This source includes the clean-checkout development fixture fix and the merged
+frozen #297 evaluation, which the earlier staging build did not include.
+
+Two fresh disposable SDK accounts passed the same private-project sync, isolation,
+sign-out, anonymous recovery, owned export and durable-deletion assertions. Both
+old tokens returned 401. AI remained disabled with every monetary cap at zero;
+no email, generation, grant or payment occurred. Private fixture and token-state
+files were removed, and the 390px account view was inspected.
+
+Backend recovery logs independently confirm two completed exports at 00:19:24 UTC
+and two completed deletions at 00:19:45 UTC, with zero pending or failed operations.
+The following scheduled recovery at 00:20:12 UTC also reported zero pending or
+failed operations. These logs establish completed identity cleanup in addition to
+the API's rejection of old tokens.
+
+Sanitized source-bound evidence is retained at
+`/Users/anderhaf/.codex/tmp/fem-lab-triage-802/599-partition-staging-evidence-17823a0a.json`;
+the corresponding cleanup audit is
+`/Users/anderhaf/.codex/tmp/fem-lab-triage-802/599-partition-staging-backend-cleanup-17823a0a.json`
+(SHA-256 `abc4181e5c66fd9727b9a88332339430c549019e433255f8f17745dbeb12eca0`).
+Production owned-account acceptance and actual sender delivery remain separate gates.
+
 ## Remaining release gates
 
 - Resolve production email Spam placement/custom-sender deliverability in #710, then
