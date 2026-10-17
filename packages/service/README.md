@@ -64,6 +64,12 @@ host dependencies. Authentication and account-owned admission are independent of
 the engine; the service never executes tool calls or creates an engine Session.
 
 `npm run build -w packages/service`, then `PORT=8087 npm start -w packages/service`.
+
+The production build type-checks runtime sources through `tsconfig.build.json`.
+`npm run typecheck -w packages/service` also checks integration tests and their host
+boundaries. CI runs `node tools/test-service-build.mjs` in an isolated copy containing
+only the service, AI and registry packages, matching the production container layout.
+
 `GET /health` proves the process is live; `/ready` is 503 until identity, database
 migrations and provider configuration are available. Unknown routes return a
 structured error and never echo request bodies or credentials.
