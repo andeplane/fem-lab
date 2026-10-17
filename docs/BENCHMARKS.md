@@ -3399,7 +3399,9 @@ Chromium SwiftShader: 22,491 nodes, 20,000 incompatible-mode Hex8 elements,
 corrections and tip displacement -0.00019029079207446805 m. The unchanged B1
 2% and .001 SI force/moment gates passed. This browser case supplies software-
 adapter correctness evidence without a timing assertion; it does not substitute
-for the native CI sibling's direct/one-four-worker gates. Full-crate 100%
-coverage and native lavapipe CI remain mandatory before merge. Historical failed
+for the native CI sibling's direct/one-four-worker gates. Historical failed
 stationary and unbalanced flexible runs remain numerical failures; the new
 spring counterexample records the rounding mechanism repaired.
+
+
+Engine/geometry coverage reached **100% of 74,991 regions, 3,977 functions and 35,411 lines**, with zero misses and no exclusions. The full suite passed; a final library rerun added the caller-level metadata-error propagation witness using preserved profiles. This final change is test-only: all production code is byte-identical to the source accepted by the Metal, M1 and browser runs above. Fresh native lavapipe CI remains required before merge.

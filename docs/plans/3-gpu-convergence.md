@@ -272,3 +272,17 @@ witness and a genuinely two-Fine 769-row constant/linear Poisson witness accompa
 Actual small native/software-GPU/coverage, matching release 66k and a separately admitted
 780k run remain required. More iterations are acceptable only with the original physical
 and residual gates; no completed large-case claim follows from the prototype.
+
+
+## Final physical acceptance, 17 October 2026
+
+The bounded flexible GMRES and translation-coordinate f32 operator documented in
+[ADR0045](../adr/0045-bounded-flexible-gpu-correction.md) now pass the unchanged
+66,150-equation Metal direct/B1/equilibrium/one-four-thread gates and the original
+780,300-equation Apple M1 Max Metal B1/equilibrium/true-f64-residual gates. The
+final large run reached residual 2.267548104643227e-9 with six accepted corrections
+and 1642 GPU updates; peak RSS was 9,810,329,600 bytes under the unchanged 10 GiB
+guard. All 22 native GPU tests, the complete CPU browser suite, fresh Chromium
+SwiftShader shell/B1 cases and an additional public-browser 66k solve passed.
+
+Engine/geometry coverage reached **100% of 74,991 regions, 3,977 functions and 35,411 lines**, with zero misses and no exclusions. The full suite passed; a final library rerun added the caller-level metadata-error propagation witness using preserved profiles. This final change is test-only: all production code is byte-identical to the source accepted by the Metal, M1 and browser runs above. Fresh native lavapipe CI remains required before merge.

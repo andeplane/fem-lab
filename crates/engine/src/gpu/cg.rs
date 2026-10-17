@@ -1143,6 +1143,12 @@ mod admission_tests {
                 balance_input(&k, &[0.5, 0.25, 0.125], Some(&invalid), &mut fine, &limits).unwrap_err().code,
                 ErrorCode::Schema
             );
+            // The public preparation boundary must preserve metadata validation errors
+            // before constructing an operator or touching the GPU.
+            let error = prepare_input(&k, None, Some(&invalid), limits).unwrap_err();
+            assert_eq!(error.code, ErrorCode::Schema);
+            assert_eq!(error.where_.as_deref(), Some("solve/aggregation"));
+            assert_eq!(error.cause, "physical rows must match the reduced operator");
         }
         for bad in [f64::MAX, 1e-300, 1e30] {
             let mut fine = admit_fine_payload(3, 3, limits.setup.max_bytes, limits.device_bytes).unwrap();

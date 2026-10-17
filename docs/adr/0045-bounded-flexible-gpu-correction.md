@@ -123,9 +123,10 @@ f64 residual 5.422607126350388e-10 in eight corrections, with tip displacement
 -0.00019029079207446805 m inside B1's 2% bound and all force/moment residuals
 below .001 in SI units. This is software-adapter correctness evidence only;
 it is neither a timing claim nor the native CI sibling's direct/one-four-worker
-comparison. Engine/geometry 100% coverage and fresh native lavapipe CI are
-mandatory gates before merge. No general convergence,
+comparison. No general convergence,
 speed, browser-capacity or larger-mesh claim follows from these cases.
+
+Engine/geometry coverage reached **100% of 74,991 regions, 3,977 functions and 35,411 lines**, with zero misses and no exclusions. The full suite passed; a final library rerun added the caller-level metadata-error propagation witness using preserved profiles. This final change is test-only: all production code is byte-identical to the source accepted by the Metal, M1 and browser runs above. Fresh native lavapipe CI remains required before merge.
 
 ## Primary references
 
