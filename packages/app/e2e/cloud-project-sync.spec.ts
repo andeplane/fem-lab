@@ -1,5 +1,6 @@
 import {test,expect,type Page} from './fixtures';
 import {CloudFixtureServer} from './cloud-fixture/server';
+import {decodeProjectArtifact} from '../src/project-artifact';
 import {readFile} from 'node:fs/promises';
 async function ready(page:Page){await page.waitForFunction(()=>Boolean(window.fem),undefined,{timeout:60000});await page.waitForFunction(async()=>Boolean((await window.fem.registry.query({query:'query.workspaceStatus'}) as {ready:boolean}).ready));}
 async function identify(page:Page,uid:string|null){await page.evaluate(uid=>window.cloudFixture.identify(uid),uid);await expect.poll(()=>page.evaluate(async()=>{const account=await window.fem.registry.query({query:'query.account'}) as {uid:string|null;status:string};return {uid:account.uid,status:account.status};}).catch(()=>null)).toEqual({uid,status:uid?'active':'anonymous'});await ready(page);}
@@ -137,16 +138,21 @@ test('a late upload rejection cannot reopen an explicitly restored cloud version
     await page.evaluate(()=>window.fem.dispatch({cmd:'model.setName',name:'superseded browser model'}));await page.evaluate(()=>window.fem.dispatch({cmd:'project.save'}));await expect.poll(()=>held).toBe(true);
     await other.evaluate(()=>window.fem.dispatch({cmd:'model.setName',name:'explicitly chosen cloud model'}));await other.evaluate(()=>window.fem.dispatch({cmd:'project.save'}));await other.evaluate(()=>window.fem.dispatch({cmd:'account.syncProjects'}));
     await expect.poll(()=>server.modelName('fixture-A','late response project')).toBe('explicitly chosen cloud model');
-    const revision=[...server.owners.get('fixture-A')!.values()][0]!.project.revision;
+    const selected=[...server.owners.get('fixture-A')!.values()][0]!;const cloudId=selected.project.id;
+    const chosen=decodeProjectArtifact(Uint8Array.from(Buffer.concat(selected.chunks)));
     const refreshing=page.evaluate(async()=>{try{await window.fem.dispatch({cmd:'account.syncProjects'});return null;}catch(error){return (error as {code?:string}).code??String(error);}});
     await page.evaluate(()=>window.fem.dispatch({cmd:'panel.toggle',panel:'projects',open:true}));const row=page.locator('.recent').filter({hasText:'late response project'}).first();
     await expect(row).toContainText('Choose a version');await row.getByRole('button',{name:'Use cloud version',exact:true}).click();
     await expect.poll(()=>page.evaluate(()=>window.fem.query.model())).toMatchObject({name:'explicitly chosen cloud model'});
     await page.evaluate(()=>window.fem.dispatch({cmd:'panel.toggle',panel:'projects',open:true}));
+    // Queue an unchanged save before the older request returns, including on fast hosts.
+    await page.evaluate(()=>window.fem.dispatch({cmd:'project.save'}));
     const rejected=page.waitForResponse(response=>/\/uploads\/[^/]+\/commit$/.test(response.url())&&response.status()===409);release();await rejected;expect(await refreshing).toBe('session.expired');
     await expect(row).toContainText('Synced');await expect(row).not.toContainText('Choose a version');
     expect((await page.evaluate(()=>window.fem.query.model())).name).toBe('explicitly chosen cloud model');
-    expect([...server.owners.get('fixture-A')!.values()][0]!.project.revision).toBe(revision);
+    const saved=[...server.owners.get('fixture-A')!.values()][0]!;const savedArtifact=decodeProjectArtifact(Uint8Array.from(Buffer.concat(saved.chunks)));
+    expect(saved.project.id).toBe(cloudId);expect(savedArtifact.name).toBe(chosen.name);
+    expect(savedArtifact.engine).toEqual(chosen.engine);expect(savedArtifact.files).toEqual(chosen.files);
     await page.evaluate(()=>window.fem.dispatch({cmd:'model.setName',name:'edit after cloud choice'}));await page.evaluate(()=>window.fem.dispatch({cmd:'project.save'}));await page.evaluate(()=>window.fem.dispatch({cmd:'account.syncProjects'}));
     await expect.poll(()=>server.modelName('fixture-A','late response project')).toBe('edit after cloud choice');await expect(row).toContainText('Synced');expect(server.owners.get('fixture-A')!.size).toBe(1);
   }finally{release();await second.close();}
