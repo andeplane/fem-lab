@@ -10,7 +10,9 @@ export const NO_USAGE: Usage = { input: 0, output: 0, cacheRead: 0 };
  * a made-up number.
  */
 // OpenAI Standard rates verified 2026-09-06 against the model pages linked in docs/AI-PRICING.md.
+// GPT-6.1 Sol evaluation tariff verified 2026-10-15 against its official model page.
 export const PRICES: Record<string, { in: number; out: number; cached?: number; write?: number; longContext?: boolean }> = {
+  'gpt-6.1-sol': { in: 2, cached: 0.1, write: 2.5, out: 10, longContext: true },
   'gpt-6-astra': { in: 10, cached: 1, write: 12.5, out: 50, longContext: true },
   'gpt-5.6-sol': { in: 4, cached: 0.4, write: 5, out: 20, longContext: true },
   'gpt-5.5': { in: 5, cached: 0.5, out: 30, longContext: true },
