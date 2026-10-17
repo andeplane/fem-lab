@@ -142,7 +142,13 @@ export class ProjectSync {
     if(value.upload){const pending=value.upload;
       this.errors.set(id,{phase:'syncing',message:'Uploading complete project…',done:0,total:pending.bytes.length});await this.publish(actor);
       const remote=await this.env.api.upload(actor,{id:pending.projectId,name:pending.name,baseRevision:pending.baseRevision,key:pending.key,bytes:pending.bytes},(done,total)=>{if(this.owns(actor)){this.errors.set(id,{phase:'syncing',message:'Uploading complete project…',done,total});void this.publish(actor);}});this.assert(actor);
-      row=await storage.update(id,previous=>{const current=required(previous),fresh=cloud(current);if(fresh.upload?.key!==pending.key)return current;return {...current,cloud:{...fresh,remote,upload:undefined,dirty:fresh.deleted||Boolean(current.artifactError)||current.artifactTag!==pending.tag||current.meta?.name!==pending.name}};});value=cloud(row);
+      row=await storage.update(id,previous=>{
+        const current=required(previous),fresh=cloud(current);if(fresh.upload?.key!==pending.key)return current;
+        // A reconnect listing may observe this commit before its receipt arrives.
+        // Only that exact committed revision is ours; a later remote edit stays a conflict.
+        const conflict=fresh.conflict?.id===remote.id&&fresh.conflict.revision===remote.revision?undefined:fresh.conflict;
+        return {...current,cloud:{...fresh,remote,conflict,upload:undefined,dirty:fresh.deleted||Boolean(current.artifactError)||current.artifactTag!==pending.tag||current.meta?.name!==pending.name}};
+      });value=cloud(row);
       await this.reconcileReceipt(actor,id,remote);
       row=required(await storage.read(id));this.assert(actor);value=cloud(row);if(value.conflict)return;
     }
