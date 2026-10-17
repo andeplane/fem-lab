@@ -88,6 +88,40 @@ request, then inspect its actual sender authentication, placement and link compl
 No post-APPLY email has been requested. Custom-domain authentication is not proof of
 Inbox delivery; record that result separately before closing #710.
 
+
+## Applied sender and actual Inbox delivery: 2026-10-17
+
+At 05:46:39 UTC, one documented `VERIFY` recheck for the existing pending
+`femlab.app` domain returned `SUCCEEDED`. The original request time remained
+`2026-10-15T19:54:54.529Z`; this observation does not establish that every repeated
+verification is read-only or preserves its request time. Both public resolvers
+still returned the exact Firebase TXT/SPF and DNS-only DKIM CNAME records.
+
+`APPLY` succeeded at 05:47:52 UTC. Scoped configuration readback confirms
+`customDomain: femlab.app`, `useCustomDomain: true` and transport `DEFAULT`.
+The callback remains `https://femlab-app.firebaseapp.com/__/auth/action`.
+After applying, the pending verification state resets to `NOT_STARTED` and its
+request time to the Unix epoch; the applied custom-domain fields, rather than
+that pending-work state, establish the active sender.
+
+Exactly one authorized fresh production sign-in message was requested through
+the product UI and received at 05:49:06 UTC. It came from `noreply@femlab.app`;
+Gmail labeled it `INBOX`, `UNREAD`, `IMPORTANT` and `CATEGORY_PERSONAL`, without
+`SPAM`. No labels were changed or filters added. `Authentication-Results` records
+SPF pass with `smtp.mailfrom=noreply@femlab.app` and DKIM pass with
+`header.i=@femlab.app`, selector `firebase2`. This actual message meets #710's
+sender-delivery check; it does not guarantee future Inbox placement at every
+recipient. No further email is authorized by the one-message approval.
+
+The received link was also opened through the normal Firebase action handler in
+the Codex in-app browser. That did not establish a signed-in Account UI and
+reported `auth/invalid-action-code`; the cause is not established. Do not treat
+sender authentication or Inbox placement as proof of native Chromium account or
+#775 production owned-project acceptance. Those browser checks remain separate.
+The application/API traffic revision, billing, SMTP credentials and other DNS
+records were not changed by this sender operation. No action code or access token
+is included in this record.
+
 Primary references:
 [Firebase managed custom sender domains](https://firebase.google.com/docs/auth/email-custom-domain),
 [domain verification API](https://docs.cloud.google.com/identity-platform/docs/reference/rest/v2/projects.domain/verify),
