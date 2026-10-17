@@ -632,6 +632,53 @@ Current-head normal/full-release GitHub workflows, real owned-account production
 acceptance and custom-sender delivery remain outstanding. Earlier dated browser
 and staging results above retain their original source bindings.
 
+
+### Offline recovery correction and fresh staging acceptance, 17 October 2026
+
+The fresh SDK smoke completed at 04:14:04 UTC (06:14 Oslo) against client
+`f6c61ab50a8761a43e95dbdb9a91eb06f668dd62`, Hosting release
+`1792210337300000`, in 65.2 seconds. The independent clean test driver was
+`e27119cc9940e439060f741fd87d48963780e849`, with unchanged test SHA-256
+`0660f26eb3c10f0bd068e990d1dcee166a4e333f4b325138686b4c4c98c82265`.
+The API remained `femlab-api-re31c2aa4-f5ec22ef`.
+
+Private sync and cancellation preserved the original browser project, the same
+single cloud project and its recovered edit. Logout isolation, anonymous recovery,
+zero signup/reopened credits, owned account-record exports and durable deletion
+passed. Both old tokens returned 401. Independent backend logs recorded two
+exports at 04:13:31 UTC (`femlab-recover-gmvq8`) and two identity deletions at
+04:13:56 UTC (`femlab-recover-fzgrg`), with zero pending or failed operations.
+Private fixtures/token state were removed and the 390px account view was inspected.
+AI remained disabled with zero monetary caps. No email, generation, credit grant
+or payment occurred. This deployed smoke does not execute the natural offline
+A → B → A scenario or establish real owned-account production acceptance.
+
+The client repairs concrete races tracked in
+[#804](https://github.com/andeplane/fem-lab/issues/804): it preserves immutable
+pending operations during activation and atomic reservation, and resumes an older
+unconfirmed receipt before newer durable edits. Confirmed conditional rejections
+and genuinely newer remote revisions still require explicit conflict resolution.
+Six deterministic regressions fail before the correction and all 44 sync tests
+pass afterward. The mini passed 1,850 app tests with five existing paid-test skips,
+255 CPU Chromium cases with five expected hosted-only skips, eight service-worker
+cases, all four cloud cases and 15 repeated full cloud recovery cases, with zero
+browser retries. A deliberate failing expectation verified the cloud HTML state
+attachment and matching raw trace; it is not a reproduction of the missing
+original CI failure trace.
+
+Fresh staging and production clients passed all 11 artifact checks and include
+27 viewer thumbnails. The existing successful backend image remains bound to
+source `d4d55698`: all 129 service inputs and `infra/google` are unchanged, and a
+fresh service build matches the original bundle. No new container build or
+production traffic promotion occurred. At this checkpoint, client CI `39001331668` and full
+release `39001331638` were still running. This dated record does not publish the
+launch branch or satisfy the remaining production/custom-sender gates.
+
+Sanitized source-bound evidence and the independent cleanup audit are retained as
+`599-partition-staging-evidence-f6c61ab5.json` and
+`599-partition-staging-backend-cleanup-f6c61ab5.json` under the operator directory
+`/Users/anderhaf/.codex/tmp/fem-lab-triage-802/`.
+
 ## Remaining release gates
 
 - Resolve production email Spam placement/custom-sender deliverability in #710, then
