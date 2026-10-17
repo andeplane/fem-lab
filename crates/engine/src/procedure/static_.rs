@@ -21,7 +21,15 @@ use crate::post::{extremes, reactions_per_constraint, stress, FieldData, Per};
 use crate::procedure::{
     report, retained_frame_count, rotation_field, time_grid, vector_field, Amplitude, History, StepResult,
 };
-use crate::solve::{direct::Direct, solve, solve_reusable, LinearSolve, SolveInfo, SolveOptions};
+use crate::solve::{
+    aggregation::physical::PhysicalSpace, direct::Direct, solve_reusable_with_space, LinearSolve, SolveInfo,
+    SolveOptions,
+};
+
+/// A borrowed descriptor only: CPU solvers never construct physical candidate columns.
+fn near_space<'a>(p: &'a Problem<'_>, red: &'a assembly::Reduced) -> PhysicalSpace<'a> {
+    PhysicalSpace { mesh: p.mesh, idealisation: &p.idealisation, free: &red.free, dofs_per_node: p.dofs_per_node() }
+}
 
 /// The retained frames of an amplituded Step, from the two solved parts of `u(t) = u_th + g·u_L`.
 ///
@@ -99,7 +107,9 @@ pub(crate) async fn statics(
     // because what reaches a solver is still a plain reduced `k_ff` (plan B §1).
     let (kt, ft) = pool.install(|| mpc::transform(&a.k, &f, &mpc));
     let red = assembly::reduce(&kt, &ft, &rc, &mpc.slaves);
-    let (u_f, solver, factored) = solve_reusable(&red.k_ff, &red.f_f, opts, pool, gpu, progress).await?;
+    let space = near_space(p, &red);
+    let (u_f, solver, factored) =
+        solve_reusable_with_space(&red.k_ff, &red.f_f, opts, pool, gpu, Some(&space), progress).await?;
     let mut u = assembly::expand(&red, &u_f);
     mpc::recover(&mpc, &mut u);
     Ok(Statics { pat, a, applied, f, rc, mpc, red, u, solver, factored })
@@ -208,11 +218,13 @@ async fn active_set_solve(
         let m = base.with_active(&set.active, true, dpn);
         let (kt, ft) = pool.install(|| mpc::transform(&a.k, f, &m));
         let red = assembly::reduce(&kt, &ft, rc, &m.slaves);
-        let (u_f, solver, factored) = match solve_reusable(&red.k_ff, &red.f_f, opts, pool, gpu, progress).await {
-            Ok(s) => s,
-            Err(e) if e.code == ErrorCode::SolveNotPositiveDefinite => return Err(contact::lifted_off(p, &m, set)),
-            Err(e) => return Err(e),
-        };
+        let space = near_space(p, &red);
+        let (u_f, solver, factored) =
+            match solve_reusable_with_space(&red.k_ff, &red.f_f, opts, pool, gpu, Some(&space), progress).await {
+                Ok(s) => s,
+                Err(e) if e.code == ErrorCode::SolveNotPositiveDefinite => return Err(contact::lifted_off(p, &m, set)),
+                Err(e) => return Err(e),
+            };
         let mut u = assembly::expand(&red, &u_f);
         mpc::recover(&m, &mut u);
         let r = contact::residual(&a.k, &u, f);
@@ -356,7 +368,9 @@ pub(crate) async fn post(
             // `Tᵀf_thermal`, because the reduced system this is solved against is `TᵀKT`.
             let ft_th = mpc::transpose_load(&mpc, &a.f_thermal);
             let f_th: Vec<f64> = red.free.iter().map(|&dof| ft_th[dof as usize]).collect();
-            let (th_f, th) = solve(&red.k_ff, &f_th, opts, pool, gpu, &mut progress).await?;
+            let space = near_space(p, &red);
+            let (th_f, th, _) =
+                solve_reusable_with_space(&red.k_ff, &f_th, opts, pool, gpu, Some(&space), &mut progress).await?;
             for (i, &dof) in red.free.iter().enumerate() {
                 u_th[dof as usize] = th_f[i];
             }

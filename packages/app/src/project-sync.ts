@@ -7,6 +7,8 @@ export interface ProjectSyncStatus {phase:ProjectSyncPhase;message:string|null;d
 export interface ProjectSyncState {uid:string|null;projects:Record<string,ProjectSyncStatus>;storage:CloudStorageStatus|null;refreshing:boolean;error:string|null}
 export const EMPTY_PROJECT_SYNC:ProjectSyncState={uid:null,projects:{},storage:null,refreshing:false,error:null};
 export type CloudProjectTransport=Pick<CloudProjectApi,'assert'|'list'|'upload'|'download'|'delete'>;
+type SyncOperation={kind:'upload'|'delete';key:string};
+const matchesOperation=(row:ProjectRecord,operation:SyncOperation):boolean=>(operation.kind==='upload'?row.cloud?.upload?.key:row.cloud?.deleteKey)===operation.key;
 export interface ProjectSyncEnvironment {
   api:CloudProjectTransport;
   storage(owner:string|null):AtomicProjects;
@@ -28,7 +30,7 @@ export class ProjectSync {
   private state:ProjectSyncState={...EMPTY_PROJECT_SYNC};
   private listeners=new Set<(state:ProjectSyncState)=>void>();
   private publication=0;
-  private errors=new Map<string,ProjectSyncStatus>();
+  private errors=new Map<string,{status:ProjectSyncStatus;operation?:SyncOperation}>();
   constructor(private readonly env:ProjectSyncEnvironment){}
   get current():ProjectSyncState{return structuredClone(this.state);}
   subscribe(listener:(state:ProjectSyncState)=>void):()=>void{this.listeners.add(listener);listener(this.current);return()=>this.listeners.delete(listener);}
@@ -39,7 +41,8 @@ export class ProjectSync {
     const publication=++this.publication,rows=await this.env.storage(actor.uid).scan();if(!this.owns(actor)||publication!==this.publication)return;
     const projects:ProjectSyncState['projects']={};
     for(const row of rows){
-      const value=cloud(row),transient=this.errors.get(row.id);
+      const value=cloud(row),entry=this.errors.get(row.id);
+      const transient=entry&&(value.dirty||value.upload||value.deleteKey||value.conflict)&&(!entry.operation||matchesOperation(row,entry.operation))?entry.status:undefined;
       if(!row.meta&&!value.conflict&&!transient)continue;
       const status:ProjectSyncStatus=value.conflict
         ?{phase:'conflict',message:transient?.phase==='conflict'?transient.message:'The cloud project changed. Both versions are preserved.'}
@@ -92,21 +95,23 @@ export class ProjectSync {
   private async run(actor:CloudActor):Promise<void>{
     const storage=this.env.storage(actor.uid);let synchronized=false;
     for(const row of await storage.scan()){
-      this.assert(actor);const value=cloud(row);if(!row.cloud||value.conflict||!value.dirty&&!value.upload)continue;
-      if(!this.env.online()){this.errors.set(row.id,{phase:'offline',message:'Saved in this browser. Cloud sync resumes when a connection returns.'});await this.publish(actor);continue;}
-      try{await this.sync(actor,row.id);synchronized=true;this.errors.delete(row.id);}catch(error){
+      this.assert(actor);const value=cloud(row);if(!row.cloud||value.upload?.blocked||value.conflict&&!value.upload||!value.dirty&&!value.upload)continue;
+      if(!this.env.online()){this.errors.set(row.id,{status:{phase:'offline',message:'Saved in this browser. Cloud sync resumes when a connection returns.'}});await this.publish(actor);continue;}
+      const attempt:{operation?:SyncOperation}={};
+      try{await this.sync(actor,row.id,attempt);synchronized=true;this.errors.delete(row.id);}catch(error){
         if(!this.owns(actor))return;
         // An explicit local deletion may cancel a terminal, never-committed operation.
         // Never rotate its key or assume a dropped commit response means it did not commit.
         if(error instanceof CloudProjectError&&error.status===410&&error.code==='upload-expired'){
           const latest=await storage.read(row.id);
-          if(latest?.meta===null&&latest.cloud?.upload){await storage.update(row.id,previous=>{const current=required(previous),value=cloud(current);return {...current,artifact:undefined,artifactTag:undefined,cloud:{...value,upload:undefined,dirty:Boolean(value.remote),deleted:true}};});this.errors.delete(row.id);if(latest.cloud.remote)this.rerun=true;await this.publish(actor);continue;}
+          if(latest?.meta===null&&latest.cloud?.upload){await storage.update(row.id,previous=>{this.assert(actor);const current=required(previous),value=cloud(current);if(attempt.operation&&!matchesOperation(current,attempt.operation))return current;return {...current,artifact:undefined,artifactTag:undefined,cloud:{...value,upload:undefined,dirty:Boolean(value.remote),deleted:true}};});this.errors.delete(row.id);if(latest.cloud.remote)this.rerun=true;await this.publish(actor);continue;}
         }
         const cause=error instanceof Error?error.message:'Cloud sync failed. Your browser copy is safe.';
         if(error instanceof CloudProjectError&&error.code==='account.changed')return;
-        if(error instanceof CloudProjectError&&error.project){await storage.update(row.id,previous=>{const current=required(previous);return {...current,cloud:{...cloud(current),conflict:error.project}};});}
+        if(error instanceof CloudProjectError&&error.project){const remote=error.project;await storage.update(row.id,previous=>{this.assert(actor);const current=required(previous),fresh=cloud(current);if(attempt.operation&&!matchesOperation(current,attempt.operation))return current;const conflict=fresh.conflict?.id===remote.id&&BigInt(fresh.conflict.revision)>=BigInt(remote.revision)?fresh.conflict:remote;return {...current,cloud:{...fresh,conflict}};});}
+        if(!this.owns(actor))return;
         const phase:ProjectSyncPhase=error instanceof CloudProjectError?(error.project?'conflict':error.status===0?'offline':error.status===413||error.status===507||/quota|storage-full/.test(error.code)?'quota':'error'):'error';
-        this.errors.set(row.id,{phase,message:cause});
+        this.errors.set(row.id,{status:{phase,message:cause},operation:attempt.operation});
       }
       if(this.owns(actor))await this.publish(actor);
     }
@@ -129,19 +134,30 @@ export class ProjectSync {
     }
     if(editedDuplicate||latestConflict)await storage.update(id,previous=>{const current=required(previous);return {...current,cloud:{...cloud(current),conflict:latestConflict??remote}};});
   }
-  private async sync(actor:CloudActor,id:string):Promise<void>{
+  private async sync(actor:CloudActor,id:string,attempt:{operation?:SyncOperation}):Promise<void>{
     const storage=this.env.storage(actor.uid);let row=required(await storage.read(id));this.assert(actor);let value=cloud(row);
-    if(value.conflict)return;
+    // A listing may be our pending commit; only replay of its original key proves it.
+    if(value.upload?.blocked||value.conflict&&!value.upload)return;
     if(!value.upload&&value.deleted&&!value.remote){await storage.update(id,previous=>{const current=required(previous);return {...current,artifact:undefined,artifactTag:undefined,cloud:{...cloud(current),dirty:false}};});return;}
     if(!value.upload&&!value.deleted){
       if(row.artifactError)throw new Error(row.artifactError+' Browser Journal saved; cloud upload is paused.');
       if(!row.meta||!row.artifact||!row.artifactTag)throw new Error('The complete project snapshot is not available yet. Save the project again; local Journal recovery remains available.');
       const pending:PendingProjectUpload={key:this.env.nextId(),tag:row.artifactTag,name:row.meta.name,baseRevision:value.remote?.revision??null,...(value.remote?{projectId:value.remote.id}:{}),bytes:row.artifact.slice()};
-      row=await storage.update(id,previous=>{const current=required(previous);if(!current.meta||current.artifactTag!==pending.tag||current.meta.name!==pending.name)throw new FemError('session.conflict','a newer project save is waiting to sync','project');return {...current,cloud:{...cloud(current),upload:pending}};});value=cloud(row);
+      row=await storage.update(id,previous=>{const current=required(previous),fresh=cloud(current);if(fresh.upload||fresh.conflict)return current;if(!current.meta||current.artifactTag!==pending.tag||current.meta.name!==pending.name)throw new FemError('session.conflict','a newer project save is waiting to sync','project');return {...current,cloud:{...cloud(current),upload:pending}};});value=cloud(row);
     }
-    if(value.upload){const pending=value.upload;
-      this.errors.set(id,{phase:'syncing',message:'Uploading complete project…',done:0,total:pending.bytes.length});await this.publish(actor);
-      const remote=await this.env.api.upload(actor,{id:pending.projectId,name:pending.name,baseRevision:pending.baseRevision,key:pending.key,bytes:pending.bytes},(done,total)=>{if(this.owns(actor)){this.errors.set(id,{phase:'syncing',message:'Uploading complete project…',done,total});void this.publish(actor);}});this.assert(actor);
+    // Another controller can reserve an operation or observe a conflict during our read.
+    if(value.upload?.blocked||value.conflict&&!value.upload)return;
+    if(value.upload){const pending=value.upload,operation:SyncOperation={kind:'upload',key:pending.key};attempt.operation=operation;
+      this.errors.set(id,{status:{phase:'syncing',message:'Uploading complete project…',done:0,total:pending.bytes.length},operation});await this.publish(actor);
+      let remote:CloudProject;
+      try{
+      remote=await this.env.api.upload(actor,{id:pending.projectId,name:pending.name,baseRevision:pending.baseRevision,key:pending.key,bytes:pending.bytes},(done,total)=>{if(this.owns(actor)){this.errors.set(id,{status:{phase:'syncing',message:'Uploading complete project…',done,total},operation});void this.publish(actor);}});this.assert(actor);
+      }catch(error){
+        if(this.owns(actor)&&error instanceof CloudProjectError&&error.project){
+          await storage.update(id,previous=>{this.assert(actor);const current=required(previous),fresh=cloud(current),operation=fresh.upload;if(!operation||operation.key!==pending.key)return current;return {...current,cloud:{...fresh,upload:{...operation,blocked:true}}};});
+        }
+        throw error;
+      }
       row=await storage.update(id,previous=>{
         const current=required(previous),fresh=cloud(current);if(fresh.upload?.key!==pending.key)return current;
         // A reconnect listing may observe this commit before its receipt arrives.
@@ -151,11 +167,22 @@ export class ProjectSync {
       });value=cloud(row);
       await this.reconcileReceipt(actor,id,remote);
       row=required(await storage.read(id));this.assert(actor);value=cloud(row);if(value.conflict)return;
+      // Durable newer bytes may have been saved by a previous account epoch.
+      if(value.dirty)this.rerun=true;
     }
     if(value.deleted&&value.remote){
-      const key=value.deleteKey??this.env.nextId();await storage.update(id,previous=>{const current=required(previous);return {...current,cloud:{...cloud(current),deleteKey:key}};});
+      const proposed=value.deleteKey??this.env.nextId();
+      row=await storage.update(id,previous=>{this.assert(actor);const current=required(previous),fresh=cloud(current);if(!fresh.deleted||!fresh.remote||fresh.upload||fresh.conflict)return current;return {...current,cloud:{...fresh,deleteKey:fresh.deleteKey??proposed}};});
+      value=cloud(row);if(!value.deleted||!value.remote||value.upload||value.conflict||!value.deleteKey)return;const key=value.deleteKey;
+      attempt.operation={kind:'delete',key};
       const remote=await this.env.api.delete(actor,value.remote.id,value.remote.revision,key);this.assert(actor);
-      await storage.update(id,previous=>{const current=required(previous);return {...current,artifact:undefined,artifactTag:undefined,cloud:{remote,dirty:false,deleted:true}};});
+      await storage.update(id,previous=>{
+        this.assert(actor);const current=required(previous),fresh=cloud(current);
+        if(fresh.remote?.id!==remote.id||BigInt(fresh.remote.revision)>BigInt(remote.revision)||fresh.conflict?.id===remote.id&&BigInt(fresh.conflict.revision)>BigInt(remote.revision))return current;
+        // A completed server deletion cannot erase an explicitly restored browser snapshot.
+        if(!fresh.deleted||current.meta!==null)return {...current,cloud:{...fresh,conflict:remote}};
+        return {...current,artifact:undefined,artifactTag:undefined,cloud:{remote,dirty:false,deleted:true}};
+      });
     }
   }
   /** Returns bytes privately; engine validation/publication must succeed before cache replacement. */

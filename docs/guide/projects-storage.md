@@ -4,7 +4,7 @@ You can model, mesh and solve without an account. Anonymous projects stay in thi
 
 ## Create and reopen projects
 
-**New project** starts an empty Model under a new project identity. Recent projects and the Projects dialog show the current browser/account's projects. Starting another project keeps the previous saved project. The project name and engine Model name are distinct operations; changing one need not rename the other.
+**New project** starts an empty Model under a new project identity. Recent projects and the Projects dialog show the current browser/account's projects. Starting another project keeps the previous saved project. The project name and engine Model name are distinct operations; changing one need not rename the other. Opening a cloud project without a cached bundle downloads its current version, including a name changed on another device. Later saves use that downloaded revision, even if the project advanced after the list loaded.
 
 For signed-in projects, autosave captures the complete project locally before queuing synchronization. Its cloud bundle contains the portable engine Model, Journal and retained solved states, project metadata, exact source files captured by successful imports, and completed generated output files. Conversations are separate browser state. Granting access to a folder does not upload its unrelated contents.
 
@@ -41,9 +41,9 @@ Offline edits stay in the account's browser cache and queue for reconnect. Netwo
 
 ## Resolve a conflict deliberately
 
-A reconnect may observe an upload before its confirmation returns. When the confirmation identifies that exact revision as your own upload, sync continues with any newer browser edits. A revision from a later remote edit still requires conflict resolution.
+A reconnect may observe an upload before its confirmation returns. When the confirmation identifies that exact revision as your own upload, sync continues with any newer browser edits. A revision from a later remote edit still requires conflict resolution. This recovery also resumes after a reload or an account return. An older unconfirmed upload may complete before the newest browser edit; wait for synced so the cloud has the latest revision.
 
-Cloud revisions prevent one tab or device from silently overwriting a newer revision. A conflict preserves the browser bytes and identifies the remote version. **Use cloud version** explicitly restores that version; export or **Keep browser copy** first if you need the local changes. Keeping a copy creates a separate project rather than merging engineering Journals automatically.
+Cloud revisions prevent one tab or device from silently overwriting a newer revision. A conflict preserves the browser bytes and identifies the remote version. **Use cloud version** explicitly restores that version; export or **Keep browser copy** first if you need the local changes. Keeping a copy creates a separate project rather than merging engineering Journals automatically. An older failed upload or deletion does not reopen a conflict you already resolved. If an earlier deletion actually completes after a cloud restore, your restored browser bytes stay available as a conflict; keep a separate copy to retain them.
 
 Existing anonymous projects remain independent. **Upload a copy** makes an account-owned copy and leaves the anonymous original in place. It does not transfer ownership, remove the original or upload your other projects.
 

@@ -791,7 +791,7 @@ checked beyond aggregate counts.
 | D2 | Axisymmetric thermal stress, heated solid cylinder (**substitute for NAFEMS LE11**) | σzz(0) = −58.654 MPa (Timoshenko §151) | 3 % | thermal stress in axisymmetric, chained from a heat Step | green |
 | D3 | NAFEMS FV52 simply-supported solid plate, modal | 45.897, 109.44, 109.44, 167.89, 193.59, 206.19 Hz (Ansys) vs Abaqus row 44.092, 106.66, … — **resolve** | 3 % | 3D eigen | |
 | D4 | Manufactured solution, elasticity and Poisson: every element kind on the lattice mesher (Kuhn-split simplices) in every idealisation, tri3/tri6 on the free mesher, hex8/quad4 in both formulations | `u = ∇φ`, `T = φ` for a harmonic φ (`sin x cosh y`, `sin x sin y cosh √2 z`, `r⁴ − 8r²z² + 8/3 z⁴` axisymmetric), the exact field on every boundary DOF; L2 rate p+1, full-gradient H1 seminorm rate p, plus retained engineering-strain rate p, over the two finest of h = 1/2, 1/4, 1/8 | rate ± 0.1 | an element is the order it claims: quadrature degree, shape-function order, mid-node placement, every strain term in `B` | engine test |
-| D5 | 1M-DOF cantilever, hex8, static (`#[ignore]`, run by hand) and its CI sibling at 66k DOF (`[50,20,20]`) | same as B1 at that size | CI sibling **green**: `‖u_gpu − u_direct‖ ≤ 1e-8 ‖u‖` after 8 refinement steps at a 4.8e-10 relative residual, 4.3 s on an M4 Max against 1.5 s for `cpu-direct`. The 780 300-DOF run is **unresolved**: Jacobi-scaled f32 CG does not converge at κ ≈ 1e8 (residual grows to 1.5e4, `solve.stalled` → `cpu-direct`), so it prints its outcome and is not gated until a stronger preconditioner lands (PLAN 2.2). Times are never asserted on software adapters | GPU PCG + iterative refinement at scale | green |
+| D5 | 780,300-equation incompatible-mode Hex8 cantilever (`[100,50,50]`, ignored real-device run) and its 66k CI sibling (`[50,20,20]`) | B1 Timoshenko tip deflection; direct factorisation as secondary 66k cross-check | Unchanged 2% B1 tip gate and f64 residual below 1e-8; global force/moment residual below .001 N/.001 N m for the 1 kN load; 66k displacement `‖u_gpu − u_direct‖ ≤ 1e-8 ‖u‖`; repeated 1/4-thread fields exactly equal. Final translated-row/FGMRES source passed real Metal at 66k residual 5.222915328431264e-10 and 780k residual 2.267548104643227e-9, with unchanged physical gates and 66k thread identity; full coverage and software-GPU CI are mandatory before merge | GPU PCG + bounded flexible f64 correction at scale, without CPU fallback | pending #3 |
 | D6 | Lamé thick cylinder as a 90° CSG revolve (#22), free **tet10** | reaction balance and Result freshness gate; σθθ, σrr and u_r at r = 0.15 m (mid-wall) recorded against the closed form 55.5556 MPa, −15.5556 MPa, 4.246667e-5 m | balance 1e-8; stress/displacement recorded, not gated | the free tet mesher's isosurface-stuffed mesh on a curved boundary; Set survival across a mesher swap | green |
 | D7 | the same CSG revolve, free **tet4** | same | recorded, not gated — the element-order lesson | the free tet mesher with constant-strain elements | green |
 | D8 | patch test on the free tet mesher's own unstructured mesh of a CSG box with a cylindrical bore, tet4 and tet10, all six constant-strain modes | exact constant stress and strain | 1e-9 rel | the mesher's irregular connectivity and curved boundary, not just the synthetic structured lattice A1 already covers | engine test |
@@ -3084,9 +3084,122 @@ values to IEEE binary32 makes all 825 meet that stricter policy, consistent with
 single-precision stored author result; the original storage precision is unknown. Neither
 the author values nor either declared tolerance is changed.
 
-The software-adapter GPU gate runs a uniaxial traction patch at 2, 4 and 8 Hex8 cells,
+The software-adapter GPU gate runs a uniaxial traction patch on 2×2×2, 4×2×2 and 8×2×2 Hex8 meshes,
 checking the closed-form extension, Poisson contraction and recovered stress through the
 actual B-bar assembled operator, GPU preconditioner and mixed-precision refinement.
+
+### GPU inner-stop diagnostics (#3)
+
+The low-level GPU CG report distinguishes encoded iterations from actual vector updates,
+convergence, an exhausted budget, nonpositive uploaded curvature and nonfinite device
+scalars. The physical acceptance criterion remains the unchanged f64 outer residual.
+`gpu_cg_reports_updates_budget_and_rounded_operator_breakdown` checks identity and zero
+loads, zero and one-step budgets, and the exact two-by-two SPD matrix with diagonal 1
+and off-diagonal `1 - 2^-26`. Its eigenvalues are `2^-26` and `2 - 2^-26`; f32 rounding
+produces the singular all-ones matrix. Loading its `(1,-1)` eigenvector must report
+`solve.stalled` from the GPU path after zero updates, without declaring the original
+f64 matrix indefinite or silently solving on the CPU. A finite f64 load beyond the
+f32 range must report a nonfinite GPU scalar. This is a breakdown oracle, not a claim
+that rounding caused the large D5 failure.
+
+
+### Fixed symmetric GPU aggregation (#3, provisional source)
+
+The coupled-system PCG preconditioner is a fixed f64-setup/f32-device V-cycle, with
+Galerkin coarse operators, a stored prolongation and its actual transpose, matched
+four-stage forward/reverse Chebyshev smoothing, and a bounded coarse CᵀC map. Procedures
+supply physical reduced candidates and explicit node grouping; matrix-only calls use
+an algebraic constant. ADR0040 states the admission, arithmetic and reduction contract.
+Producer `333af63e` compiled and passed the setup/admission unit tests and actual device-loss
+checks; its aggregation execution stopped on a reserved WGSL entry name. After the entry
+rename, `12aea784` passed the bounded Poisson, zero-transfer-row, B1 and mean-dilatation
+witnesses below on Apple M4 Max (Metal). Software-GPU/100% coverage and large-case
+acceptance remain open.
+
+`aggregation_gpu_cycle_is_linear_symmetric_positive_and_solves_sine_modes` uses the exact
+Dirichlet tridiagonal Laplacian at 31, 127, 1023 and 1537 rows. The last case exercises
+two fine levels (1537 → 97 → 7) with sixteen-row aggregation and one algebraic
+constant candidate. Its sine eigenvector and
+λ=4 sin²(π/(2(n+1))) provide independent solution oracles at multiple hierarchy depths.
+It checks cycle positive energy, linearity and bilinear symmetry within 2e-4 relative
+f32 allowance, repeated-map identity, final sine displacement within 1e-6 relative,
+unchanged f64 residual acceptance and exact 1/4-thread solution identity. This does not
+compare against another implementation of the cycle. Pure setup tests check QR candidate
+reproduction, Galerkin energy, actual transpose, disconnected and partially constrained
+node groups, fixed-order thread identity, range rejection and every explicit resource bound.
+
+The production Engine-path 1200-equation bending case checks the same independent B1
+reference and conservation gates as D5. The existing uniaxial mean-dilatation patch now
+includes a fine aggregation level and keeps its extension, Poisson contraction and stress
+tolerances unchanged. Device limits are tested independently for maxBufferSize and
+maxStorageBufferBindingSize, including a tiny valid matrix whose scalar scratch is larger
+than its matrix/vector buffers. Admission failures are structured and suggest a coarser mesh.
+No changed residual threshold, fallback solve or software-adapter timing claim is used.
+
+
+A separate 127-row diagonal-plus-SPD-block case has the exact solution u=1 for its
+closed-form row-sum loading. Its last block is [[d,.875],[.875,1]], with
+`d=f64::from_bits((49.0/16.0f64).to_bits()+8)` and positive determinant `d-.875²`.
+The prepared floating-point boundary makes its final smoothed transfer row zero;
+Rust setup asserts that structural fact, while a real GPU solve under an injected
+508-byte per-buffer limit must preserve the exact physical solution. Empty gathered
+rows use a dummy unused index/value so their storage bindings stay valid; row offsets
+retain zero-gather semantics. The exact `12aea784` Metal run passed this regression.
+
+The adverse setup cases also distinguish losing one interpolation row from losing an
+entire aggregate's representable candidates. A 40-row SPD tridiagonal A=L Lᵀ, with
+L diagonal 2^-26 and first subdiagonal 1, has exact positive Cholesky pivots but an
+unrepresentable inverse factor: C[row,0]=(-1)^row 2^(26(row+1)). Setup must return a
+structured numerical-range failure without declaring this original f64 matrix indefinite.
+
+The `12aea784` 66,150-equation run completed its independent direct reference and admitted
+the five-level GPU hierarchy, then failed at the first batched 36-byte scalar readback.
+It has no accepted GPU displacement, B1 or 1/4-thread result. The next device-boundary
+diagnostic preserves validation/poll/mapping outcomes and the typed loss reason in the
+same structured `internal` error. Actual invalid-copy and device-destruction tests verify
+those diagnostics separately from numerical oracles. No residual, iteration or batch
+policy changes accompany this diagnostic; the 66k and 780,300-equation gates remain open.
+
+The `63c15b30` diagnostic captured an actual `Unknown` device loss before the first
+batched readback. Its five-level hierarchy recorded 90 compute passes per V-cycle;
+with four surrounding CG passes, the 25-iteration batch required 2350 compute passes.
+wgpu 30 records a native body and transition command buffer per pass, exceeding Metal's
+4096-outstanding-buffer limit before submission. The scheduling repair records each
+complete V-cycle in one compute pass with identical dispatch order, bindings and arithmetic.
+The same bounded independent witnesses and the original 66k assertions gate this repair;
+the dispatch count is not a substitute for the numerical tests. Large-case acceptance remains open.
+
+The scheduling repair at `c09f13be` passed the original 66k test on actual Metal,
+in debug and release. Both kept the unchanged B1/equilibrium/direct-displacement gates,
+8 f64 refinements, 1049 actual inner updates, residual `4.802661830863288e-10` and exact
+1/4-thread displacement equality. This does not accept the unexecuted 780,300-row case.
+Software-GPU `12aea784` passed all 19 numerical/device tests; its coverage failure is tracked
+separately from these numerical results.
+
+The preparation boundary is tested with real two-spring and 127-row Poisson operators:
+exact Jacobi-scaled values, CPU/device/individual-buffer limits, hierarchy depth, coarse
+factor payload and real mesh rigid-column storage. Exact bounds admit; one-byte-lower bounds
+refuse before the associated allocation. A side-two cube checks retained translations
+`1/sqrt(8)` and rotation components `1/4` independently. Coarse and exact-diagonal roots
+accept a zero physical-column budget because those algorithms consume no candidates.
+The public prepared solver must retain `internal`, `solve/readback` and the actual destroyed
+device reason instead of returning a correction when loss follows a successful upload.
+
+The raw rounded rank-one adverse case keeps its exact `(1,-1)` zero-curvature assertions.
+It does not assert that a separately rounded C/CT preconditioner preserves that null vector:
+Metal's allowed contraction perturbs it to `(67108864,-67108860)`, whose exact curvature is
+16. Public zero-update failure instead uses A=-1 with identity preconditioning, where
+`p*A*p=-1` is invariant. The original positive-definite rank-loss fixture must still fail the
+unchanged f64 outer acceptance with structured `solve.stalled`; a finite inner correction
+alone never passes this oracle.
+
+The resource-admission property uses 2/97/127-row Dirichlet chains, both scalar groups
+and actual solid-mesh ux/uy retained coordinates. Byte, interpolation and operator quotas
+start at zero and advance strictly to each structured error's requested count, with at most
+512 attempts per axis. First success must satisfy the two-spring inverse or independent
+Dirichlet energy (squared endpoints plus squared neighbor differences), transfer duality,
+and exact quota-independent Plan identity; its last nonzero cap minus one must refuse.
+The diagnostics report requested setup storage or entry counts, not resident/free memory.
 
 ### Browser CPU thread determinism (#17)
 
@@ -3118,6 +3231,103 @@ patch/boundary case, not a convergence-rate or adapter timing benchmark.
 The adapter-free test also requires the existing structured `unsupported` error
 for an explicitly requested GPU solve with zero equations.
 
+### Direct final sparse output allocation (#3)
+
+The sparse-product count and fill passes retain identical BTreeMap arithmetic and four
+fixed row partitions. Final prefix offsets give disjoint borrowed output slices, avoiding
+owned partition arrays and the merged copy. This removes `12*NNZ + 4*(rows+4)` requested
+bytes per operation under the unchanged cumulative setup allowance; it does not estimate RSS.
+
+The allocation regression uses the independent scalar products `[2,3]·[5,7]=31` and
+`[2,3]·[3,-2]=0`. A single row gives three empty partitions, each retaining only its prefix
+sentinel. The exact requested storage consists of five admitted map envelopes, one count,
+four count-vector headers, four borrowed-span headers and one final CSR. On native64 the
+bounds are 2972 and 2960 bytes; wasm32 gives 2776 and 2764. Both must produce the exact
+closed-form result at the bound and refuse at bound minus one. The old duplicate-output
+allocation cannot fit these bounds. Full-plan 1/4-thread identity, Dirichlet-chain energy,
+transfer duality and the existing GPU scientific oracles remain independent acceptance gates.
+
+At the preceding `cb8d24a2` release producer, the unchanged 66k test passed on actual Metal.
+The first reviewed 780,300-equation attempt instead returned a genuine setup capacity error:
+8,902,588,620 requested bytes against the remaining 7,837,371,816-byte allowance, before GPU
+iterations. This is retained as RED, with no cap increase, retry, fallback or accepted
+scientific result. Direct final output remains pending its own numerical/resource checks.
+
+
+The direct-output `e2ce154a` release producer subsequently passed the unchanged Metal
+66k scientific and thread-identity checks. Its single reviewed 780,300-equation attempt
+reached a later setup refusal: 8,999,730,545 requested bytes against the unchanged
+7,837,371,816-byte allowance, before GPU iterations. This is capacity evidence, not
+convergence or performance acceptance.
+
+Sparse byte refusals now retain the exact numeric prefix and append static operation/stage,
+output dimensions, unknown versus counted NNZ, prior charged bytes, ordered vector requests
+and scratch. The one-row product above must report unknown fill at its symbolic bound
+minus one, and exact one or zero NNZ at its final bound minus one. The real prolongation
+transpose exact-bound/duality case also checks the output shape and all four vector requests,
+including the cursor. These failure oracles preserve the existing successful numerical
+answers and genuine monotonically admitted quota walks; they add no budget or tolerance.
+
+
+### Local retired-AP transpose storage (#3)
+
+After raw=PT*AP finishes, its AP input is dead. Transpose(raw) may consume those owned
+buffers, using each originally requested length as its eligibility bound. It preserves
+all prior cumulative charges, admits complete fresh replacement requests on a miss,
+and keeps a separate newly charged cursor. No allocator capacity or retired-byte credit
+is used. Histogram, prefix and source-entry arithmetic are unchanged.
+
+The fit witness uses I₄ and disjoint-column P with columns (1,0,1,0) and (0,1,0,1).
+Its independently known Gram matrix is 2I₂. Actual AP has four entries and raw has two;
+all three original output buffer addresses must survive, and only the eight-byte cursor
+is newly charged. The recovered action on (3,4) is (6,8).
+
+The fallback witness uses I₂₅₈ and P=[1ᵀ;I₂₅₇]. AP=P has 514 entries; its Gram matrix
+I+11ᵀ has 66,049. The old row-pointer buffer fits; both entry arrays need full fresh
+replacement. All operations use the same ordinary ledger and a cap supplied initially.
+The exact native64 cap is 1,607,556 bytes, with earlier peaks strictly below cap minus
+one; exact succeeds and cap minus one must refuse the final replacement batch, retaining
+all previously charged bytes. The known energy is ||x||²+(Σx)², and complete outputs
+must agree at one and four threads. This tests valid low-level products rather than
+claiming that aggregation setup generates this P from identity. Existing build-produced
+Dirichlet energy, transfer duality, complete Plan determinism and GPU gates remain.
+
+The frozen `312eb31d` 780k diagnostic identified a later AP allocation with output shape
+168,552 by 24,390 and 116,947,975 entries, short by 1,162,358,729 setup bytes. Local root
+row-pointer reuse guarantees 674,212 bytes; clearing that shortfall additionally needs
+at least 96,807,044 raw entries fitting the original AP entry extents. Those sizes are
+unobserved, so this optimization carries no whole-780k fit or scientific acceptance claim.
+
+
+The immediate-child aggregation reuse witnesses consume both products from actual prior
+Galerkin work under the same ledger. With root I8 and P0=[I4;I4], the first operator is
+2I4; child rows e1,e2,(1,1),(1,1) give [[6,4],[4,6]], whose energy is
+5(x+y)^2+(x-y)^2. Both role-specific array identities must survive, all old charges remain,
+and full CSR outputs agree at one/four workers. A second flow starts with2I258 and
+P1=[ones;I257], giving2(I+11ᵀ). Its sparse retired entry arrays cannot fit the dense child
+outputs: full replacements must be admitted, the initial exact cap passes and one byte
+less refuses the final symmetric batch, and energy is2(||x||²+(Σx)²). These are analytical
+Galerkin fixtures, not claims that SA constructs those P matrices from an identity root.
+A real Poisson 769 hierarchy with constant and linear candidates has sizes 769/97/7,
+exercises the two-Fine-level handoff under sixteen-group aggregation,
+retains Dirichlet energy/transfer duality and is exactly identical at one/four workers.
+
+
+The sixteen-group policy also has a genuine 16-node 4×2×2 grid witness. Its 48 retained
+rows are grouped by node, and actual aggregation produces one aggregate. Closed-form
+translations and rotations `e_axis×(x,y,z)`, plus their dependent algebraic constant,
+must have rank six and be reconstructed by tentative interpolation within 1e-13.
+This guards against dropping rotational modes to obtain a smaller hierarchy. The
+Poisson 769 two-Fine witness retains independent Dirichlet energy, transfer duality
+and complete one/four-worker Plan identity. All analytical Gram/quota cases remain.
+
+A bounded CPU RAW-strength 8/16 selection experiment on unchanged 216/1200/5832 exports
+converged under the same 1e-5 rounded-system residual target. At 5832 rows its total
+A/P/AP/raw entries changed 912601/347721/902322/518851 to 585457/215589/527646/191707,
+with 79→106 iterations. Candidate reconstruction, positive energy, symmetry and linearity
+passed. These are prototype observations, not Rust allocation bounds, GPU results or
+f64 outer acceptance. The unchanged 66k B1/equilibrium/direct 1e-8/thread identity and
+780k B1/f64/equilibrium gates remain mandatory for the sixteen-group source.
 ## Portable retained-result persistence (#779)
 
 The existing linear cantilever is solved at two proportional load levels. The second
@@ -3129,3 +3339,69 @@ procedure is executed during restoration. Corrupt identity, model provenance, co
 field layout, unsupported version and oversized artifacts fail without advancing the active
 session or changing its model. This is a persistence regression around an existing numerical
 capability, not a new physical procedure or an independent accuracy claim for its coarse mesh.
+
+### Bounded flexible f64 GPU correction and translation coordinates (#3 / PR #706)
+
+ADR0045 uses right flexible GMRES with at most eight raw Arnoldi/direction
+pairs, stored squared norms, two modified Gram–Schmidt passes and weighted
+Hessenberg QR. The first-column direct projection preserves an exact inner
+correction without a normalization roundtrip. The existing two small GPU exact
+oracles retain their bit-exact fields and zero residual.
+
+`f64_fgmres_corrects_an_inaccurate_inner_operator_without_changing_the_physical_system`
+checks K=[[4,1],[1,3]], b=(6,7), x=(1,2) against an inaccurate inner inverse for
+which stationary refinement fails. The identity cases require exact `(0.25,-0.5)`
+and `(1,1)` at one/four workers. A ten-dimensional diagonal system exercises
+restart beyond eight steps with known solution `(1,...,1)`. Separate cases cover
+zero RHS, cancellation, rank/nonfinite directions, inner failure, budgets and
+preallocation admission. Multi-block fixed-order reduction retains its closed-
+form seven-entry zero-sum remainder and one/four-thread bit identity. The valid
+1.7-million-row diagonal request still rejects its workspace before GPU upload.
+
+`physical_row_coordinates_preserve_spring_forces_under_translation_and_chunking`
+executes the shared production WGSL against independent springs of stiffness
+1 and 2^-26. Symmetric scaling is S=diag(1,1/2,2). The ordinary rounded CSR loses
+2^-26 from K00=1+2^-26, producing force -2^-26 under uniform physical translation;
+the translation-coordinate path must return exactly zero. Exact deformations,
+their rigid offsets, all three component indices and split/rebased chunks check
+the known spring forces. CPU metadata cases retain partially prescribed nodes,
+row moments, one/four-worker bits and exact memory/buffer/range boundaries.
+
+These tests supplement D1/D5, imported references, physical patches and mesh-
+convergence studies. The default eight outer steps, 5000 inner iterations,
+factor-100 floor, 66k direct `1e-8`, 2% B1 and .001 force/moment gates are unchanged.
+No CPU fallback or emulated-f64 GPU operator is introduced.
+
+Dated translated-row candidate verification on 17 October 2026: all 21 then-active
+Metal GPU tests passed on home-mini. The unchanged 66,150-equation case passed
+B1, equilibrium, direct comparison and complete one/four-worker field identity,
+with true residual 5.222915328431264e-10. The unchanged 780,300-equation Apple M1
+Max Metal case passed B1, force/moment equilibrium and true f64 residual below
+1e-8: 2.267548104643227e-9 after six accepted corrections and 1642 GPU updates.
+The initial run took 528.66 s with peak RSS 10,643,292,160 bytes; the unchanged
+10 GiB guard did not fire. After early release of uploaded host arrays, the
+final-source repeat retained the same accepted residual, six corrections and
+1642 GPU updates. It passed in 525.31 s with peak RSS 9,810,329,600 bytes and
+peak physical footprint 8,783,695,232 bytes, without a resource stop. All 395
+runtime input hashes match committed source `c6b731ef`; the actual arm64 test
+binary SHA-256 is
+`41408a4791dd210f4695b882f97bc4174a7bac96668d2a2436881ffecb7b51fe`.
+
+Final-source real Metal verification passed all 22 active GPU tests and the
+unchanged 66k gate, including exact one/four-worker fields. Actual Chromium
+SwiftShader passed the dot kernel, both shell studies and the B1 cantilever
+through wasm/WebGPU. The complete CPU browser suite passed 255 tests with five
+existing mode-specific skips, and cold Pages bootstrap passed.
+
+A separate one-worker browser run of the same `[50,20,20]` grid passed on actual
+Chromium SwiftShader: 22,491 nodes, 20,000 incompatible-mode Hex8 elements,
+66,150 free equations, true f64 residual 5.422607126350388e-10 in eight
+corrections and tip displacement -0.00019029079207446805 m. The unchanged B1
+2% and .001 SI force/moment gates passed. This browser case supplies software-
+adapter correctness evidence without a timing assertion; it does not substitute
+for the native CI sibling's direct/one-four-worker gates. Historical failed
+stationary and unbalanced flexible runs remain numerical failures; the new
+spring counterexample records the rounding mechanism repaired.
+
+
+Engine/geometry coverage reached **100% of 74,991 regions, 3,977 functions and 35,411 lines**, with zero misses and no exclusions. The full suite passed; a final library rerun added the caller-level metadata-error propagation witness using preserved profiles. This final change is test-only: all production code is byte-identical to the source accepted by the Metal, M1 and browser runs above. Fresh native lavapipe CI remains required before merge.

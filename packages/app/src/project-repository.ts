@@ -4,7 +4,7 @@ import { FemError, scientificJson, type DocumentSnapshot, type ProjectMeta, type
 import { JOURNALS, PROJECTS, done, openDb } from './db';
 import type { ShareCommand } from './share';
 
-export interface PendingProjectUpload { key:string; tag:string; name:string; projectId?:string; baseRevision:string|null; bytes:Uint8Array }
+export interface PendingProjectUpload { key:string; tag:string; name:string; projectId?:string; baseRevision:string|null; bytes:Uint8Array; /** A confirmed conditional rejection needs explicit conflict resolution. */ blocked?:true }
 export interface ProjectCloudRecord {remote:CloudProject|null;dirty:boolean;deleted:boolean;upload?:PendingProjectUpload;deleteKey?:string;conflict?:CloudProject}
 export interface ProjectRecord {
   id: string;
@@ -118,8 +118,8 @@ export class ProjectRepository {
       if(expected===null){if(previous!==null)throw conflict();}
       else if(!previous||previous.meta===null&&!restored.restoreDeleted||Boolean(previous.meta)!==Boolean(expected.meta)||previous.generation!==expected.generation||previous.version!==expected.version||identity(previous.cmds)!==identity(expected.cmds)||previous.artifactTag!==expected.artifactTag||previous.meta?.name!==expected.meta?.name||previous.cloud?.remote?.revision!==expected.cloud?.remote?.revision||identity(previous.cloud?.conflict)!==identity(expected.cloud?.conflict))throw conflict();
       previousClaim = clone(previous);
-      const {restoreDeleted:_restoreDeleted,...payload}=restored;
-      return { ...previous,...clone(payload),saveSequence:0,id: meta.id, generation, version: captured.stamp.stateVersion, journal:captured.file.journal,meta: { ...clone(meta), commands: captured.file.journal.entries.length, hash: captured.model.hash }, cmds: captured.file.journal.entries.map(entry => entry.cmd as ShareCommand) };
+      const {restoreDeleted:_restoreDeleted,cloud:restoredCloud,...payload}=restored;
+      return { ...previous,...clone(payload),...(restoredCloud===undefined?{}:{cloud:clone(restoredCloud)}),saveSequence:0,id: meta.id, generation, version: captured.stamp.stateVersion, journal:captured.file.journal,meta: { ...clone(meta), commands: captured.file.journal.entries.length, hash: captured.model.hash }, cmds: captured.file.journal.entries.map(entry => entry.cmd as ShareCommand) };
     });
     return new ProjectBinding(this, clone(meta), generation, captured.stamp.session, async () => {
       const tombstoneGeneration = this.generation();

@@ -384,7 +384,14 @@ class Bundle {
     this.assertOwner();let bytes=expected.artifactError?undefined:expected.artifact,remote=expected.cloud?.remote??null;
     if(this.ownerUid&&(restore||!expected.artifactError&&!bytes&&remote)){const prepared=await sync.prepareOpen(expected.id,restore);expected=prepared.record;bytes=prepared.bytes;remote=prepared.remote;}
     this.assertOwner();
-    if(bytes){const artifact=decodeProjectArtifact(bytes);const project=expected.meta??{...nextMeta(remote?.name??artifact.name),id:expected.id};const source:ReplacementSource={kind:'portable',portable:artifact.engine as import('@femlab/registry').PortableProject,project:{meta:project,expected}};restoredArtifacts.set(source,{artifact,bytes,cloud:this.ownerUid?(restore?{remote,dirty:false,deleted:false}:expected.cloud):undefined,restoreDeleted:restore});await transport.replaceWith(source);}
+    if(bytes){
+      const artifact=decodeProjectArtifact(bytes),fromCloud=Boolean(this.ownerUid)&&(restore||!expected.artifact);
+      const saved=expected.meta??{...nextMeta(remote?.name??artifact.name),id:expected.id};
+      const project=fromCloud&&remote?{...saved,name:remote.name,at:Date.parse(remote.updatedAt)}:saved;
+      const source:ReplacementSource={kind:'portable',portable:artifact.engine as import('@femlab/registry').PortableProject,project:{meta:project,expected}};
+      // A downloaded snapshot adopts its verified server revision; cached opens preserve pending operations.
+      restoredArtifacts.set(source,{artifact,bytes,cloud:fromCloud?{remote,dirty:false,deleted:false}:undefined,restoreDeleted:restore});await transport.replaceWith(source);
+    }
     else {const source:ReplacementSource=expected.journal?{kind:'journal',entries:expected.journal.entries,skipSolves:true,project:{meta:expected.meta!,expected}}:{kind:'legacy-project',commands:expected.cmds as Command[],project:{meta:expected.meta!,expected}};if(expected.artifact&&expected.artifactError)sourceInputs.set(source,decodeProjectArtifact(expected.artifact).files);await transport.replaceWith(source);}
   }
   cloudHost(transport:SessionTransport):CloudProjectHost {
