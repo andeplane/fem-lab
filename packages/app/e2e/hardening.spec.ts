@@ -53,6 +53,7 @@ test('@cpu rejected file imports retain the Model and current project', async ({
   await page.waitForFunction(() => typeof window.fem !== 'undefined', undefined, { timeout: 60_000 });
   const result = await page.evaluate(async () => {
     await window.fem.model.new({ name: 'keep-this-project' });
+    await window.fem.dispatch({ cmd: 'project.save' });
     const before = await window.fem.query.model();
     const project = await window.fem.registry.query({ query: 'query.project' });
     const errors: string[] = [];
