@@ -556,6 +556,39 @@ its cleanup audit is
 This is staging acceptance. Production owned-account browser verification and actual
 custom-sender delivery remain outstanding.
 
+
+### Cancellation recovery staging acceptance, 17 October 2026
+
+At 02:05:10 UTC (04:05 Oslo), the expanded smoke passed against project-sync
+client `08805e85f81041f7dcd62db0d930c3b3be11ea05`, Hosting release
+`1792202636820000`, with a 56.7-second runner. Clean verification source:
+`b7021d7c6f38ee1a46f27966172d03503c423cf9`; test SHA-256:
+`0660f26eb3c10f0bd068e990d1dcee166a4e333f4b325138686b4c4c98c82265`.
+The API remained `femlab-api-re31c2aa4-f5ec22ef`.
+
+The signed-in test acknowledged an unsaved Model edit, cancelled the worker,
+verified the recovered Model and original browser project identity, then confirmed
+that its revision advanced in the same single cloud project. Private sync, logout
+isolation, anonymous recovery, owner exports and durable deletion also passed with
+two fresh disposable SDK accounts. Both old tokens returned 401. Backend logs
+independently recorded two completed exports at 02:04:43 UTC and two completed
+identity deletions at 02:05:03 UTC, with zero pending or failed operations.
+
+The fresh private fixtures and token state were removed. The 390px account view
+was inspected. AI stayed disabled and every monetary cap remained zero. No email,
+generation, credit grant or payment occurred. Separately, the same client passed
+255 CPU Chromium cases (five intentional skips) and all four cloud Chromium cases
+on home-mini, with retries disabled. Both public build archives include all 27
+generated viewer thumbnails.
+
+Sanitized source-bound evidence is retained at
+`/Users/anderhaf/.codex/tmp/fem-lab-triage-802/599-partition-staging-evidence-08805e85.json`;
+its independent cleanup audit is
+`/Users/anderhaf/.codex/tmp/fem-lab-triage-802/599-partition-staging-backend-cleanup-08805e85.json`.
+This is staging acceptance. Current exact-head GitHub validation, production
+owned-account browser verification and actual custom-sender delivery remain
+outstanding. Prior dated source-specific results above remain historical.
+
 ## Remaining release gates
 
 - Resolve production email Spam placement/custom-sender deliverability in #710, then
