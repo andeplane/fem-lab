@@ -5188,6 +5188,21 @@ const queries = {
   "description": "Every Query. Serialised with a `query` tag: `{ \"query\": \"query.model\" }`.",
   "oneOf": [
     {
+      "description": "Lossless portable project snapshot, including all retained solved meshes and f64 fields.\nHost storage is separate; capture the checked ReadReply stamp with this owned value.",
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "const": "query.portableProject"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "x-execution": "modelRead",
+      "x-returns": "PortableProject"
+    },
+    {
       "description": "Everything about the Model in one read: bodies with volumes and materials, imported\nface patches with paste-ready naming predicates, named Sets, constraints, loads with\ntheir totals, steps and predecessor links, mesh settings, and the well-posedness warnings\nthat would block a solve. Material properties include thermal expansion `alpha` in 1/K,\nconductivity `k` in W/(m K), specific heat `cp` in J/(kg K), and the supplied `source`.\nExpansion and conductivity preserve one isotropic value or three material-axis values.\nRead this before changing anything.",
       "type": "object",
       "properties": {

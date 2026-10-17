@@ -112,6 +112,15 @@ impl Candidate {
         Ok(self)
     }
 
+    /// Restore a complete retained solve cache without re-running any procedure. All input
+    /// validation happens in this private candidate; a failed archive cannot affect its owner.
+    pub async fn project(self, project: crate::portable::PortableProject) -> Result<Self, Error> {
+        project.validate()?;
+        let mut candidate = self.file(project.file.clone()).await?;
+        candidate.engine.install_portable_results(project)?;
+        Ok(candidate)
+    }
+
     /// Snapshot once, encode the actual file once and enforce the injected host byte budget
     /// before making it committable. Equality is allowed. Any failure consumes the candidate;
     /// the host abandons its ticket while the active owner and producer remain unchanged.

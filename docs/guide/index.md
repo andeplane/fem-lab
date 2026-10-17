@@ -17,6 +17,7 @@ Follow [geometry](./geometry.md), [materials and sections](./materials-sections.
 ## Save, automate and collaborate
 
 - [Projects, storage and sharing](./projects-storage.md)
+- [Cloud project storage API](./cloud-project-api.md)
 - [Import and export](./import-export.md)
 - [Scripts and the Journal](./scripting-journal.md)
 - [CLI and MCP](./cli-mcp.md)

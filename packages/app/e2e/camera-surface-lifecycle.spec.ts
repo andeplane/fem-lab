@@ -1,13 +1,11 @@
 import type { AppSurface } from '../src/surface';
 import type { Viewer } from '../src/viewer/viewer';
-import { expect, test } from './fixtures';
+import { builtViewerModule, expect, test } from './fixtures';
 
 test('@cpu a surface arriving after an explicit camera renders and picks at its real orthographic scale', async ({ page }, testInfo) => {
   await page.goto('./');
-  const readings = await page.evaluate(async () => {
-    const url = Array.from(document.querySelectorAll<HTMLLinkElement>('link[rel="modulepreload"]'))
-      .map(link => link.href).find(href => /\/viewer-[^/]+\.js$/.test(href));
-    if (!url) throw new Error('the built Viewer module was not preloaded');
+  const readings = await page.evaluate(async file => {
+    const url = new URL(file, document.baseURI).href;
     const module = await import(url) as { Viewer: typeof Viewer };
     const canvas = document.createElement('canvas');
     // No ResizeObserver: the test orders camera/surface publication without incidental reflow.
@@ -55,7 +53,7 @@ test('@cpu a surface arriving after an explicit camera renders and picks at its 
       const resized = { camera: viewer.getCamera(), members: measure(24, 4) };
       return { camera, first, replaced, resized, buffer: [canvas.width, canvas.height] };
     } finally { viewer.dispose(); canvas.remove(); }
-  });
+  }, builtViewerModule());
   for (const [name, stage] of [['arriving', readings.first], ['replacement', readings.replaced]] as const)
     await testInfo.attach(`${name}-members`, { body: Buffer.from(stage.png.split(',')[1]!, 'base64'), contentType: 'image/png' });
   const first = { camera: readings.first.camera, members: readings.first.members };

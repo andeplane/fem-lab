@@ -22,6 +22,8 @@ import { serviceServer } from './http.js';
 import {freeEmailFingerprint} from './free-eligibility';
 import {monthlyFreeAllowance} from './free-allowance';
 import type {PublicCreditUnit} from '@femlab/registry';
+import {cloudProjects} from './cloud-projects';
+import {projectObjects} from './project-objects';
 
 const port = Number(process.env.PORT ?? 8080);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT must be an integer from 1 to 65535');
@@ -32,6 +34,7 @@ const pool = projectId ? new pg.Pool({ max: 8, connectionTimeoutMillis: 5000, id
 const now = () => new Date();
 const fingerprint=process.env.FREE_ELIGIBILITY_HMAC_KEY?freeEmailFingerprint(process.env.FREE_ELIGIBILITY_HMAC_KEY):undefined;
 const auth=projectId?getAuth(initializeApp({projectId})):undefined;
+const projects=pool&&auth&&projectId&&process.env.PROJECT_BUCKET?cloudProjects({db:pool,account:accountReader(identityVerifier(auth,projectId,now),postgresAccounts(pool,now,randomUUID)),objects:projectObjects(new Storage({projectId,timeout:30000,retryOptions:{autoRetry:false,maxRetries:0,totalTimeout:30}}),process.env.PROJECT_BUCKET),now,newId:randomUUID,globalBytes:Number(process.env.PROJECT_STORAGE_GLOBAL_BYTES??100000000000)}):undefined;
 
 const prices={plus:process.env.STRIPE_PRICE_PLUS??'',pro:process.env.STRIPE_PRICE_PRO??'',studio:process.env.STRIPE_PRICE_STUDIO??''};
 const purchasePrices={
@@ -47,7 +50,7 @@ const stripeKey=process.env.STRIPE_SECRET_KEY;
 const stripe=stripeKey&&new RegExp(`^(sk|rk)_${billingMode}_`).test(stripeKey)?new Stripe(stripeKey,{timeout:5000,maxNetworkRetries:1}):undefined;
 const billing=pool&&stripe&&process.env.STRIPE_WEBHOOK_SECRET&&Object.values(prices).every(price=>/^price_[a-zA-Z0-9_]+$/.test(price))?
   billingLifecycle(pool,stripeGateway(stripe,process.env.STRIPE_WEBHOOK_SECRET),{live:process.env.BILLING_MODE==='live',prices,purchasePrices},now,randomUUID):undefined;
-const privacy=pool&&auth&&projectId&&process.env.EXPORT_BUCKET?accountPrivacy({db:pool,account:accountReader(identityVerifier(auth,projectId,now),postgresAccounts(pool,now,randomUUID)),recentIdentity:identityVerifier(auth,projectId,now,{maxAuthenticationAge:300}),objects:exportObjects(new Storage({projectId,retryOptions:{maxRetries:2,totalTimeout:30}}),process.env.EXPORT_BUCKET),identity:privacyIdentity(auth),payments:stripe?privacyPayments(stripe,projectId):undefined,now,newId:randomUUID}):undefined;
+const privacy=pool&&auth&&projectId&&process.env.EXPORT_BUCKET?accountPrivacy({db:pool,account:accountReader(identityVerifier(auth,projectId,now),postgresAccounts(pool,now,randomUUID)),recentIdentity:identityVerifier(auth,projectId,now,{maxAuthenticationAge:300}),objects:exportObjects(new Storage({projectId,retryOptions:{maxRetries:2,totalTimeout:30}}),process.env.EXPORT_BUCKET),identity:privacyIdentity(auth),payments:stripe?privacyPayments(stripe,projectId):undefined,projects,now,newId:randomUUID}):undefined;
 if (process.argv.includes('--migrate')) {
   if (!pool) throw new Error('FIREBASE_PROJECT_ID and database connection must be configured.');
   const directory = new URL('./migrations/', import.meta.url);
@@ -61,6 +64,7 @@ if (process.argv.includes('--migrate')) {
     // store:false does not archive Responses for retrieval. Unknown usage is resolved conservatively.
     const result=await reservations(pool,now,randomUUID,fingerprint).recover(async()=>undefined);
     process.stdout.write(JSON.stringify({event:'usage-recovery',...result})+'\n');
+    if(projects){const result=await projects.recover();process.stdout.write(JSON.stringify({event:'project-recovery',severity:result.failed?'ERROR':'INFO',...result})+'\n');if(result.failed)process.exitCode=1;}
     if(privacy){const result=await privacy.recover();process.stdout.write(JSON.stringify({event:'privacy-recovery',severity:result.failed?'ERROR':'INFO',...result})+'\n');if(result.failed)process.exitCode=1;}
     if(billing){const payments=await billing.recover();process.stdout.write(JSON.stringify({event:'billing-recovery',severity:payments.failed?'ERROR':'INFO',...payments})+'\n');if(payments.failed)process.exitCode=1;}
     if(stripe&&billing&&projectId&&process.env.STRIPE_PORTAL_CONFIGURATION&&process.env.APP_RETURN_ORIGIN) {
@@ -80,12 +84,12 @@ if (process.argv.includes('--migrate')) {
   const account = readAccount && ledger ? async (authorization: string | undefined,creditUnit?:PublicCreditUnit) => {
     const owner = await readAccount(authorization);
     const status=await payments?.status(owner.id);
-    return { ...owner, usage: await ledger.balance(owner.id,creditUnit),freeAllowance:await freeAllowance?.status(owner.id), billingAvailable:billingEnabled&&Boolean(payments),billing:status?{...status,merchantMode}:undefined };
+    return { ...owner, usage: await ledger.balance(owner.id,creditUnit),storage:await projects?.status(owner.id).catch(()=>undefined),freeAllowance:await freeAllowance?.status(owner.id), billingAvailable:billingEnabled&&Boolean(payments),billing:status?{...status,merchantMode}:undefined };
   } : undefined;
-  const server = serviceServer({ now, newId: randomUUID, account,completions,billing,payments,privacy,freeAllowance,
+  const server = serviceServer({ now, newId: randomUUID, account,completions,billing,payments,privacy,freeAllowance,projects,
     heartbeat(callback){const timer=setInterval(callback,15000); return()=>clearInterval(timer);},
     origins: (process.env.APP_ORIGINS ?? '').split(',').filter(Boolean),
-    ready: async () => { if (!pool||!completions||!privacy||!fingerprint) return false; const versions=await pool.query("SELECT name FROM service_migrations WHERE name='010-free-monthly-allowance.sql'"); return versions.rowCount===1; },
+    ready: async () => { if (!pool||!completions||!privacy||!fingerprint||!projects) return false; const versions=await pool.query("SELECT name FROM service_migrations WHERE name='011-cloud-projects.sql'"); return versions.rowCount===1; },
   });
   server.listen(port, '0.0.0.0');
   server.requestTimeout=120000; server.headersTimeout=30000;

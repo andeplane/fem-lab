@@ -33,12 +33,12 @@ export async function buildStepSource(repo, vendor, run = spawnSync, cleanup = r
     catch (error) { if (!failed) throw error; }
   }
 }
-export async function prepareStepAssets({ repo = root, vendor = join(repo, 'vendor/step-converter'), output = join(repo, 'packages/app/public/third-party/step-converter'), buildSource = () => buildStepSource(repo, vendor) } = {}) {
+export async function prepareStepAssets({ repo = root, vendor = join(repo, 'vendor/step-converter'), output = join(repo, 'packages/app/public/third-party/step-converter'), requireSourceKit = false, buildSource = () => buildStepSource(repo, vendor) } = {}) {
   const manifest = JSON.parse(await readFile(join(vendor, 'manifest.json'), 'utf8'));
   if (manifest.version !== 'occt-import-js-0.0.23+femlab.1') throw new Error('unsupported STEP converter manifest');
   const source = manifest.artifacts?.sourceKit;
   if (!source || source.path !== 'corresponding-source.tar.gz') throw new Error('complete STEP corresponding-source kit is missing from manifest');
-  try { await access(join(vendor, safe(source.path))); } catch { await buildSource(); }
+  try { await access(join(vendor, safe(source.path))); } catch { if (requireSourceKit) throw new Error('verified reuse requires a staged STEP source kit; reconstruction is disabled'); await buildSource(); }
   const checked = async (spec, withSize = true) => {
     const path = safe(spec.path); const bytes = await readFile(join(vendor, path));
     if (sha256(bytes) !== spec.sha256 || (withSize && bytes.length !== spec.bytes)) throw new Error(`STEP converter integrity mismatch: ${path}`);
@@ -81,6 +81,6 @@ export async function prepareStepAssets({ repo = root, vendor = join(repo, 'vend
   return manifest;
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const manifest = await prepareStepAssets();
+  const manifest = await prepareStepAssets({ requireSourceKit: process.env.FEMLAB_REQUIRE_STEP_SOURCE_KIT === '1' });
   console.log(`STEP converter/source kit checked and prepared: ${manifest.version}`);
 }
