@@ -679,6 +679,48 @@ Sanitized source-bound evidence and the independent cleanup audit are retained a
 `599-partition-staging-backend-cleanup-f6c61ab5.json` under the operator directory
 `/Users/anderhaf/.codex/tmp/fem-lab-triage-802/`.
 
+
+### Cloud choice and downloaded revision acceptance, 17 October 2026
+
+Fresh deployed SDK acceptance completed in 65.0 seconds, with its receipt written
+at 05:38:58 UTC (07:38 Oslo), against client
+`cabb59cb36cf50a3a9cea2742e13c60bd2459ccc` and Hosting release
+`1792215451467000`. The API remained `femlab-api-re31c2aa4-f5ec22ef`.
+The independent clean driver was `12bfb69d53be4365c149252e2e3ea874989b45f3`,
+with unchanged test SHA-256
+`0660f26eb3c10f0bd068e990d1dcee166a4e333f4b325138686b4c4c98c82265`.
+
+Private sync, same-project cancellation recovery, logout isolation, anonymous
+recovery, zero signup/reopened credits, owned exports and durable deletion passed.
+Independent backend logs confirm two exports at 05:38:25 UTC
+(`femlab-recover-mvfqm`) and two deletions at 05:38:51 UTC
+(`femlab-recover-z9dcc`), with zero pending or failed operations. Both old tokens
+returned 401. Temporary fixtures/token state were removed and the 390px zero-credit
+account panel was inspected. AI remained disabled with zero monetary caps; no
+email, generation, credit grant or payment occurred.
+
+This client corrects two reproduced bugs in
+[#805](https://github.com/andeplane/fem-lab/issues/805) and
+[#806](https://github.com/andeplane/fem-lab/issues/806): obsolete sync outcomes
+cannot undo an explicit cloud choice, and an uncached open adopts the revision
+and name of its verified download. On home-mini, six new sync counterexamples
+failed before correction, and all 50 sync tests pass afterward. The old source
+also failed the real UI delayed-response case and two uncached-open browser cases;
+all seven cloud cases now pass with zero retries. All 1,856 app tests pass, with
+five existing paid-test skips, as do types, codegen and documentation checks.
+
+Both fresh client artifacts passed all 11 build/linkage/size/documentation checks
+and retain the 27 inspected viewer thumbnails. All 129 backend inputs and a fresh
+service bundle match the existing successful D4 image. Normal CI `39006460100`
+and full release `39006460135` are still running at this checkpoint. The previous
+F6 candidate remains withdrawn; production traffic has not changed.
+
+The deployed smoke does not execute natural offline A → B → A or delayed-response
+ordering and does not establish real owned-account production acceptance.
+Custom-sender delivery and final current-head CI remain separate gates. Sanitized
+evidence is retained as `599-partition-staging-evidence-cabb59cb.json` and
+`599-partition-staging-backend-cleanup-cabb59cb.json` in the operator directory.
+
 ## Remaining release gates
 
 - Resolve production email Spam placement/custom-sender deliverability in #710, then
