@@ -251,6 +251,7 @@ jobs:
       - run: npm run test -w packages/evals
       - run: npm run test -w packages/service
       - run: npm run build -w packages/service
+      - run: node tools/test-service-build.mjs
       # The MCP server runs the Node wasm build from the `wasm` job's artifact.
       - run: npm run test -w packages/mcp
       - run: npm run build -w packages/mcp
