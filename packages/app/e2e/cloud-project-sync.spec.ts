@@ -122,3 +122,32 @@ test('cancellation keeps one owned cloud project and restores its recovered revi
   const recovered=(await projects(other)).find(row=>row.name==='cloud cancellation')!;await other.evaluate(id=>window.fem.dispatch({cmd:'project.open',id}),recovered.id);
   expect(await other.evaluate(()=>window.fem.query.model())).toMatchObject({name:'acknowledged cloud recovery',bodies:[expect.objectContaining({name:'recovered-box'})]});await second.close();
 });
+
+test('a late upload rejection cannot reopen an explicitly restored cloud version',async({page,browser})=>{
+  const server=new CloudFixtureServer();await server.install(page.context());await page.addInitScript(()=>localStorage.setItem('femlab.tour.dismissed','1'));await page.goto('./');await ready(page);await identify(page,'fixture-A');
+  await page.evaluate(()=>window.fem.dispatch({cmd:'project.new',name:'late response project'}));
+  await page.evaluate(()=>window.fem.dispatch({cmd:'model.setName',name:'initial cloud model'}));
+  await page.evaluate(()=>window.fem.dispatch({cmd:'project.save'}));await page.evaluate(()=>window.fem.dispatch({cmd:'account.syncProjects'}));
+  await expect.poll(()=>server.modelName('fixture-A','late response project')).toBe('initial cloud model');
+  const second=await browser.newContext();await server.install(second);const other=await second.newPage();await other.addInitScript(()=>localStorage.setItem('femlab.tour.dismissed','1'));await other.goto(page.url());await ready(other);await identify(other,'fixture-A');
+  const remote=(await projects(other)).find(row=>row.name==='late response project')!;await other.evaluate(id=>window.fem.dispatch({cmd:'project.open',id}),remote.id);
+  let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});let held=false;
+  await page.route('**/__cloud_fixture/v1/projects/uploads/*/commit',async route=>{if(!held){held=true;await gate;}await server.route(route);});
+  try{
+    await page.evaluate(()=>window.fem.dispatch({cmd:'model.setName',name:'superseded browser model'}));await page.evaluate(()=>window.fem.dispatch({cmd:'project.save'}));await expect.poll(()=>held).toBe(true);
+    await other.evaluate(()=>window.fem.dispatch({cmd:'model.setName',name:'explicitly chosen cloud model'}));await other.evaluate(()=>window.fem.dispatch({cmd:'project.save'}));await other.evaluate(()=>window.fem.dispatch({cmd:'account.syncProjects'}));
+    await expect.poll(()=>server.modelName('fixture-A','late response project')).toBe('explicitly chosen cloud model');
+    const revision=[...server.owners.get('fixture-A')!.values()][0]!.project.revision;
+    const refreshing=page.evaluate(async()=>{try{await window.fem.dispatch({cmd:'account.syncProjects'});return null;}catch(error){return (error as {code?:string}).code??String(error);}});
+    await page.evaluate(()=>window.fem.dispatch({cmd:'panel.toggle',panel:'projects',open:true}));const row=page.locator('.recent').filter({hasText:'late response project'}).first();
+    await expect(row).toContainText('Choose a version');await row.getByRole('button',{name:'Use cloud version',exact:true}).click();
+    await expect.poll(()=>page.evaluate(()=>window.fem.query.model())).toMatchObject({name:'explicitly chosen cloud model'});
+    await page.evaluate(()=>window.fem.dispatch({cmd:'panel.toggle',panel:'projects',open:true}));
+    const rejected=page.waitForResponse(response=>/\/uploads\/[^/]+\/commit$/.test(response.url())&&response.status()===409);release();await rejected;expect(await refreshing).toBe('session.expired');
+    await expect(row).toContainText('Synced');await expect(row).not.toContainText('Choose a version');
+    expect((await page.evaluate(()=>window.fem.query.model())).name).toBe('explicitly chosen cloud model');
+    expect([...server.owners.get('fixture-A')!.values()][0]!.project.revision).toBe(revision);
+    await page.evaluate(()=>window.fem.dispatch({cmd:'model.setName',name:'edit after cloud choice'}));await page.evaluate(()=>window.fem.dispatch({cmd:'project.save'}));await page.evaluate(()=>window.fem.dispatch({cmd:'account.syncProjects'}));
+    await expect.poll(()=>server.modelName('fixture-A','late response project')).toBe('edit after cloud choice');await expect(row).toContainText('Synced');expect(server.owners.get('fixture-A')!.size).toBe(1);
+  }finally{release();await second.close();}
+});

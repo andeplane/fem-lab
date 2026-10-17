@@ -556,3 +556,117 @@ describe('listed pending commits before receipt replay', () => {
     expect((await f.storage('A').read('local'))?.cloud?.upload?.key).toBe('recorded-operation');
   });
 });
+
+describe('late failures after an explicit cloud choice', () => {
+  it('does not reopen a resolved conflict when the replaced upload is rejected later', async () => {
+    const f = setup(); const gate = deferred<void>();
+    const base = remote(); const chosen = remote({ revision: '2', name: 'Chosen cloud version' });
+    await f.seed(local('local', { cloud: { remote: base, dirty: true, deleted: false } }));
+    f.remotes.set('A', [base]); f.open.add('A/local');
+    f.upload.mockImplementationOnce(async () => {
+      await gate.promise;
+      throw new CloudProjectError(409, 'project.conflict', 'The older upload lost its revision.', chosen);
+    });
+    f.activate();
+    try {
+      await vi.waitFor(() => expect(f.upload).toHaveBeenCalledOnce());
+      f.remotes.set('A', [chosen]); const refreshing = f.controller.refresh();
+      await vi.waitFor(() => expect(f.controller.current.projects.local?.phase).toBe('conflict'));
+      const prepared = await f.controller.prepareOpen('local', true);
+      expect(prepared.remote).toEqual(chosen);
+      const repository = new ProjectRepository(f.storage('A'), () => 'explicit-cloud-choice');
+      await repository.claim(prepared.record.meta!, snapshot(), prepared.record, {
+        artifact: prepared.bytes, artifactTag: 'chosen-cloud-artifact',
+        cloud: { remote: chosen, dirty: false, deleted: false }, restoreDeleted: true,
+      });
+      const resolved = (await f.storage('A').read('local'))!;
+      expect(resolved.cloud).toEqual({ remote: chosen, dirty: false, deleted: false });
+      gate.resolve(undefined); await refreshing; await f.settled();
+      expect(await f.storage('A').read('local')).toEqual(resolved);
+      expect(f.controller.current.projects.local?.phase).toBe('synced');
+      expect(f.upload).toHaveBeenCalledOnce();
+      expect(await f.storage('B').scan()).toEqual([]);
+    } finally { gate.resolve(undefined); }
+  });
+});
+
+describe('late shared sync outcomes after restoration', () => {
+  async function choose(f:ReturnType<typeof setup>, chosen:CloudProject):Promise<ProjectRecord> {
+    const prepared=await f.controller.prepareOpen('local',true);
+    expect(prepared.remote).toEqual(chosen);
+    const project=prepared.record.meta??{...meta('local'),name:chosen.name};
+    await new ProjectRepository(f.storage('A'),()=> 'chosen-generation').claim(project,snapshot(),prepared.record,{
+      artifact:prepared.bytes,artifactTag:'chosen-artifact',cloud:{remote:chosen,dirty:false,deleted:false},restoreDeleted:true,
+    });
+    return (await f.storage('A').read('local'))!;
+  }
+  it('does not publish an obsolete offline failure over a clean chosen cloud version',async()=>{
+    const f=setup(),gate=deferred<void>(),base=remote(),chosen=remote({revision:'2'});
+    await f.seed(local('local',{cloud:{remote:base,dirty:true,deleted:false}}));f.remotes.set('A',[base]);
+    f.upload.mockImplementationOnce(async()=>{await gate.promise;throw new CloudProjectError(0,'project.offline','Old request lost its connection.');});
+    f.activate();
+    try{
+      await vi.waitFor(()=>expect(f.upload).toHaveBeenCalledOnce());f.remotes.set('A',[chosen]);const refresh=f.controller.refresh();
+      await vi.waitFor(()=>expect(f.controller.current.projects.local?.phase).toBe('conflict'));
+      const saved=await choose(f,chosen);gate.resolve(undefined);await refresh;await f.settled();
+      expect(await f.storage('A').read('local')).toEqual(saved);expect(f.controller.current.projects.local?.phase).toBe('synced');
+    }finally{gate.resolve(undefined);}
+  });
+  it('does not reopen a cloud choice when the replaced deletion is rejected later',async()=>{
+    const f=setup(),gate=deferred<void>(),base=remote(),chosen=remote({revision:'2'});
+    await f.seed(local('local',{meta:null,cloud:{remote:base,dirty:true,deleted:true}}));f.remotes.set('A',[base]);
+    f.remove.mockImplementationOnce(async()=>{await gate.promise;throw new CloudProjectError(409,'project.conflict','Old delete lost its revision.',chosen);});
+    f.activate();
+    try{
+      await vi.waitFor(()=>expect(f.remove).toHaveBeenCalledOnce());f.remotes.set('A',[chosen]);const refresh=f.controller.refresh();
+      await vi.waitFor(()=>expect(f.controller.current.projects.local?.phase).toBe('conflict'));
+      const saved=await choose(f,chosen);gate.resolve(undefined);await refresh;await f.settled();
+      expect(await f.storage('A').read('local')).toEqual(saved);expect(f.controller.current.projects.local?.phase).toBe('synced');
+      expect(f.upload).not.toHaveBeenCalled();
+    }finally{gate.resolve(undefined);}
+  });
+  it('preserves a restored artifact as a conflict when its older deletion actually completes',async()=>{
+    const f=setup(),gate=deferred<CloudProject>(),base=remote(),deleted=remote({revision:'2',deletedAt:time,bytes:0});
+    await f.seed(local('local',{meta:null,cloud:{remote:base,dirty:true,deleted:true}}));f.remotes.set('A',[base]);
+    f.remove.mockImplementationOnce(()=>gate.promise);f.activate();
+    try{
+      await vi.waitFor(()=>expect(f.remove).toHaveBeenCalledOnce());
+      const saved=await choose(f,base);f.remotes.set('A',[deleted]);gate.resolve(deleted);await f.settled();
+      expect(await f.storage('A').read('local')).toEqual({...saved,cloud:{...saved.cloud!,conflict:deleted}});
+      expect(f.controller.current.projects.local).toMatchObject({phase:'conflict',remoteDeleted:true,deleted:false});
+      expect(f.upload).not.toHaveBeenCalled();expect(f.remove).toHaveBeenCalledOnce();
+    }finally{gate.resolve(deleted);}
+  });
+  it('keeps a newer listed conflict when an earlier rejection describes an older revision',async()=>{
+    const f=setup(),gate=deferred<void>(),base=remote(),rejected=remote({revision:'2'}),latest=remote({revision:'3'});
+    await f.seed(local('local',{cloud:{remote:base,dirty:true,deleted:false}}));f.remotes.set('A',[base]);
+    f.upload.mockImplementationOnce(async()=>{await gate.promise;throw new CloudProjectError(409,'project.conflict','Earlier rejected revision.',rejected);});
+    f.activate();
+    try{
+      await vi.waitFor(()=>expect(f.upload).toHaveBeenCalledOnce());f.remotes.set('A',[latest]);const refresh=f.controller.refresh();
+      await vi.waitFor(()=>expect(f.controller.current.projects.local?.phase).toBe('conflict'));
+      gate.resolve(undefined);await refresh;await f.settled();
+      expect((await f.storage('A').read('local'))?.cloud).toMatchObject({remote:base,conflict:latest,dirty:true});
+      expect((await f.storage('A').read('local'))?.artifact).toEqual(new Uint8Array([1,2,3]));
+      await f.controller.flush();expect(f.upload).toHaveBeenCalledOnce();
+    }finally{gate.resolve(undefined);}
+  });
+  it('does not start an obsolete deletion when restoration finishes before reservation',async()=>{
+    const f=setup(),base=remote(),storage=f.storage('A');let inject=true;let saved:ProjectRecord|undefined;
+    await f.seed(local('local',{meta:null,cloud:{remote:base,dirty:true,deleted:true}}));f.remotes.set('A',[base]);
+    f.env.storage=owner=>owner==='A'?{...storage,read:async id=>{
+      const stale=await storage.read(id);
+      if(inject){
+        inject=false;
+        await new ProjectRepository(storage,()=> 'restored-before-reservation').claim(meta('local'),snapshot(),stale,{
+          artifact:new Uint8Array([8,8,8]),artifactTag:'chosen-before-delete',cloud:{remote:base,dirty:false,deleted:false},restoreDeleted:true,
+        });
+        saved=(await storage.read(id))!;
+      }
+      return stale;
+    }}:f.storage(owner);
+    f.activate();await f.settled();
+    expect(f.remove).not.toHaveBeenCalled();expect(await storage.read('local')).toEqual(saved);
+    expect(f.controller.current.projects.local?.phase).toBe('synced');
+  });
+});
