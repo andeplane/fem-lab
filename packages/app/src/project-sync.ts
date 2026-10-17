@@ -92,7 +92,7 @@ export class ProjectSync {
   private async run(actor:CloudActor):Promise<void>{
     const storage=this.env.storage(actor.uid);let synchronized=false;
     for(const row of await storage.scan()){
-      this.assert(actor);const value=cloud(row);if(!row.cloud||value.conflict||!value.dirty&&!value.upload)continue;
+      this.assert(actor);const value=cloud(row);if(!row.cloud||value.upload?.blocked||value.conflict&&!value.upload||!value.dirty&&!value.upload)continue;
       if(!this.env.online()){this.errors.set(row.id,{phase:'offline',message:'Saved in this browser. Cloud sync resumes when a connection returns.'});await this.publish(actor);continue;}
       try{await this.sync(actor,row.id);synchronized=true;this.errors.delete(row.id);}catch(error){
         if(!this.owns(actor))return;
@@ -131,17 +131,28 @@ export class ProjectSync {
   }
   private async sync(actor:CloudActor,id:string):Promise<void>{
     const storage=this.env.storage(actor.uid);let row=required(await storage.read(id));this.assert(actor);let value=cloud(row);
-    if(value.conflict)return;
+    // A listing may be our pending commit; only replay of its original key proves it.
+    if(value.upload?.blocked||value.conflict&&!value.upload)return;
     if(!value.upload&&value.deleted&&!value.remote){await storage.update(id,previous=>{const current=required(previous);return {...current,artifact:undefined,artifactTag:undefined,cloud:{...cloud(current),dirty:false}};});return;}
     if(!value.upload&&!value.deleted){
       if(row.artifactError)throw new Error(row.artifactError+' Browser Journal saved; cloud upload is paused.');
       if(!row.meta||!row.artifact||!row.artifactTag)throw new Error('The complete project snapshot is not available yet. Save the project again; local Journal recovery remains available.');
       const pending:PendingProjectUpload={key:this.env.nextId(),tag:row.artifactTag,name:row.meta.name,baseRevision:value.remote?.revision??null,...(value.remote?{projectId:value.remote.id}:{}),bytes:row.artifact.slice()};
-      row=await storage.update(id,previous=>{const current=required(previous);if(!current.meta||current.artifactTag!==pending.tag||current.meta.name!==pending.name)throw new FemError('session.conflict','a newer project save is waiting to sync','project');return {...current,cloud:{...cloud(current),upload:pending}};});value=cloud(row);
+      row=await storage.update(id,previous=>{const current=required(previous),fresh=cloud(current);if(fresh.upload||fresh.conflict)return current;if(!current.meta||current.artifactTag!==pending.tag||current.meta.name!==pending.name)throw new FemError('session.conflict','a newer project save is waiting to sync','project');return {...current,cloud:{...cloud(current),upload:pending}};});value=cloud(row);
     }
+    // Another controller can reserve an operation or observe a conflict during our read.
+    if(value.upload?.blocked||value.conflict&&!value.upload)return;
     if(value.upload){const pending=value.upload;
       this.errors.set(id,{phase:'syncing',message:'Uploading complete project…',done:0,total:pending.bytes.length});await this.publish(actor);
-      const remote=await this.env.api.upload(actor,{id:pending.projectId,name:pending.name,baseRevision:pending.baseRevision,key:pending.key,bytes:pending.bytes},(done,total)=>{if(this.owns(actor)){this.errors.set(id,{phase:'syncing',message:'Uploading complete project…',done,total});void this.publish(actor);}});this.assert(actor);
+      let remote:CloudProject;
+      try{
+      remote=await this.env.api.upload(actor,{id:pending.projectId,name:pending.name,baseRevision:pending.baseRevision,key:pending.key,bytes:pending.bytes},(done,total)=>{if(this.owns(actor)){this.errors.set(id,{phase:'syncing',message:'Uploading complete project…',done,total});void this.publish(actor);}});this.assert(actor);
+      }catch(error){
+        if(this.owns(actor)&&error instanceof CloudProjectError&&error.project){
+          await storage.update(id,previous=>{this.assert(actor);const current=required(previous),fresh=cloud(current),operation=fresh.upload;if(!operation||operation.key!==pending.key)return current;return {...current,cloud:{...fresh,upload:{...operation,blocked:true}}};});
+        }
+        throw error;
+      }
       row=await storage.update(id,previous=>{
         const current=required(previous),fresh=cloud(current);if(fresh.upload?.key!==pending.key)return current;
         // A reconnect listing may observe this commit before its receipt arrives.
@@ -151,6 +162,8 @@ export class ProjectSync {
       });value=cloud(row);
       await this.reconcileReceipt(actor,id,remote);
       row=required(await storage.read(id));this.assert(actor);value=cloud(row);if(value.conflict)return;
+      // Durable newer bytes may have been saved by a previous account epoch.
+      if(value.dirty)this.rerun=true;
     }
     if(value.deleted&&value.remote){
       const key=value.deleteKey??this.env.nextId();await storage.update(id,previous=>{const current=required(previous);return {...current,cloud:{...cloud(current),deleteKey:key}};});

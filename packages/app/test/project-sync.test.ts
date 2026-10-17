@@ -446,3 +446,113 @@ describe('durable account-owned project sync', () => {
     expect(await f.storage('A').read('local')).toEqual(original);
   });
 });
+
+describe('listed pending commits before receipt replay', () => {
+  const pendingRecord = (newer = false): ProjectRecord => local('local', {
+    artifact: new Uint8Array(newer ? [9, 8, 7] : [1, 2, 3]),
+    artifactTag: newer ? 'snapshot-2' : 'snapshot-1',
+    cloud: {
+      remote: remote({ name: 'Browser local' }), dirty: true, deleted: false,
+      upload: { key: 'recorded-operation', tag: 'snapshot-1', name: 'Browser local', projectId: REMOTE, baseRevision: '1', bytes: new Uint8Array([1, 2, 3]) },
+    },
+  });
+
+  it('replays a listed own commit before uploading a newer durable local snapshot after reload', async () => {
+    const f = setup(); const receipt = remote({ name: 'Browser local', revision: '2' });
+    await f.seed(pendingRecord(true)); f.remotes.set('A', [receipt]);
+    f.upload.mockImplementationOnce(async () => receipt);
+    f.activate();
+    await vi.waitFor(async () => expect((await f.storage('A').read('local'))?.cloud).toMatchObject({ remote: { revision: '3' }, dirty: false, upload: undefined, conflict: undefined }));
+    expect(f.upload).toHaveBeenCalledTimes(2);
+    expect(f.upload.mock.calls[0]![1]).toEqual({ id: REMOTE, name: 'Browser local', baseRevision: '1', key: 'recorded-operation', bytes: new Uint8Array([1, 2, 3]) });
+    expect(f.upload.mock.calls[1]![1]).toMatchObject({ id: REMOTE, baseRevision: '2', bytes: new Uint8Array([9, 8, 7]) });
+    expect(f.upload.mock.calls[1]![1].key).not.toBe('recorded-operation');
+    expect((await f.storage('A').scan()).filter(row => row.meta)).toHaveLength(1);
+    expect((await f.storage('A').read('local'))?.artifact).toEqual(new Uint8Array([9, 8, 7]));
+  });
+
+  it('resumes the original operation and newer edit when an A→B→A return lists the commit before its old receipt', async () => {
+    const f = setup(); const gate = deferred<CloudProject>(); const receipt = remote({ name: 'Browser local', revision: '2' });
+    await f.seed(pendingRecord()); f.remotes.set('A', [remote({ name: 'Browser local' })]);
+    f.upload.mockImplementationOnce(() => gate.promise); f.activate();
+    try {
+      await vi.waitFor(() => expect(f.upload).toHaveBeenCalledOnce());
+      f.remotes.set('A', [receipt]); f.activate('B', 2); f.activate('A', 3);
+      await vi.waitFor(async () => expect((await f.storage('A').read('local'))?.cloud?.conflict?.revision).toBe('2'));
+      f.offline();
+      await f.storage('A').update('local', previous => ({ ...previous!, artifact: new Uint8Array([9, 8, 7]), artifactTag: 'snapshot-2' }));
+      await f.controller.changed('A', 'local');
+      f.online(); const refreshing = f.controller.refresh(); gate.resolve(receipt); await refreshing;
+      await vi.waitFor(async () => expect((await f.storage('A').read('local'))?.cloud).toMatchObject({ remote: { revision: '3' }, dirty: false, upload: undefined, conflict: undefined }));
+      expect(f.upload).toHaveBeenCalledTimes(3);
+      expect(f.upload.mock.calls[0]![1]).toEqual(f.upload.mock.calls[1]![1]);
+      expect(f.upload.mock.calls[1]![1].key).toBe('recorded-operation');
+      expect(f.upload.mock.calls[2]![1]).toMatchObject({ id: REMOTE, baseRevision: '2', bytes: new Uint8Array([9, 8, 7]) });
+      expect(f.upload.mock.calls[2]![1].key).not.toBe('recorded-operation');
+      expect(await f.storage('B').scan()).toEqual([]);
+      expect((await f.storage('A').scan()).filter(row => row.meta)).toHaveLength(1);
+      expect(f.controller.current.uid).toBe('A');
+    } finally { gate.resolve(receipt); }
+  });
+
+  it('keeps a genuinely newer listed remote revision in conflict after replaying the exact older receipt', async () => {
+    const f = setup(); const receipt = remote({ name: 'Browser local', revision: '2' }); const later = remote({ name: 'Browser local', revision: '3' });
+    const saved = pendingRecord(true); await f.seed(saved); f.remotes.set('A', [later]);
+    f.upload.mockImplementationOnce(async () => receipt); f.activate();
+    await vi.waitFor(() => expect(f.upload).toHaveBeenCalledOnce()); await f.settled();
+    expect((await f.storage('A').read('local'))?.cloud).toMatchObject({ remote: receipt, conflict: later, dirty: true, upload: undefined });
+    expect((await f.storage('A').read('local'))?.artifact).toEqual(saved.artifact);
+    expect(f.remotes.get('A')).toEqual([later]); expect(f.controller.current.projects.local?.phase).toBe('conflict');
+    await f.controller.flush(); expect(f.upload).toHaveBeenCalledOnce();
+    expect(f.upload.mock.calls[0]![1].key).toBe('recorded-operation');
+  });
+
+  it('joins one atomically reserved operation when two controllers find the same unsynced project', async () => {
+    const f = setup(); const second = new ProjectSync(f.env); controllers.push(second);
+    const gate = deferred<CloudProject>(); const receipt = remote({ name: 'Browser local' });
+    await f.seed(local('local', { cloud: { remote: null, dirty: true, deleted: false } }));
+    f.upload.mockImplementation(() => gate.promise); f.activate(); f.activate('A', 1, second);
+    try {
+      await vi.waitFor(() => expect(f.upload).toHaveBeenCalledTimes(2));
+      expect(f.upload.mock.calls[0]![1]).toEqual(f.upload.mock.calls[1]![1]);
+      expect((await f.storage('A').read('local'))?.cloud?.upload?.key).toBe(f.upload.mock.calls[0]![1].key);
+      f.remotes.set('A', [receipt]); gate.resolve(receipt);
+      await vi.waitFor(async () => expect((await f.storage('A').read('local'))?.cloud).toMatchObject({ remote: receipt, dirty: false, upload: undefined }));
+      expect((await f.storage('A').scan()).filter(row => row.meta)).toHaveLength(1);
+    } finally { gate.resolve(receipt); }
+  });
+
+  it('does not reserve a new operation if a conflict arrives between reading and reserving the snapshot', async () => {
+    const f = setup(); const base = remote(); const changed = remote({ revision: '2', name: 'Another browser' });
+    const storage = f.storage('A'); let inject = true;
+    f.env.storage = owner => owner === 'A' ? {
+      ...storage,
+      read: async id => {
+        const stale = await storage.read(id);
+        if (inject) {
+          inject = false;
+          await storage.update(id, previous => ({ ...previous!, cloud: { ...previous!.cloud!, conflict: changed } }));
+          f.remotes.set('A', [changed]);
+        }
+        return stale;
+      },
+    } : f.storage(owner);
+    await f.seed(local('local', { cloud: { remote: base, dirty: true, deleted: false } })); f.remotes.set('A', [base]);
+    f.upload.mockRejectedValue(new CloudProjectError(409, 'project.conflict', 'Changed remotely.', changed));
+    f.activate(); await f.settled();
+    expect(f.upload).not.toHaveBeenCalled();
+    expect((await storage.read('local'))?.cloud).toEqual({ remote: base, dirty: true, deleted: false, conflict: changed });
+    expect((await storage.read('local'))?.artifact).toEqual(new Uint8Array([1, 2, 3]));
+  });
+
+  it('preserves a concurrent pending operation when local activation supplies no cloud replacement', async () => {
+    const f = setup(); const original = local('local', { cloud: { remote: remote(), dirty: true, deleted: false } });
+    await f.seed(original); const expected = (await f.storage('A').read('local'))!;
+    const pending = { ...original.cloud!, upload: pendingRecord().cloud!.upload };
+    await f.storage('A').update('local', previous => ({ ...previous!, cloud: pending }));
+    const repo = new ProjectRepository(f.storage('A'), () => 'opened-generation');
+    await repo.claim(original.meta!, snapshot(), expected, { artifact: original.artifact, artifactTag: original.artifactTag, cloud: undefined });
+    expect((await f.storage('A').read('local'))?.cloud).toEqual(pending);
+    expect((await f.storage('A').read('local'))?.cloud?.upload?.key).toBe('recorded-operation');
+  });
+});

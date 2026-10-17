@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 async function ready(page:Page){await page.waitForFunction(()=>Boolean(window.fem),undefined,{timeout:60000});await page.waitForFunction(async()=>Boolean((await window.fem.registry.query({query:'query.workspaceStatus'}) as {ready:boolean}).ready));}
 async function identify(page:Page,uid:string|null){await page.evaluate(uid=>window.cloudFixture.identify(uid),uid);await expect.poll(()=>page.evaluate(async()=>{const account=await window.fem.registry.query({query:'query.account'}) as {uid:string|null;status:string};return {uid:account.uid,status:account.status};}).catch(()=>null)).toEqual({uid,status:uid?'active':'anonymous'});await ready(page);}
 async function projects(page:Page){return page.evaluate(async()=>(await window.fem.registry.query({query:'query.projects'}) as {projects:{id:string;name:string}[]}).projects);}
-test('account cloud saves preserve full solved artifacts, exact files, offline edits and private browser partitions',async({page,browser})=>{
+test('account cloud saves preserve full solved artifacts, exact files, offline edits and private browser partitions',async({page,browser},testInfo)=>{
   test.setTimeout(240000);const server=new CloudFixtureServer();await server.install(page.context());await page.addInitScript(()=>localStorage.setItem('femlab.tour.dismissed','1'));await page.goto('./');await ready(page);
   const anonymous=await page.evaluate(()=>window.fem.dispatch({cmd:'project.new',name:'browser original'})) as {id:string};await page.evaluate(()=>window.fem.dispatch({cmd:'geometry.addBox',name:'guest-only',size:['1 m','1 m','1 m']}));await page.evaluate(()=>window.fem.dispatch({cmd:'project.save'}));
   await identify(page,'fixture-A');expect(await projects(page)).toEqual([]);expect(server.owners.get('fixture-A')?.size??0).toBe(0);
@@ -25,7 +25,21 @@ test('account cloud saves preserve full solved artifacts, exact files, offline e
   await identify(page,'fixture-A');await page.evaluate(id=>window.fem.dispatch({cmd:'project.open',id}),beam.id);expect(await page.evaluate(()=>window.fem.registry.query({query:'query.results'}))).toEqual(records);
   await page.context().setOffline(true);await page.evaluate(()=>window.fem.dispatch({cmd:'model.setName',name:'offline A edit'}));await page.evaluate(()=>window.fem.dispatch({cmd:'project.save'}));
   await page.context().setOffline(false);await page.evaluate(()=>window.fem.dispatch({cmd:'account.syncProjects'}));
-  await expect.poll(()=>server.modelName('fixture-A','cloud beam')).toBe('offline A edit');
+  try{await expect.poll(()=>server.modelName('fixture-A','cloud beam')).toBe('offline A edit');}
+  catch(error){
+    try{
+      const local=await page.evaluate(async()=>{
+        const {indexedDbAtomicProjects}=await import(/* @vite-ignore */new URL('src/project-repository.ts',document.baseURI).href);
+        const {partitionedAtomicProjects}=await import(/* @vite-ignore */new URL('src/project-partitions.ts',document.baseURI).href);
+        const {decodeProjectArtifact}=await import(/* @vite-ignore */new URL('src/project-artifact.ts',document.baseURI).href);
+        const rows:import('../src/project-repository').ProjectRecord[]=await partitionedAtomicProjects(indexedDbAtomicProjects(indexedDB),'fixture-A').scan();
+        const names=(bytes:Uint8Array|undefined)=>{if(!bytes)return null;try{const artifact=decodeProjectArtifact(bytes);return (artifact.engine as import('@femlab/registry').PortableProject).file.journal.entries.flatMap(entry=>{const cmd=entry.cmd as {cmd:string;name?:unknown};return cmd.cmd==='model.setName'||cmd.cmd==='model.new'?[cmd.name]:[];});}catch(cause){return {decodeError:String(cause)};}};
+        return {modelName:(await window.fem.query.model()).name,online:navigator.onLine,rows:rows.map(row=>({id:row.id,generation:row.generation,version:row.version,name:row.meta?.name,artifactTag:row.artifactTag,artifactError:row.artifactError,saveSequence:row.saveSequence,modelNames:names(row.artifact),cloud:row.cloud?{remote:row.cloud.remote,dirty:row.cloud.dirty,deleted:row.cloud.deleted,conflict:row.cloud.conflict,upload:row.cloud.upload?{key:row.cloud.upload.key,tag:row.cloud.upload.tag,name:row.cloud.upload.name,projectId:row.cloud.upload.projectId,baseRevision:row.cloud.upload.baseRevision,bytes:row.cloud.upload.bytes.length,modelNames:names(row.cloud.upload.bytes)}:null}:null}))};
+      });
+      await testInfo.attach('offline-sync-state',{contentType:'application/json',body:JSON.stringify({local,remote:[...server.owners.get('fixture-A')?.values()??[]].map(row=>row.project),remoteModelName:server.modelName('fixture-A','cloud beam'),writes:server.writes,operationKeys:[...server.operations.keys()]},null,2)});
+    }catch(diagnosticError){await testInfo.attach('offline-sync-diagnostic-error',{contentType:'text/plain',body:String(diagnosticError)});}
+    throw error;
+  }
   const afterOfflineRecords=await page.evaluate(()=>window.fem.registry.query({query:'query.results'}));
   const second=await browser.newContext({viewport:{width:390,height:844}});await server.install(second);const other=await second.newPage();await other.addInitScript(()=>localStorage.setItem('femlab.tour.dismissed','1'));await other.goto('http://localhost:'+new URL(page.url()).port+'/fem-lab/');await ready(other);await identify(other,'fixture-A');
   await expect.poll(async()=>(await projects(other)).some(row=>row.name==='cloud beam')).toBe(true);const remote=(await projects(other)).find(row=>row.name==='cloud beam')!;
