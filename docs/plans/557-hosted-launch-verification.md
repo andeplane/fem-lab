@@ -589,6 +589,49 @@ This is staging acceptance. Current exact-head GitHub validation, production
 owned-account browser verification and actual custom-sender delivery remain
 outstanding. Prior dated source-specific results above remain historical.
 
+
+### Production package correction and current staging acceptance, 17 October 2026
+
+At 02:54:29 UTC (04:54 Oslo), the expanded smoke passed against current client
+`d4d556988783b4a2cd5b51aefb298e73dac33bd0`, Hosting release
+`1792205332291000`, with a 65.0-second runner. Clean verification source:
+`08e3e8ce624e4aff02ae53ae3797dd5339ffa461`; unchanged test SHA-256:
+`0660f26eb3c10f0bd068e990d1dcee166a4e333f4b325138686b4c4c98c82265`.
+The API remained `femlab-api-re31c2aa4-f5ec22ef`.
+
+Cancellation preserved the original browser project and the same single cloud
+project, and its recovered edit advanced the remote revision. Private sync, logout
+isolation, anonymous recovery, zero signup/reopened credits, owner account-record
+exports and durable deletion passed with two disposable SDK accounts. Both old
+tokens returned 401. Independent backend logs recorded two completed exports at
+02:54:02 UTC and two identity deletions at 02:54:20 UTC, with zero pending or failed
+operations. Private fixtures/token state were removed and the 390px account view
+was inspected. AI stayed disabled and monetary caps remained zero. No email,
+generation, credit grant or payment occurred.
+
+The same source corrects the server-only production package build in
+[#803](https://github.com/andeplane/fem-lab/issues/803): runtime sources retain all
+strict compiler settings, while the ordinary workspace type check still includes
+integration tests. A meaningful isolated-package build failed before this correction
+and passes afterward; CI now runs it. Account Command descriptions also match the
+private cache and metadata-only account export behavior described in the guide.
+All 14 current-source JavaScript/type/documentation checks passed on home-mini.
+Service tests here passed 109 cases and skipped 164 externally configured cases;
+MCP passed all 86. Both public builds passed 18 artifact checks and include all 27
+fresh viewer thumbnails. The new actual container build also passed: Cloud Build
+`45cd84dc-287f-4541-bd20-a32ddf772114`, immutable image digest
+`sha256:fd6693669c100ad12faf009dee3095d1cd30a252571e797d7201d535682dde6d`.
+All 129 service inputs and the committed source archive match the mini proof.
+This is a private image candidate; production traffic has not changed.
+
+Sanitized evidence is retained at
+`/Users/anderhaf/.codex/tmp/fem-lab-triage-802/599-partition-staging-evidence-d4d55698.json`;
+its independent cleanup audit is
+`/Users/anderhaf/.codex/tmp/fem-lab-triage-802/599-partition-staging-backend-cleanup-d4d55698.json`.
+Current-head normal/full-release GitHub workflows, real owned-account production
+acceptance and custom-sender delivery remain outstanding. Earlier dated browser
+and staging results above retain their original source bindings.
+
 ## Remaining release gates
 
 - Resolve production email Spam placement/custom-sender deliverability in #710, then
