@@ -744,10 +744,41 @@ browser acceptance remains outstanding. Application/API traffic was not promoted
 by the sender change. Sanitized evidence is `719-owner-delivery-proof.json` and
 `719-sender-applied-20261017.json` in the operator evidence directory.
 
+
+### Promoted production and owner sign-out return, 17 October 2026
+
+Client source `cfea8325` was promoted at 08:55 UTC with API revision
+`femlab-api-cfea8325-20261017` and Hosting release
+`sites/femlab-app/releases/1792227305854000`. Billing configuration, project
+storage, runtime identity and existing rollback revisions were preserved.
+The public index SHA-256 remained
+`31ca74bb41127347e0742d7b1a5b89d6e24d81805ab45f18248cf91fc2386aa5`
+at the later public readback, with the required cross-origin isolation headers.
+
+Actual native Chrome Google sign-in used the existing owner account. Two private
+QA projects synchronized, including a portable project with retained `result-1`
+and the original 4,430-byte input and 4,639-byte completed-output files. A chosen
+cloud revision was downloaded as an independent bundle oracle. Sign-out returned
+to the original anonymous browser Model and hid both private projects; Google
+sign-in returned to the same owner and both synced projects. The portable project
+reopened at Model revision 12 with the chosen name, original result revision 11
+and unchanged 58 ms CPU-direct solve record, without another solve. Both retained
+file download controls were present. The returned Result was rendered and the
+native Chrome screenshot was inspected.
+
+This return used the existing browser storage. It does not establish a fresh
+cloud artifact download into empty storage. The separate Firebase Hosting origin
+was stopped at Chrome's lookalike-site warning and requires user takeover;
+the warning was not bypassed. The fresh-storage owner recovery gate remains open.
+Sanitized evidence is `owner-production-775/signout-return-proof.json`,
+`owner-return-recovered.txt` and `owner-return-recovered.png` in the operator
+runtime-evidence directory. No further email, AI generation, grant or payment
+was performed in this check.
+
 ## Remaining release gates
 
-- Complete #775's production owned-account browser acceptance; the new staging
-  result above does not substitute for that check.
+- Complete #775's production fresh-storage owned-account artifact recovery;
+  sign-out return in existing browser storage does not substitute for that check.
 - Complete required exact-head CI and review for the final three-file verification
   source. Recorded deployed acceptance is separate from that source gate.
 
