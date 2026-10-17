@@ -505,6 +505,9 @@ browser acceptance and #710's actual sender delivery remain separate release gat
 Staging AI stays disabled. Any future real supplier QA needs the explicit isolated,
 bounded procedure in #669; this smoke cannot open that window. Final-domain TLS, the
 227-second stream, cancellation, SQL restore and traffic rollback have dated evidence.
-The broader engineering-answer evaluation remains with #297's owner; the recorded
-transport, accounting and registry checks do not establish numerical answer quality
-or a new physics Benchmark.
+The separate engineering-answer evaluation in #297 is now merged. Its frozen
+Sol 6.1 run completed twenty cases on both real hosts with 18/20 passing per host;
+the four catalogue-completeness failures remain scored and tracked in #793. See the
+[dated evaluation report](../evaluations/assistant-20-problems-results-2026-10-16.md).
+These account-flow checks do not extend that CPU/direct-provider result to every
+model or engineering task, and they do not establish a new physics Benchmark.
