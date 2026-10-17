@@ -3391,7 +3391,15 @@ Final-source real Metal verification passed all 22 active GPU tests and the
 unchanged 66k gate, including exact one/four-worker fields. Actual Chromium
 SwiftShader passed the dot kernel, both shell studies and the B1 cantilever
 through wasm/WebGPU. The complete CPU browser suite passed 255 tests with five
-existing mode-specific skips, and cold Pages bootstrap passed. Full-crate 100%
-coverage and software-GPU CI remain mandatory before merge. Historical failed
+existing mode-specific skips, and cold Pages bootstrap passed.
+
+A separate one-worker browser run of the same `[50,20,20]` grid passed on actual
+Chromium SwiftShader: 22,491 nodes, 20,000 incompatible-mode Hex8 elements,
+66,150 free equations, true f64 residual 5.422607126350388e-10 in eight
+corrections and tip displacement -0.00019029079207446805 m. The unchanged B1
+2% and .001 SI force/moment gates passed. This browser case supplies software-
+adapter correctness evidence without a timing assertion; it does not substitute
+for the native CI sibling's direct/one-four-worker gates. Full-crate 100%
+coverage and native lavapipe CI remain mandatory before merge. Historical failed
 stationary and unbalanced flexible runs remain numerical failures; the new
 spring counterexample records the rounding mechanism repaired.

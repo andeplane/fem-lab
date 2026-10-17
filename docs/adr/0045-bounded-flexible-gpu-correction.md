@@ -115,8 +115,16 @@ unchanged 66k physical/direct comparison with complete one/four-worker identity.
 Fresh Chromium SwiftShader execution passed both homogeneous/laminated shell
 studies, the dot kernel and B1 cantilever through the wasm/WebGPU host. The
 complete CPU browser suite passed 255 tests with five existing mode-specific
-skips; cold Pages bootstrap passed. Engine/geometry 100% coverage and fresh
-software-adapter CI are mandatory gates before merge. No general convergence,
+skips; cold Pages bootstrap passed.
+
+A separate one-worker Chromium SwiftShader run also solved the unchanged
+66,150-free-equation grid through the public wasm/WebGPU host. It reached true
+f64 residual 5.422607126350388e-10 in eight corrections, with tip displacement
+-0.00019029079207446805 m inside B1's 2% bound and all force/moment residuals
+below .001 in SI units. This is software-adapter correctness evidence only;
+it is neither a timing claim nor the native CI sibling's direct/one-four-worker
+comparison. Engine/geometry 100% coverage and fresh native lavapipe CI are
+mandatory gates before merge. No general convergence,
 speed, browser-capacity or larger-mesh claim follows from these cases.
 
 ## Primary references
