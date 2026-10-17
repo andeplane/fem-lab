@@ -523,6 +523,37 @@ the corresponding cleanup audit is
 (SHA-256 `abc4181e5c66fd9727b9a88332339430c549019e433255f8f17745dbeb12eca0`).
 Production owned-account acceptance and actual sender delivery remain separate gates.
 
+
+### Reconnect correction staging acceptance, 17 October 2026
+
+At 00:44:33 UTC (02:44 Oslo), the smoke passed against the corrected project-sync
+client `6051922801e131cfaaf6fc303cf9fb152192ddb0`, Hosting release
+`1792197773094000`. The runner completed in 65.3 seconds. Its clean verification
+source was `1a37299e6a1e0f4c831fb2654af12dc43bd93234`; the test SHA-256 remains
+`1a722a18c2c7bb54699b6546a11c295c59aa2d37dab3b2c2bca6a9c56e860705`.
+The API remained `femlab-api-re31c2aa4-f5ec22ef`.
+
+The client now reconciles a reconnect listing of its own committed upload when
+that upload's exact receipt arrives. Newer remote edits still require conflict
+resolution. A deterministic sync test failed before the correction and passed
+after it; the companion newer-remote case, all 38 sync tests, the full app suite
+and all three cloud browser cases also passed on home-mini.
+
+The deployed smoke again passed private project sync, account isolation, anonymous
+recovery, owned exports and durable deletion with two fresh disposable SDK accounts.
+Both old tokens returned 401. Backend logs independently recorded two completed
+exports at 00:44:02 UTC and two completed identity deletions at 00:44:27 UTC, with
+zero pending or failed operations. Private fixtures and token state were removed;
+the 390px account view was inspected. AI stayed disabled and every monetary cap
+remained zero. No email, generation, credit grant or payment occurred.
+
+Sanitized evidence is retained at
+`/Users/anderhaf/.codex/tmp/fem-lab-triage-802/599-partition-staging-evidence-60519228.json`;
+its cleanup audit is
+`/Users/anderhaf/.codex/tmp/fem-lab-triage-802/599-partition-staging-backend-cleanup-60519228.json`.
+This is staging acceptance. Production owned-account browser verification and actual
+custom-sender delivery remain outstanding.
+
 ## Remaining release gates
 
 - Resolve production email Spam placement/custom-sender deliverability in #710, then
