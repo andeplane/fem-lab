@@ -6,6 +6,8 @@ Local modeling, meshing and solving do not require an account or AI subscription
 
 Use the sign-in action on home or in the header. Choose Google or enter your email and open the newest sign-in link in the requesting browser. If the link opens elsewhere, complete the email prompt as needed. A completed login verifies account access; it does not automatically approve free eligibility or establish a unique person.
 
+Production sign-in emails come from `noreply@femlab.app`. If a message is missing, check Spam and use the newest link; sender authentication does not guarantee Inbox placement. Keep the private sign-in link out of bug reports.
+
 After sign-in, the home screen becomes your workspace overview, showing your account email and available plan/allowance information alongside local projects. Use the avatar/email control in the header to open your profile menu, then **Account & AI settings** for your identity, AI allowance, subscription and account records. **Sign out** ends hosted access without removing local projects.
 
 The account overview shows available, total and reserved credits, the allowance expiry and current billing status when those values have loaded. Refresh reads authoritative service state. Loading, a failed refresh or missing account data is not a zero-credit balance or proof of a free plan: read the status and retry the refresh before interpreting your allowance. A disabled claim or purchase button should be read with the accompanying status; repeated clicks or account recreation do not bypass it.
