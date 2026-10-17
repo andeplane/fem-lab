@@ -775,6 +775,48 @@ Sanitized evidence is `owner-production-775/signout-return-proof.json`,
 runtime-evidence directory. No further email, AI generation, grant or payment
 was performed in this check.
 
+
+### Frontend release after #706, 17 October 2026
+
+Frontend source `a19999906c17f529d377891de0bab193795c95e4` includes canonical
+main `afe17cc4` after #706. Every tracked input matches the combined source
+validated on home-mini. Client/service inputs still match `cfea8325`; Rust/build
+inputs match canonical main. Current-head [normal CI](https://github.com/andeplane/fem-lab/actions/runs/39033992042)
+and [strict release validation](https://github.com/andeplane/fem-lab/actions/runs/39033992073)
+passed, including all 16 strict jobs. Release publication was skipped. Fresh
+Linux GPU coverage has zero misses across 74,991 regions, 3,977 functions and
+35,411 lines. The actual llvmpipe/Vulkan 66,150-equation case passed at f64
+residual `5.422607126350388e-10`, below the unchanged `1e-8` limit.
+
+The staging frontend was published at 13:55:30 UTC as Hosting release
+`sites/femlab-app-staging/releases/1792245308705000`; production followed at
+13:56:05 UTC as `sites/femlab-app/releases/1792245345815000`. Nine served
+HTML/JavaScript/documentation/WASM files per environment match their prepared
+hashes and intended isolation headers. The production index SHA-256 is
+`cb8a31721869bb9c6d73a21140e5f3ac88628912295edddcfbc140a04de3aa52`;
+the staging index is
+`facad0ba3d9f79a14e532064d8b87fffff1222b339cb71233bd8fe13e46d19b2`.
+All 129 backend inputs and the service bundle match the existing deployed
+image, so neither backend was redeployed. API/recovery specifications, traffic,
+billing configuration and storage settings were preserved, and readiness passed.
+
+Fresh anonymous Chromium checks then passed on both deployed origins. Each
+browser document matched its prepared index hash, and actual engine capabilities
+reported one and four threads in the corresponding isolated contexts. Three
+analytical axial-bar refinements (2, 4 and 8 elements) matched displacement,
+stress and reaction closed forms. Complete field bytes and Journal hashes were
+identical across thread counts, with zero uncaught errors. The rendered solved
+bar screenshots were inspected; these runs do not claim full visual acceptance.
+The mini job exited zero and both result/screenshot transfers were verified.
+
+These new checks used anonymous fresh contexts, with no sign-in, email, AI
+generation, credit grant or payment. They do not establish #775's fresh-storage
+owner cloud-artifact recovery. The earlier existing-profile owner return keeps
+its original `cfea8325` source binding, and the explicit fresh-owner gate remains
+open. Sanitized operator proofs are `789-final-ci-audit-a1999990.json`,
+`774-runtime/frontend-a1999990/published.json` and
+`789-deployed-browser-a1999990/proof.json`.
+
 ## Remaining release gates
 
 - Complete #775's production fresh-storage owned-account artifact recovery;
