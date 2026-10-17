@@ -354,6 +354,8 @@ FEMLAB_LIVE_OTHER_LOGIN_PATH=<second-private-local-action-link-json> \
 npm exec -w packages/app -- playwright test --config=playwright.live.config.ts
 ```
 
+The private-project check also cancels its signed-in worker after an acknowledged edit, verifies the recovered Model and original browser project identity, and waits for that edit to reach the same single cloud project. All credit, isolation, export and deletion assertions remain in place.
+
 The test is staging-only, requires two disposable addresses, disables traces/video and
 automatic retries, and never prints an ID token, auth link or signed export URL. It sends
 no real email, generates no AI and creates no Stripe charge. The real recovery job builds

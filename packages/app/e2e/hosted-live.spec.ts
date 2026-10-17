@@ -2,7 +2,7 @@ import {execFileSync} from 'node:child_process';
 import {readFile,stat,unlink,writeFile} from 'node:fs/promises';
 import {randomUUID} from 'node:crypto';
 import {expect,test,type Page} from './fixtures';
-import type {AccountInfo,AccountState} from '@femlab/registry';
+import type {AccountInfo,AccountState,CloudProjectList} from '@femlab/registry';
 import type {CompletionBody} from '@femlab/ai';
 
 const ORIGIN='https://femlab-app-staging.web.app';
@@ -53,6 +53,7 @@ test('email login has zero credits, private projects stay isolated, anonymous wo
   const runJob=()=>execFileSync('gcloud',['run','jobs','execute','femlab-recover','--region=europe-west3','--project=femlab-app-staging',`--account=${process.env['FEMLAB_LIVE_GOOGLE_ACCOUNT']!}`,'--wait'],{stdio:'pipe',timeout:120000});
   let passed=false;
   const anonymousName='Staging anonymous recovery',privateName='Staging private zero-allowance smoke';
+  const privateRecoveryName=privateName+' after cancellation';
   try {
     await page.addInitScript(()=>localStorage.setItem('femlab.tour.dismissed','1'));
     await page.goto(ORIGIN);await ready(page);
@@ -90,6 +91,18 @@ test('email login has zero credits, private projects stay isolated, anonymous wo
     await page.evaluate(()=>window.fem.dispatch({cmd:'panel.toggle',panel:'projects',open:true}));
     await expect(page.locator('.recent').filter({hasText:privateName}).first().locator('.project-sync-details')).toHaveAttribute('data-sync-phase','synced',{timeout:30000});
     await page.evaluate(()=>window.fem.dispatch({cmd:'panel.toggle',panel:'projects',open:false}));
+    const ownedProjects=async():Promise<CloudProjectList>=>{const response=await request(sessions[0]!,'/v1/projects');expect(response.status).toBe(200);return await response.json() as CloudProjectList;};
+    const beforeCancellation=await ownedProjects();expect(beforeCancellation.projects).toHaveLength(1);
+    const cloudBefore=beforeCancellation.projects[0]!;expect(cloudBefore.name).toBe(privateName);
+    await page.evaluate(name=>window.fem.dispatch({cmd:'model.setName',name}),privateRecoveryName);
+    await page.evaluate(()=>window.fem.dispatch({cmd:'solve.cancel'}));
+    expect(await page.evaluate(()=>window.fem.registry.query({query:'query.project'}))).toMatchObject({id:privateProject.id});
+    expect(await page.evaluate(()=>window.fem.query.model())).toMatchObject({name:privateRecoveryName,bodies:[expect.objectContaining({name:'staging-private-only'})]});
+    await page.evaluate(()=>window.fem.dispatch({cmd:'project.save'}));await page.evaluate(()=>window.fem.dispatch({cmd:'account.syncProjects'}));
+    await expect.poll(async()=>{const projects=await ownedProjects();expect(projects.projects).toHaveLength(1);const current=projects.projects[0]!;expect(current.id).toBe(cloudBefore.id);return BigInt(current.revision)>BigInt(cloudBefore.revision);},{timeout:30000}).toBe(true);
+    await page.evaluate(()=>window.fem.dispatch({cmd:'panel.toggle',panel:'projects',open:true}));
+    await expect(page.locator('.recent').filter({hasText:privateName}).first().locator('.project-sync-details')).toHaveAttribute('data-sync-phase','synced',{timeout:30000});
+    await page.evaluate(()=>window.fem.dispatch({cmd:'panel.toggle',panel:'projects',open:false}));
     await page.evaluate(()=>window.fem.dispatch({cmd:'panel.toggle',panel:'assistant',open:true}));
     await expect(page.locator('aside.assistant input[type=password]')).toHaveCount(0);
     await page.getByRole('button',{name:'Accept and enable AI',exact:true}).click();
@@ -115,7 +128,7 @@ test('email login has zero credits, private projects stay isolated, anonymous wo
     await expect.poll(()=>accountDuringTransition(page)).toMatchObject({status:'anonymous',uid:null,profile:null,disclosureAccepted:false});
     await expect(page.locator('aside.assistant .messages')).toBeEmpty();
     const afterLogout=await page.evaluate(()=>window.fem.query.model());
-    expect(afterLogout.name).not.toBe(privateName);expect(afterLogout.bodies.some(body=>body.name==='staging-private-only')).toBe(false);
+    expect(afterLogout.name).not.toBe(privateName);expect(afterLogout.name).not.toBe(privateRecoveryName);expect(afterLogout.bodies.some(body=>body.name==='staging-private-only')).toBe(false);
     const visible=await page.evaluate(()=>window.fem.registry.query({query:'query.projects'})) as {projects:{id:string}[]};
     expect(visible.projects.some(project=>project.id===privateProject.id)).toBe(false);
     expect(visible.projects.some(project=>project.id===anonymousProject.id)).toBe(true);
@@ -159,7 +172,7 @@ test('email login has zero credits, private projects stay isolated, anonymous wo
       if(sessions.length)runJob();
       for(const session of sessions)await expect.poll(async()=>(await request(session,'/v1/account')).status,{timeout:30000}).toBe(401);
       if(passed){
-        await testInfo.attach('staging-zero-signup-proof',{contentType:'application/json',body:JSON.stringify({verifiedAt:new Date().toISOString(),creditUnit:'usd-milli-v1',disposableAccounts:sessions.length,signupCredits:0,reopenedCredits:0,freeAllowanceStatus:'review-required',unapprovedClaimStatus:403,completionStatus:503,completionCode:'ai-unavailable',requestRows:0,creditRows:0,usageReceipts:0,exportsOwned:true,unsignedExportStatus:403,logoutHidPrivateProject:true,anonymousProjectRecovered:true,privateProjectSynced:true,oldTokenStatus:401,generatedAI:false})});
+        await testInfo.attach('staging-zero-signup-proof',{contentType:'application/json',body:JSON.stringify({verifiedAt:new Date().toISOString(),creditUnit:'usd-milli-v1',disposableAccounts:sessions.length,signupCredits:0,reopenedCredits:0,freeAllowanceStatus:'review-required',unapprovedClaimStatus:403,completionStatus:503,completionCode:'ai-unavailable',requestRows:0,creditRows:0,usageReceipts:0,exportsOwned:true,unsignedExportStatus:403,logoutHidPrivateProject:true,anonymousProjectRecovered:true,privateProjectSynced:true,privateCancellationRecovered:true,privateCloudIdentityPreserved:true,acknowledgedRecoveryEditSynced:true,oldTokenStatus:401,generatedAI:false})});
         for(const path of paths)await unlink(path!);
         await unlink(statePath);
       }
