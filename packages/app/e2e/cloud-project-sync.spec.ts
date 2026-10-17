@@ -151,3 +151,23 @@ test('a late upload rejection cannot reopen an explicitly restored cloud version
     await expect.poll(()=>server.modelName('fixture-A','late response project')).toBe('edit after cloud choice');await expect(row).toContainText('Synced');expect(server.owners.get('fixture-A')!.size).toBe(1);
   }finally{release();await second.close();}
 });
+
+for(const renamed of [false,true])test(`opening a newer uncached cloud artifact uses its downloaded revision for the next save${renamed?' after a project rename':''}`,async({page,browser})=>{
+  const server=new CloudFixtureServer();await server.install(page.context());await page.addInitScript(()=>localStorage.setItem('femlab.tour.dismissed','1'));await page.goto('./');await ready(page);await identify(page,'fixture-A');
+  await page.evaluate(()=>window.fem.dispatch({cmd:'project.new',name:'fresh download base'}));await page.evaluate(()=>window.fem.dispatch({cmd:'model.setName',name:'listed cloud model'}));await page.evaluate(()=>window.fem.dispatch({cmd:'project.save'}));await page.evaluate(()=>window.fem.dispatch({cmd:'account.syncProjects'}));
+  await expect.poll(()=>server.modelName('fixture-A','fresh download base')).toBe('listed cloud model');
+  const second=await browser.newContext();await server.install(second);const other=await second.newPage();await other.addInitScript(()=>localStorage.setItem('femlab.tour.dismissed','1'));await other.goto(page.url());await ready(other);await identify(other,'fixture-A');
+  try{
+    const listed=(await projects(other)).find(row=>row.name==='fresh download base')!;const title=renamed?'renamed cloud project':'fresh download base';
+    if(renamed)await page.evaluate(name=>window.fem.dispatch({cmd:'project.rename',name}),title);
+    await page.evaluate(()=>window.fem.dispatch({cmd:'model.setName',name:'newer cloud model'}));await page.evaluate(()=>window.fem.dispatch({cmd:'project.save'}));await page.evaluate(()=>window.fem.dispatch({cmd:'account.syncProjects'}));
+    await expect.poll(()=>server.modelName('fixture-A',title)).toBe('newer cloud model');
+    const revision=[...server.owners.get('fixture-A')!.values()][0]!.project.revision;
+    await other.evaluate(id=>window.fem.dispatch({cmd:'project.open',id}),listed.id);expect((await other.evaluate(()=>window.fem.query.model())).name).toBe('newer cloud model');
+    expect((await projects(other)).find(row=>row.id===listed.id)?.name).toBe(title);
+    await other.evaluate(()=>window.fem.dispatch({cmd:'model.setName',name:'edit of downloaded model'}));await other.evaluate(()=>window.fem.dispatch({cmd:'project.save'}));await other.evaluate(()=>window.fem.dispatch({cmd:'account.syncProjects'}));
+    await expect.poll(()=>server.modelName('fixture-A',title)).toBe('edit of downloaded model');
+    const next=[...server.owners.get('fixture-A')!.values()][0]!.project;expect(BigInt(next.revision)).toBeGreaterThan(BigInt(revision));
+    await other.evaluate(()=>window.fem.dispatch({cmd:'panel.toggle',panel:'projects',open:true}));await expect(other.locator('.recent').filter({hasText:title})).toContainText('Synced');expect(server.owners.get('fixture-A')!.size).toBe(1);
+  }finally{await second.close();}
+});

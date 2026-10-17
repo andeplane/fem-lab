@@ -4,7 +4,7 @@ You can model, mesh and solve without an account. Anonymous projects stay in thi
 
 ## Create and reopen projects
 
-**New project** starts an empty Model under a new project identity. Recent projects and the Projects dialog show the current browser/account's projects. Starting another project keeps the previous saved project. The project name and engine Model name are distinct operations; changing one need not rename the other.
+**New project** starts an empty Model under a new project identity. Recent projects and the Projects dialog show the current browser/account's projects. Starting another project keeps the previous saved project. The project name and engine Model name are distinct operations; changing one need not rename the other. Opening a cloud project without a cached bundle downloads its current version, including a name changed on another device. Later saves use that downloaded revision, even if the project advanced after the list loaded.
 
 For signed-in projects, autosave captures the complete project locally before queuing synchronization. Its cloud bundle contains the portable engine Model, Journal and retained solved states, project metadata, exact source files captured by successful imports, and completed generated output files. Conversations are separate browser state. Granting access to a folder does not upload its unrelated contents.
 
