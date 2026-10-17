@@ -721,11 +721,31 @@ Custom-sender delivery and final current-head CI remain separate gates. Sanitize
 evidence is retained as `599-partition-staging-evidence-cabb59cb.json` and
 `599-partition-staging-backend-cleanup-cabb59cb.json` in the operator directory.
 
+
+### Applied sender and actual Inbox delivery, 17 October 2026
+
+Firebase verified the existing `femlab.app` sender domain at 05:46:39 UTC and
+the supported Apply operation succeeded at 05:47:52 UTC. The resulting sender
+configuration uses the custom domain; the cleared pending-verification state
+after Apply does not mean the sender reverted. No DNS records changed in this
+step. The dated pending-provider observations above remain historical.
+
+With explicit owner authorization, exactly one fresh production sign-in email
+was requested through the public UI. Gmail received it at 05:49:06 UTC from
+`noreply@femlab.app`, with Inbox present and Spam absent, SPF passing and DKIM
+passing for the custom domain. No Gmail filter, label or Spam placement was
+changed. This satisfies #710's actual custom-sender delivery check; no additional
+email is authorized by that one-message consent.
+
+This delivery observation does not establish a signed-in browser Account UI.
+The same-code completion attempt returned `auth/invalid-action-code`; its cause
+is unestablished, and no second email was requested. #775's owned production
+browser acceptance remains outstanding. Application/API traffic was not promoted
+by the sender change. Sanitized evidence is `719-owner-delivery-proof.json` and
+`719-sender-applied-20261017.json` in the operator evidence directory.
+
 ## Remaining release gates
 
-- Resolve production email Spam placement/custom-sender deliverability in #710, then
-  verify actual Inbox delivery. Receipt and SPF/DKIM checks passed; Google's owner
-  chooser/consent return is already verified on both environments.
 - Complete #775's production owned-account browser acceptance; the new staging
   result above does not substitute for that check.
 - Complete required exact-head CI and review for the final three-file verification
