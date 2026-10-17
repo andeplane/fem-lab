@@ -7,6 +7,8 @@ import type { BufferSpec, ProjectMeta, Command, DocumentSnapshot, EngineError, E
 export interface SessionOptions { gpu: boolean; threads: number }
 export type ReplacementSource = (
   | { kind: 'commands'; commands: Command[] }
+  /** Historical browser records lacked hashes/results. Reconstruct inputs without solves. */
+  | { kind:'legacy-project'; commands:Command[] }
   | { kind: 'journal'; entries: JournalEntry[]; skipSolves: boolean; revision?: number }
   | { kind: 'file'; file: ModelFile }
   | { kind: 'portable'; portable: PortableProject }) & { project?: { meta: ProjectMeta; expected: ProjectRecord | null }; benchmark?: ActiveBenchmark; abaqusReport?: AbaqusConversionReport };

@@ -27,6 +27,11 @@ test.describe('@cpu public policies',()=>{
     await expect(page.locator('main')).toContainText('one claim per reviewed person and month');
     await expect(page.locator('main')).toContainText('free monthly credits are not added to a paid allowance');
     await expect(page.locator('main')).toContainText('There are no automatic overage charges');
+    await expect(page.locator('main')).toContainText('New projects created while signed in save in your account');
+    await expect(page.locator('main')).toContainText('Existing anonymous projects stay local unless you explicitly choose to upload a copy');
+    await expect(page.locator('main')).toContainText('Free accounts have 100 MB');
+    await expect(page.getByRole('table')).toContainText('50 GB');
+    await expect(page.locator('main')).toContainText('A downgrade does not automatically delete projects');
     await expect(page.locator('main')).toContainText('14 days');
     await expect(page.locator('main')).toContainText('For both direct and Managed Payments purchases, email andershaf@gmail.com');
     await expect(page.locator('a[href="mailto:andershaf@gmail.com?subject=FEM%20Lab%20withdrawal"]')).toBeVisible();
@@ -45,6 +50,14 @@ test.describe('@cpu public policies',()=>{
     await expect(page.locator('main')).toContainText('monthly claim markers also remain after account deletion');
     await expect(page.locator('main')).toContainText('rebinding eligibility to a new account does not expose a previous account’s ledger');
     await expect(page.locator('main')).toContainText('24 hours');
+    await expect(page.locator('main')).toContainText('New signed-in projects also queue a private cloud copy');
+    await expect(page.locator('main')).toContainText('Selecting a folder does not upload unrelated folder contents');
+    await expect(page.locator('main')).toContainText('project bucket and export bucket are configured in Frankfurt');
+    await expect(page.locator('main')).toContainText('Account deletion immediately freezes cloud project access/sync');
+    await expect(page.locator('main')).toContainText('failures leave deletion pending');
+    await expect(page.locator('main')).toContainText('metadata index, not full project artifact bytes');
+    await expect(page.locator('main')).not.toContainText('Models and conversations are kept in your browser.');
+    await expect(page.locator('main')).not.toContainText('Opening, editing, meshing or solving a local model does not upload');
     await expect(page.locator('script')).toHaveCount(0);
     expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
     await page.getByRole('navigation',{name:'Policies'}).getByRole('link',{name:'Terms',exact:true}).click();
@@ -63,7 +76,7 @@ test.describe('@cpu public policies',()=>{
     const privacy=await popup;
     await expect(privacy.getByRole('heading',{name:'Privacy notice',exact:true})).toBeVisible();
     await privacy.close();
-    await page.getByRole('button',{name:'Sign in',exact:true}).click();
+    await page.getByRole('navigation',{name:'Main navigation',exact:true}).getByRole('button',{name:'Sign in',exact:true}).click();
     const account=page.getByRole('dialog',{name:'Sign in'});
     await expect(account).toBeVisible();
     await expect(account.getByRole('navigation',{name:'Account policies'}).getByRole('link',{name:'Terms of service'})).toHaveAttribute('href',/\/terms\.html$/);

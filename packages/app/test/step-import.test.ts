@@ -4,6 +4,7 @@ import { stepGeometry, type StepIo } from '@femlab/registry';
 import { ACK } from '../../registry/test/fakes';
 import { triangle } from '../../registry/test/step-fixture';
 import { StepImporter, type StepAdmission, type StepWorker, type StepWorkerRequest } from '../src/step-import';
+import { createProjectFileInventory } from '../src/project-artifact';
 
 const input = { name: 'part', linearDeflection: '0.1 mm', angularDeflection: '15 deg' };
 const deferred = <T,>() => { let resolve!: (value: T) => void; let reject!: (error: Error) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
@@ -24,6 +25,63 @@ function setup() {
   return { importer, worker, factory, io, admission, controller, status, report, started };
 }
 describe('dedicated cancellable STEP host conversion', () => {
+  it('stages exact original source before transfer detaches it and completes only after checked publication', async () => {
+    const s = setup(); const inventory = createProjectFileInventory(() => 'step-source');
+    const original = new Uint8Array([0xef, 0xbb, 0xbf, 0, 128, 255]);
+    s.io.pick = async () => ({ name: 'original.step', size: original.length, read: async () => original });
+    const complete = vi.fn(); const discard = vi.fn();
+    s.admission.retainSource = vi.fn((name, bytes) => {
+      const staged = inventory.prepare('input', name, 'application/step', bytes);
+      return { complete: () => { complete(); staged.complete(); }, discard: () => { discard(); staged.discard(); } };
+    });
+    let transferred: StepWorkerRequest | undefined;
+    s.worker.postMessage.mockImplementation((request, transfer) => {
+      expect(s.admission.retainSource).toHaveBeenCalledOnce();
+      transferred = structuredClone(request, { transfer });
+      expect(request.bytes.byteLength).toBe(0);
+    });
+    const publishing = deferred<typeof ACK>(); s.admission.commit = vi.fn(() => publishing.promise);
+    const run = s.importer.run(input, s.io, s.admission); await s.started();
+    const late = s.worker.onmessage!;
+    expect(transferred!.bytes).toEqual(original); expect(inventory.snapshot()).toEqual([]);
+    s.worker.result(); await vi.waitFor(() => expect(s.admission.commit).toHaveBeenCalledOnce());
+    expect(complete).not.toHaveBeenCalled(); expect(inventory.snapshot()).toEqual([]);
+    publishing.resolve(ACK); await run; late({ data: triangle() } as MessageEvent<unknown>);
+    expect(complete).toHaveBeenCalledOnce(); expect(discard).toHaveBeenCalledOnce();
+    expect(inventory.snapshot()).toEqual([{ id: 'step-source', role: 'input', name: 'original.step', mime: 'application/step', data: original }]);
+  });
+
+  it.each(['cancel', 'worker', 'output', 'commit', 'units', 'hash'] as const)('discards staged source on %s failure without claiming successful retention', async failure => {
+    const s = setup(); const inventory = createProjectFileInventory(() => 'failed-source'); const complete = vi.fn(); const discard = vi.fn();
+    s.admission.retainSource = vi.fn((name, bytes) => {
+      const staged = inventory.prepare('input', name, '', bytes);
+      return { complete: () => { complete(); staged.complete(); }, discard: () => { discard(); staged.discard(); } };
+    });
+    if (failure === 'units') s.admission.convert = async () => 0;
+    if (failure === 'hash') s.io.sha256 = async () => { throw new Error('hash failed'); };
+    if (failure === 'commit') s.admission.commit = async () => { throw new Error('publication rejected'); };
+    const run = s.importer.run(input, s.io, s.admission); const rejected = expect(run).rejects.toThrow();
+    if (failure !== 'units' && failure !== 'hash') {
+      await s.started();
+      if (failure === 'cancel') s.importer.dispose();
+      else if (failure === 'worker') s.worker.onerror!({ message: 'worker failed' } as ErrorEvent);
+      else s.worker.result(failure === 'output' ? {} : triangle());
+    }
+    await rejected;
+    expect(s.admission.retainSource).toHaveBeenCalledOnce(); expect(complete).not.toHaveBeenCalled(); expect(discard).toHaveBeenCalledOnce();
+    expect(inventory.snapshot()).toEqual([]);
+  });
+
+  it('does not stage unread source and rejects retention capacity before conversion or engine admission', async () => {
+    const s = setup(); s.admission.retainSource = vi.fn(() => { throw new Error('source archive full'); });
+    s.io.pick = async () => null;
+    expect(await s.importer.run(input, s.io, s.admission)).toEqual({ cancelled: true }); expect(s.admission.retainSource).not.toHaveBeenCalled();
+    s.io.pick = async () => ({ name: 'part.step', size: 3, read: async () => { throw new Error('source unreadable'); } });
+    await expect(s.importer.run(input, s.io, s.admission)).rejects.toThrow('source unreadable'); expect(s.admission.retainSource).not.toHaveBeenCalled();
+    s.io.pick = async () => ({ name: 'part.step', size: 3, read: async () => new Uint8Array([1, 2, 3]) });
+    await expect(s.importer.run(input, s.io, s.admission)).rejects.toThrow('source archive full');
+    expect(s.factory).not.toHaveBeenCalled(); expect(s.admission.commit).not.toHaveBeenCalled();
+  });
   it('converts units, hashes exact original and portable bytes, publishes one captured Command, then terminates', async () => {
     const s = setup();
     expect(s.factory).not.toHaveBeenCalled();

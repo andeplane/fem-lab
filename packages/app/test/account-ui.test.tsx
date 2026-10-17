@@ -3,11 +3,15 @@ import {act} from 'preact/test-utils';
 import {expect,it,vi} from 'vitest';
 import {AccountPanel} from '../src/ui/Account';
 import {initialState} from '../src/store';
-import {EMPTY_ACCOUNT,PUBLIC_CREDIT_UNIT,PUBLIC_PLAN_CREDITS,type AccountInfo,type AccountPlan} from '@femlab/registry';
+import {EMPTY_ACCOUNT,PUBLIC_CREDIT_UNIT,PUBLIC_PLAN_CREDITS,PROJECT_STORAGE_QUOTAS,type AccountInfo,type AccountPlan} from '@femlab/registry';
 it('offers optional email login while local model state stays untouched',()=>{
   const s={...structuredClone(initialState),panels:{account:true,'account.data':true},account:{...EMPTY_ACCOUNT,configured:true}};
   const container=document.createElement('div');document.body.append(container);
   act(()=>render(<AccountPanel s={s} dispatch={vi.fn(async()=>{})}/>,container));
+  expect(container.querySelector('.profile-intro')?.textContent).toBe('Sign in to save projects across devices and use the hosted Assistant.');
+  expect(container.querySelector('.profile-login-heading')?.textContent).toContain('Existing browser projects stay local until you choose to upload a copy.');
+  expect(container.querySelector('.profile-local-note')?.textContent).toContain('Model, mesh and solve without signing in.');
+  expect(container.textContent).not.toContain('Your account is for hosted AI.');
   expect(container.textContent).toContain('Send sign-in link');expect(container.querySelector('[data-cmd="account.signIn"]')).toBeTruthy();expect(s.journal).toBeNull();act(()=>render(null,container));container.remove();
 });
 it('renders server balance and disables purchases when billing is unavailable',()=>{
@@ -17,7 +21,7 @@ it('renders server balance and disables purchases when billing is unavailable',(
   expect(container.textContent).toContain('4,999.92');
   expect(container.querySelector('.account-balance')?.textContent).toContain('available of 5,000 · 0 reserved');
   expect(s.account.profile.usage.availableCredits).toBe(4999.9155);
-  expect(Array.from(container.querySelectorAll('.account-plan p'),p=>p.textContent)).toEqual(['7,500 AI credits / paid period','12,000 AI credits / paid period','37,500 AI credits / paid period']);
+  expect(Array.from(container.querySelectorAll('.account-plan-credits'),p=>p.textContent)).toEqual(['7,500 AI credits / paid period','12,000 AI credits / paid period','37,500 AI credits / paid period']);
   for(const button of container.querySelectorAll<HTMLButtonElement>('[data-cmd="account.checkout"]'))expect(button.disabled).toBe(true);expect(container.querySelector<HTMLButtonElement>('[data-cmd="account.delete"]')?.disabled).toBe(true);act(()=>render(null,container));container.remove();
 });
 function signedIn(plan:AccountPlan='free',merchantMode:NonNullable<AccountInfo['billing']>['merchantMode']='managed'){
@@ -225,4 +229,16 @@ it.each(['plus','free'] as const)('hides stale %s allowance after refresh failur
   expect(s.account.profile.usage).toEqual(retained);
   s.account.status='active';act(()=>render(<AccountPanel s={s} dispatch={dispatch}/>,container));expect(container.querySelector('meter')).not.toBeNull();expect(container.querySelector('.profile-allowance-problem')).toBeNull();
   act(()=>render(null,container));container.remove();
+});
+
+it('shows each paid plan’s included project storage alongside its unchanged credit and price offer',()=>{
+  const s=signedIn(),before=structuredClone(s.account.profile),dispatch=vi.fn(async()=>{}),container=document.createElement('div');document.body.append(container);
+  act(()=>render(<AccountPanel s={s} dispatch={dispatch}/>,container));
+  const cards=[...container.querySelectorAll('.account-plan')];
+  for(const [index,plan] of (['plus','pro','studio'] as const).entries()){
+    expect(cards[index]!.querySelector('.account-plan-storage')?.textContent).toBe(`${PROJECT_STORAGE_QUOTAS[plan]/1_000_000_000} GB project storage included`);
+    expect(cards[index]!.querySelector('.account-plan-credits')?.textContent).toBe(`${PUBLIC_PLAN_CREDITS[plan].toLocaleString()} AI credits / paid period`);
+    expect(cards[index]!.querySelector('strong')?.textContent).toBe(`$${[49,149,499][index]} USD / month`);
+  }
+  expect(s.account.profile).toEqual(before);expect(dispatch).not.toHaveBeenCalled();act(()=>render(null,container));container.remove();
 });

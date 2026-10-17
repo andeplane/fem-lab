@@ -1,6 +1,6 @@
 # Accounts, AI credits and billing
 
-Local modeling, meshing and solving do not require an account or AI subscription. Sign-in is needed for hosted AI. Account state and payment actions are separate from the engine Model and are never entries in its engineering Journal.
+Local modeling, meshing and solving do not require an account or AI subscription. Sign-in is needed for hosted AI and private account project sync. Account state and payment actions are separate from the engine Model and are never entries in its engineering Journal.
 
 ## Sign in and review your allowance
 
@@ -12,7 +12,7 @@ After sign-in, the home screen becomes your workspace overview, showing your acc
 
 The account overview shows available, total and reserved credits, the allowance expiry and current billing status when those values have loaded. Refresh reads authoritative service state. Loading, a failed refresh or missing account data is not a zero-credit balance or proof of a free plan: read the status and retry the refresh before interpreting your allowance. A disabled claim or purchase button should be read with the accompanying status; repeated clicks or account recreation do not bypass it.
 
-Signing in does not synchronize your Models or Recent projects to an account cloud. They remain in this browser/profile unless you save or share files yourself. You can start or reopen local work without signing in; see [projects and storage](./projects-storage.md).
+New projects created while signed in save locally and queue a private cloud copy. Existing anonymous projects stay local unless you explicitly choose **Upload a copy**, which leaves their originals intact. Signing out hides the account cache and returns to anonymous local work. Check sync status before relying on another device; see [projects and storage](./projects-storage.md).
 
 ## What an AI credit means
 
@@ -26,6 +26,10 @@ One public AI credit represents **USD 0.001 of supplier/model usage**. It is a c
 | Studio | 37,500 per paid period | $499 / month |
 
 Account totals and debits retain exact internal precision; display rounding does not add credit or round each request up. These are included allowances; there is no automatic paid overage or rollover.
+
+## Included cloud storage
+
+Free accounts have 100 MB of cloud project space; Plus includes 2 GB, Pro 10 GB and Studio 50 GB (decimal units). This is separate from AI credits and free-AI approval. The plan cards show the included storage alongside AI credits. The server reports actual quota/usage. Space for new uploads may take time to become available after replacing or deleting a project. Downgrading preserves stored projects and read/delete access, but writes can be blocked above the current limit; it does not automatically delete projects. Browser bundle/file limits are separate. See [storage and recovery](./projects-storage.md#storage-limits-and-offline-work).
 
 ## Free monthly access
 
@@ -41,4 +45,4 @@ Credits follow the canonical paid invoice, not the browser's return from Checkou
 
 ## Export or delete account data
 
-Account data export contains service records, not your local Models or chats. Deletion requires typing DELETE and durable cancellation/identity processing. Required financial records and pseudonymous reviewed-eligibility/abuse-prevention markers can remain as described in the [Privacy notice](https://femlab.app/privacy.html). Local browser projects and downloaded files remain yours to manage. Signing out clears hosted access while local modeling remains available.
+Account-record JSON export contains service records and a cloud project metadata index, not project artifact bytes, captured files, Results or chats. Download complete project bundles separately before deletion. Deletion requires typing DELETE and immediately freezes cloud/AI access; durable processing cancels renewal and purges cloud project objects/metadata before removing the identity. Failed cleanup keeps deletion pending, with no guaranteed completion deadline. Required financial records and pseudonymous reviewed-eligibility/abuse-prevention markers can remain as described in the [Privacy notice](https://femlab.app/privacy.html). Browser caches, anonymous projects and downloaded files remain yours to manage. Signing out clears hosted access while anonymous local modeling remains available.

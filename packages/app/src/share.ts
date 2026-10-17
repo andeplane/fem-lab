@@ -236,8 +236,13 @@ function storedList(value: unknown): Saved[] {
   }).slice(0, MAX_AUTOSAVES);
 }
 
-/** The real one: the existing `last` record is read as the first entry and migrated on write. */
-export function indexedDbStore(factory: IDBFactory): JournalStore {
+/**
+ * Anonymous history keeps the legacy `last` record, migrated to a list on write. Signed-in
+ * history uses one private browser-local key captured when its store is constructed, so an
+ * account switch cannot redirect an earlier asynchronous read, merge, write or clear.
+ */
+export function indexedDbStore(factory: IDBFactory, owner: string | null = null): JournalStore {
+  const key = owner === null ? KEY : '\0femlab:autosave-owner:v1:' + JSON.stringify(owner);
   const open = (): Promise<IDBDatabase> => openDb(factory);
   const tx = async <T>(mode: IDBTransactionMode, run: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> => {
     const db = await open();
@@ -258,7 +263,7 @@ export function indexedDbStore(factory: IDBFactory): JournalStore {
   };
   const atomicWrite = async (saved: Saved[], merge?: MergeSaved): Promise<void> => {
     if (!merge) {
-      await tx('readwrite', (s) => s.put(saved.slice(0, MAX_AUTOSAVES), KEY));
+      await tx('readwrite', (s) => s.put(saved.slice(0, MAX_AUTOSAVES), key));
       return;
     }
     const db = await open();
@@ -284,11 +289,11 @@ export function indexedDbStore(factory: IDBFactory): JournalStore {
       };
       transaction.onerror = () => fail(transaction.error ?? new Error('IndexedDB write failed'));
       transaction.onabort = () => fail(transaction.error ?? new Error('IndexedDB write aborted'));
-      const request = objectStore.get(KEY);
+      const request = objectStore.get(key);
       request.onerror = () => transaction.abort();
       request.onsuccess = () => {
         try {
-          objectStore.put(merge(storedList(request.result)).slice(0, MAX_AUTOSAVES), KEY);
+          objectStore.put(merge(storedList(request.result)).slice(0, MAX_AUTOSAVES), key);
         } catch (error) {
           transaction.abort();
           fail(error);
@@ -297,9 +302,9 @@ export function indexedDbStore(factory: IDBFactory): JournalStore {
     });
   };
   return {
-    read: () => tx('readonly', (s) => s.get(KEY) as IDBRequest<unknown>).then(storedList),
+    read: () => tx('readonly', (s) => s.get(key) as IDBRequest<unknown>).then(storedList),
     write: atomicWrite,
-    clear: () => tx('readwrite', (s) => s.delete(KEY)).then(() => undefined),
+    clear: () => tx('readwrite', (s) => s.delete(key)).then(() => undefined),
   };
 }
 
