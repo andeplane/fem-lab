@@ -58,7 +58,7 @@ No named Sets beyond the automatic face Sets listed above.
 | dihedral angle range (degrees) | 90 to 90 |
 | worst elements | 0, 1 |
 
-Cost estimate: 36 equations, at most 1008 matrix non-zeros, at least 0.028 MB mandatory assembly storage. cpu-direct on 36 equations; matrix non-zeros 1008..1008; feasibility not established. Memory is an assembly lower bound; excludes mesh/model, element buffers, reduction, solver vectors, direct-factor fill/workspace and time history. Retained transient frames: none. Existing retained Result numeric payload: 0 bytes; new Result Mesh snapshot: 648 bytes; these remain resident through preparation. Model/allocator overhead is additional. Total counted peak: 30044 bytes.
+Cost estimate: 36 equations, at most 1008 matrix non-zeros, at least 0.028 MB mandatory assembly storage. cpu-direct on 36 equations; matrix non-zeros 1008..1008; feasibility not established. Memory is an assembly lower bound; excludes mesh/model, element buffers, reduction, solver vectors, direct-factor fill/workspace, aggregation setup/hierarchy/device payloads and copies, and time history. GPU admission checks the actual device limits independently. Retained transient frames: none. Existing retained Result numeric payload: 0 bytes; new Result Mesh snapshot: 648 bytes; these remain resident through preparation. Model/allocator overhead is additional. Total counted peak: 30044 bytes.
 
 ## Loads and constraints
 

@@ -299,7 +299,7 @@ fn rigid_list(id: &Idealisation) -> Vec<(&'static str, Rigid)> {
 
 /// The rigid modes of the mesh as DOF vectors, each unit-normalised over *every* DOF so that a
 /// rotation (which scales with the model) and a translation (which does not) are comparable.
-fn rigid_basis(mesh: &Mesh, id: &Idealisation, dpn: usize) -> Vec<(&'static str, Vec<f64>)> {
+pub(crate) fn rigid_basis(mesh: &Mesh, id: &Idealisation, dpn: usize) -> Vec<(&'static str, Vec<f64>)> {
     let (lo, hi) = mesh.bbox();
     let centre = [0.5 * (lo[0] + hi[0]), 0.5 * (lo[1] + hi[1]), 0.5 * (lo[2] + hi[2])];
     let n_nodes = mesh.n_nodes();
