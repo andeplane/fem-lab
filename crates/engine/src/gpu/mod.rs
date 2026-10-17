@@ -7,7 +7,7 @@
 pub mod cg;
 
 use std::collections::BTreeMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use wgpu::util::DeviceExt;
 
@@ -18,6 +18,7 @@ pub const SHADERS: &[(&str, &str)] = &[
     ("dot.wgsl", include_str!("../../shaders/dot.wgsl")),
     ("spmv_csr.wgsl", include_str!("../../shaders/spmv_csr.wgsl")),
     ("cg_vec.wgsl", include_str!("../../shaders/cg_vec.wgsl")),
+    ("aggregation_vec.wgsl", include_str!("../../shaders/aggregation_vec.wgsl")),
 ];
 
 /// Threads per workgroup in every kernel.
@@ -37,6 +38,9 @@ pub struct Gpu {
     /// device reaches them through `procedure::run`, which shares it — and a `ComputePipeline`
     /// is a cheap handle to clone out of it.
     pipelines: Mutex<BTreeMap<(&'static str, &'static str), wgpu::ComputePipeline>>,
+    /// Device-local diagnostic state populated by wgpu's typed loss callback. It never
+    /// changes solver decisions; preserve the driver's reason when a readback fails.
+    loss: Arc<Mutex<Option<(wgpu::DeviceLostReason, String)>>>,
 }
 
 impl std::fmt::Debug for Gpu {
@@ -78,12 +82,18 @@ impl Gpu {
             .await
             .map_err(|e| Error::new(ErrorCode::Unsupported, format!("GPU device request failed: {e}")))?;
         let limits = device.limits();
+        let loss = Arc::new(Mutex::new(None));
+        let observed_loss = Arc::clone(&loss);
+        device.set_device_lost_callback(move |reason, message| {
+            *observed_loss.lock().expect("device-loss diagnostics do not panic while locked") = Some((reason, message));
+        });
         Ok(Gpu {
             device,
             queue,
             limits,
             adapter: format!("{} ({:?})", info.name, info.backend),
             pipelines: Mutex::new(BTreeMap::new()),
+            loss,
         })
     }
 
@@ -179,7 +189,8 @@ impl Gpu {
 
     /// Copy `bytes` of `src` into a staging buffer, submit, await the mapping, return the bytes.
     /// A validation error (`bytes` beyond `src`, a source without `COPY_SRC`), a lost device or a
-    /// failed mapping all surface as one `internal` error: they are programming errors, not user ones.
+    /// failed mapping all surface as one `internal` error with the actual validation, poll,
+    /// mapping and device-loss diagnostics: they are programming errors, not user ones.
     pub async fn read_back(&self, src: &wgpu::Buffer, bytes: u64) -> Result<Vec<u8>, Error> {
         let scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
         let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -197,15 +208,29 @@ impl Gpu {
             let _ = tx.send(r);
         });
         #[cfg(not(target_arch = "wasm32"))]
-        let polled = self.device.poll(wgpu::PollType::wait_indefinitely()).is_ok();
+        let poll = self.device.poll(wgpu::PollType::wait_indefinitely());
+        #[cfg(not(target_arch = "wasm32"))]
+        let polled = poll.is_ok();
         #[cfg(target_arch = "wasm32")]
         let polled = true;
-        let ok = scope.pop().await.is_none() && polled && rx.await.is_ok_and(|r| r.is_ok());
+        #[cfg(target_arch = "wasm32")]
+        let poll = "browser async mapping";
+        let validation = scope.pop().await;
+        let mut mapping = None;
+        // Preserve the existing short circuit: a failed poll need not deliver a mapping
+        // callback. Retain diagnostics without waiting on a callback it could not drive.
+        let ok = validation.is_none() && polled && {
+            let outcome = rx.await;
+            let mapped = outcome.as_ref().is_ok_and(Result::is_ok);
+            mapping = Some(outcome);
+            mapped
+        };
         let view = if ok { slice.get_mapped_range().ok() } else { None };
         let data = view
             .ok_or_else(|| {
                 Error::internal(format!(
-                    "gpu readback of {bytes} bytes failed (validation error, lost device or unmapped buffer)"
+                    "gpu readback of {bytes} bytes failed (validation={validation:?}; poll={poll:?}; mapping={mapping:?}; device_loss={:?})",
+                    *self.loss.lock().expect("device-loss diagnostics do not panic while locked")
                 ))
             })?
             .to_vec();

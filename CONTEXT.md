@@ -409,3 +409,10 @@ completed output files. It is separate from a `femlab/1` Model file, directory
 capabilities and the cloud's opaque chunk manifest. An incomplete archive leaves a
 newer recoverable Journal and a marked prior backup; it cannot silently replace
 that Journal or upload old bytes as current work. See ADR 0044.
+
+**Reduced near space** (ADR0040):
+Optional internal GPU-solver metadata carrying explicit original-node groups and physical
+homogeneous displacement candidates restricted to retained free rows. It is not a Journal
+object or a force pullback. Supports, slaves and inactive rotational rows prevent inferring
+node/component identities from a reduced row number. A fixed aggregation hierarchy converts
+these candidates to scaled coordinates during f64 setup; the f64 residual still decides success.

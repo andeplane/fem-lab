@@ -5,6 +5,7 @@
 //! approximate and is driven by the f64 refinement loop in [`refine`], which is also what wraps
 //! the GPU's f32 conjugate gradient (ADR 0002, plan A §5.2–§5.4).
 
+pub(crate) mod aggregation;
 pub mod direct;
 pub mod pcg;
 pub mod refine;
@@ -123,6 +124,21 @@ pub async fn solve_reusable(
     gpu: Option<&crate::gpu::Gpu>,
     progress: OnProgress<'_>,
 ) -> Result<(Vec<f64>, SolveInfo, Option<direct::Direct>), Error> {
+    solve_reusable_with_space(k, b, opts, pool, gpu, None, progress).await
+}
+
+/// The same solver boundary with optional physical reduced candidates. Geometry and
+/// constraints remain with the procedure; CPU solvers do not allocate or read the space.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn solve_reusable_with_space(
+    k: &Csr,
+    b: &[f64],
+    opts: &SolveOptions,
+    pool: &Pool,
+    gpu: Option<&crate::gpu::Gpu>,
+    space: Option<&aggregation::physical::PhysicalSpace<'_>>,
+    progress: OnProgress<'_>,
+) -> Result<(Vec<f64>, SolveInfo, Option<direct::Direct>), Error> {
     let chosen = resolve_solver(opts.solver, k.n, gpu.is_some());
     if !progress(Progress {
         phase: "solve",
@@ -147,7 +163,9 @@ pub async fn solve_reusable(
         }
         // `Auto` is already resolved, so what is left is the GPU. Its whole body — including
         // the "no adapter" error — lives under `src/gpu/`, so nothing here needs a device.
-        _ => crate::gpu::cg::solve_refined(gpu, k, b, opts, progress).await.map(no_factor),
+        _ => {
+            crate::gpu::cg::solve_refined_with_space(gpu, k, b, opts, Some(pool), space, progress).await.map(no_factor)
+        }
     }
 }
 
@@ -250,7 +268,7 @@ pub fn cost_estimate(mesh: &Mesh, dofs_per_node: usize, solver: Solver) -> CostE
         retained_bytes: 0, transient_work_bytes: 0, transport_staging_bytes: 0,
         wasm_transport_staging_bytes: 0, wasm_transport_staging_complete: true,
         budget_bytes: PLANNING_BUDGET, feasible,
-        note: format!("{chosen} on {dofs} equations; matrix non-zeros {nnz_lower}..{nnz}; {status}. Memory is an assembly lower bound; excludes mesh/model, element buffers, reduction, solver vectors, direct-factor fill/workspace and time history."),
+        note: format!("{chosen} on {dofs} equations; matrix non-zeros {nnz_lower}..{nnz}; {status}. Memory is an assembly lower bound; excludes mesh/model, element buffers, reduction, solver vectors, direct-factor fill/workspace, aggregation setup/hierarchy/device payloads and copies, and time history. GPU admission checks the actual device limits independently."),
     }
 }
 

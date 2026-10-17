@@ -30,3 +30,28 @@ Use `query.cost` first for large models. Its memory accounting is scoped, not a 
 `solve.cancel` cancels the active solve or study; the host restores its pre-solve Model state and does not append a successful solve entry. A script timeout has different semantics: Commands already admitted may finish. See [scripts](./scripting-journal.md).
 
 A successful numerical solve establishes a Result for a specific Model and Mesh. It does not establish mesh convergence, material suitability or agreement with the physical system. Continue with [Results and verification](./results-verification.md).
+
+## GPU correction and memory limits
+
+`gpu-pcg` requires a host-provided GPU device. Its f32 inner solve supplies
+approximate directions to a bounded flexible f64 GMRES correction using the original
+physical operator. The reported residual is recomputed in f64. The default outer
+budget remains eight steps; the existing arithmetic-floor allowance remains
+100 times the requested tolerance. Exhausting the budget outside that allowance
+returns `solve.stalled`.
+
+For solid 3D displacement systems, the fine GPU operator evaluates displacement
+differences relative to the same node's free components, together with row moments
+computed from the original f64 stiffness. This reduces cancellation of large forces
+under nearly uniform translations. GPU arithmetic remains f32; the f64 physical
+residual still decides convergence. Other idealisations retain ordinary scaled CSR.
+
+Correction history retains at most eight vector pairs and restarts if a larger
+outer budget is requested. Its four work vectors and history have a separate
+256 MiB admission limit, charged against the existing setup allowance before
+solver upload. Translation metadata, hierarchy and device-buffer limits also
+apply. `solve.too_large` means the requested path was refused; reduce the mesh
+or explicitly select a supported solver after assessing its memory needs.
+These bounds do not guarantee that the host has enough free memory. Hardware
+acceptance of the 780,300-equation cantilever does not establish capacity or
+convergence for a different model or for a browser host.
