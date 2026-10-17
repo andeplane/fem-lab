@@ -791,7 +791,7 @@ checked beyond aggregate counts.
 | D2 | Axisymmetric thermal stress, heated solid cylinder (**substitute for NAFEMS LE11**) | σzz(0) = −58.654 MPa (Timoshenko §151) | 3 % | thermal stress in axisymmetric, chained from a heat Step | green |
 | D3 | NAFEMS FV52 simply-supported solid plate, modal | 45.897, 109.44, 109.44, 167.89, 193.59, 206.19 Hz (Ansys) vs Abaqus row 44.092, 106.66, … — **resolve** | 3 % | 3D eigen | |
 | D4 | Manufactured solution, elasticity and Poisson: every element kind on the lattice mesher (Kuhn-split simplices) in every idealisation, tri3/tri6 on the free mesher, hex8/quad4 in both formulations | `u = ∇φ`, `T = φ` for a harmonic φ (`sin x cosh y`, `sin x sin y cosh √2 z`, `r⁴ − 8r²z² + 8/3 z⁴` axisymmetric), the exact field on every boundary DOF; L2 rate p+1, full-gradient H1 seminorm rate p, plus retained engineering-strain rate p, over the two finest of h = 1/2, 1/4, 1/8 | rate ± 0.1 | an element is the order it claims: quadrature degree, shape-function order, mid-node placement, every strain term in `B` | engine test |
-| D5 | 780,300-equation incompatible-mode Hex8 cantilever (`[100,50,50]`, ignored real-device run) and its 66k CI sibling (`[50,20,20]`) | B1 Timoshenko tip deflection; direct factorisation as secondary 66k cross-check | Unchanged 2% B1 tip gate and f64 residual below 1e-8; global force/moment residual below .001 N/.001 N m for the 1 kN load; 66k displacement `‖u_gpu − u_direct‖ ≤ 1e-8 ‖u‖`; repeated 1/4-thread fields exactly equal. Translated-row/FGMRES candidate passed real Metal at 66k residual 5.222915328431264e-10 and 780k residual 2.267548104643227e-9; final-source coverage and CI remain required | GPU PCG + bounded flexible f64 correction at scale, without CPU fallback | pending #3 |
+| D5 | 780,300-equation incompatible-mode Hex8 cantilever (`[100,50,50]`, ignored real-device run) and its 66k CI sibling (`[50,20,20]`) | B1 Timoshenko tip deflection; direct factorisation as secondary 66k cross-check | Unchanged 2% B1 tip gate and f64 residual below 1e-8; global force/moment residual below .001 N/.001 N m for the 1 kN load; 66k displacement `‖u_gpu − u_direct‖ ≤ 1e-8 ‖u‖`; repeated 1/4-thread fields exactly equal. Final translated-row/FGMRES source passed real Metal at 66k residual 5.222915328431264e-10 and 780k residual 2.267548104643227e-9, with unchanged physical gates and 66k thread identity; full coverage and software-GPU CI are mandatory before merge | GPU PCG + bounded flexible f64 correction at scale, without CPU fallback | pending #3 |
 | D6 | Lamé thick cylinder as a 90° CSG revolve (#22), free **tet10** | reaction balance and Result freshness gate; σθθ, σrr and u_r at r = 0.15 m (mid-wall) recorded against the closed form 55.5556 MPa, −15.5556 MPa, 4.246667e-5 m | balance 1e-8; stress/displacement recorded, not gated | the free tet mesher's isosurface-stuffed mesh on a curved boundary; Set survival across a mesher swap | green |
 | D7 | the same CSG revolve, free **tet4** | same | recorded, not gated — the element-order lesson | the free tet mesher with constant-strain elements | green |
 | D8 | patch test on the free tet mesher's own unstructured mesh of a CSG box with a cylindrical bore, tet4 and tet10, all six constant-strain modes | exact constant stress and strain | 1e-9 rel | the mesher's irregular connectivity and curved boundary, not just the synthetic structured lattice A1 already covers | engine test |
@@ -3378,8 +3378,20 @@ B1, equilibrium, direct comparison and complete one/four-worker field identity,
 with true residual 5.222915328431264e-10. The unchanged 780,300-equation Apple M1
 Max Metal case passed B1, force/moment equilibrium and true f64 residual below
 1e-8: 2.267548104643227e-9 after six accepted corrections and 1642 GPU updates.
-The run took 528.66 s with peak RSS 10,643,292,160 bytes; the unchanged 10 GiB
-guard did not fire. These receipts precede explicit early release of uploaded
-host arrays and do not replace final-source strict coverage or software-GPU CI.
-Historical failed stationary and unbalanced flexible runs remain numerical
-failures; the new spring counterexample records the rounding mechanism repaired.
+The initial run took 528.66 s with peak RSS 10,643,292,160 bytes; the unchanged
+10 GiB guard did not fire. After early release of uploaded host arrays, the
+final-source repeat retained the same accepted residual, six corrections and
+1642 GPU updates. It passed in 525.31 s with peak RSS 9,810,329,600 bytes and
+peak physical footprint 8,783,695,232 bytes, without a resource stop. All 395
+runtime input hashes match committed source `c6b731ef`; the actual arm64 test
+binary SHA-256 is
+`41408a4791dd210f4695b882f97bc4174a7bac96668d2a2436881ffecb7b51fe`.
+
+Final-source real Metal verification passed all 22 active GPU tests and the
+unchanged 66k gate, including exact one/four-worker fields. Actual Chromium
+SwiftShader passed the dot kernel, both shell studies and the B1 cantilever
+through wasm/WebGPU. The complete CPU browser suite passed 255 tests with five
+existing mode-specific skips, and cold Pages bootstrap passed. Full-crate 100%
+coverage and software-GPU CI remain mandatory before merge. Historical failed
+stationary and unbalanced flexible runs remain numerical failures; the new
+spring counterexample records the rounding mechanism repaired.

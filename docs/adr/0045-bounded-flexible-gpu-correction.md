@@ -98,11 +98,26 @@ equation B1, direct-comparison, equilibrium and one/four-thread gates on Metal
 (true residual 5.222915328431264e-10). On Apple M1 Max Metal the unchanged 780,300-
 equation case passed its 2% B1, force/moment equilibrium and true f64 residual
 below 1e-8 gates: residual 2.267548104643227e-9 after six accepted corrections
-and 1642 GPU updates. Its measured peak RSS was 10,643,292,160 bytes, below the
-unchanged 10 GiB guard; no resource guard fired. This dated candidate receipt
-precedes the explicit host-array lifetime change. Final-source rerun, strict
-coverage and software-adapter CI remain required before merge. No general
-convergence, speed, browser-capacity or larger-mesh claim follows from these cases.
+and 1642 GPU updates. Its initial peak RSS was 10,643,292,160 bytes, below the
+unchanged 10 GiB guard.
+
+After explicit early release of uploaded host arrays, the final-source repeat
+passed the same unchanged physical gates with the same residual, corrections
+and GPU updates. Test time was 525.31 s, peak RSS 9,810,329,600 bytes and peak
+physical footprint 8,783,695,232 bytes. No resource guard fired. The actual
+arm64 binary SHA-256 was
+`41408a4791dd210f4695b882f97bc4174a7bac96668d2a2436881ffecb7b51fe`;
+all 395 runtime input hashes match committed source `c6b731ef`. This one-case
+measurement is not a host-memory guarantee.
+
+The final source also passed all 22 active native Metal GPU tests and the
+unchanged 66k physical/direct comparison with complete one/four-worker identity.
+Fresh Chromium SwiftShader execution passed both homogeneous/laminated shell
+studies, the dot kernel and B1 cantilever through the wasm/WebGPU host. The
+complete CPU browser suite passed 255 tests with five existing mode-specific
+skips; cold Pages bootstrap passed. Engine/geometry 100% coverage and fresh
+software-adapter CI are mandatory gates before merge. No general convergence,
+speed, browser-capacity or larger-mesh claim follows from these cases.
 
 ## Primary references
 
