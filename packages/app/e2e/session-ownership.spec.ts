@@ -1,4 +1,5 @@
 import { test, expect, type Page } from './fixtures';
+import { readFile } from 'node:fs/promises';
 async function ready(page: Page): Promise<void> {
   await page.goto('./');
   await page.waitForFunction(() => typeof window.fem?.dispatch === 'function', undefined, { timeout: 90_000 });
@@ -46,21 +47,39 @@ test.describe('@cpu session ownership', () => {
   });
   test('cancellation recovers acknowledged edits and redo without reviving retained handles', async ({ page }) => {
     await ready(page);
-    await page.evaluate(async () => {
-      await window.fem.model.new({ name: 'recover' });
+    await page.evaluate(() => window.fem.model.new({ name: 'recover' }));
+    const original = await page.evaluate(async () => JSON.stringify((await window.fem.registry.query({ query: 'query.document' }) as { file: unknown }).file) + '\r\n');
+    const chooser = page.waitForEvent('filechooser');
+    const imported = page.evaluate(() => window.fem.dispatch({ cmd: 'file.open', picker: true }));
+    await (await chooser).setFiles({ name: 'cancel-original.json', mimeType: 'application/json', buffer: Buffer.from(original) }); await imported;
+    const projectId = await page.evaluate(async () => {
+      await window.fem.dispatch({ cmd: 'project.save' });
+      await window.fem.model.setName({ name: 'acknowledged recovery' });
       await window.fem.geometry.addBox({ name: 'shared', size: ['1 m', '1 m', '1 m'] });
       await window.fem.journal.undo({ steps: 1 });
       (window as unknown as { retained: typeof window.fem }).retained = window.fem;
-      await window.fem.dispatch({ cmd: 'solve.cancel' });
+      return (await window.fem.registry.query({ query: 'query.project' }) as { id: string }).id;
     });
-    expect((await page.evaluate(() => window.fem.query.model())).bodies).toHaveLength(0);
-    await page.evaluate(() => window.fem.journal.redo({ steps: 1 }));
-    expect((await page.evaluate(() => window.fem.query.model())).bodies).toHaveLength(1);
+    await page.evaluate(() => window.fem.dispatch({ cmd: 'solve.cancel' }));
+    await page.evaluate(() => window.fem.dispatch({ cmd: 'file.autosave', on: false }));
+    expect(await page.evaluate(() => window.fem.query.model())).toMatchObject({ name: 'acknowledged recovery', bodies: [] });
+    expect(await page.evaluate(() => window.fem.registry.query({ query: 'query.project' }))).toMatchObject({ id: projectId });
     const code = await page.evaluate(async () => {
       try { await (window as unknown as { retained: typeof window.fem }).retained.geometry.remove({ name: 'shared' }); return 'accepted'; }
       catch (error) { return (error as { code: string }).code; }
     });
     expect(code).toBe('session.expired');
+    // Redo belongs to the recovered session; portable files store the active Journal.
+    await page.evaluate(() => window.fem.journal.redo({ steps: 1 }));
+    expect((await page.evaluate(() => window.fem.query.model())).bodies).toHaveLength(1);
+    await page.evaluate(() => window.fem.journal.undo({ steps: 1 }));
+    // Autosave is off: reopening must use the archive built during recovery itself.
+    await page.evaluate(id => window.fem.dispatch({ cmd: 'project.open', id }), projectId);
+    expect(await page.evaluate(() => window.fem.query.model())).toMatchObject({ name: 'acknowledged recovery', bodies: [] });
+    await page.evaluate(() => window.fem.dispatch({ cmd: 'panel.toggle', panel: 'projects', open: true }));
+    const download = page.waitForEvent('download');
+    await page.getByRole('button', { name: 'Download cancel-original.json', exact: true }).click();
+    expect(await readFile((await (await download).path())!)).toEqual(Buffer.from(original));
   });
   test('an initiating script can create its own model and continue, while a failed import preserves it', async ({ page }) => {
     await ready(page);

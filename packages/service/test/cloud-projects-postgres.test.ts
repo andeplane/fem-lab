@@ -12,6 +12,7 @@ import {serviceServer} from '../src/http';
 import {accountPrivacy} from '../src/privacy';
 import {once} from 'node:events';
 import type {AddressInfo} from 'node:net';
+import {CloudProjectApi} from '../../app/src/cloud-project-api';
 
 const digest=(b:Buffer)=>createHash('sha256').update(b).digest('hex');
 class Objects implements ProjectObjects {
@@ -131,6 +132,36 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('private complete project artifa
       const another=await reserve(uid,[data]);const tooLarge=await fetch(origin+`/v1/projects/uploads/${another.uploadId}/chunks/0`,{method:'PUT',headers:{authorization:uid,'content-type':'application/octet-stream'},body:Buffer.alloc(8_000_001)});expect(tooLarge.status).toBe(413);
       const deleted=await fetch(origin+`/v1/projects/${saved.id}/delete`,{method:'POST',headers:json,body:JSON.stringify({baseRevision:'1'})});expect(deleted.status).toBe(200);expect(await deleted.json()).toMatchObject({id:saved.id,name:'',bytes:0});expect((await fetch(origin+`/v1/projects/${saved.id}`,{headers:{authorization:uid}})).status).toBe(404);
     }finally{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()))}
+  });
+  it('round-trips the actual browser client through HTTP and Postgres across chunk boundaries',async()=>{
+    const a=await owner(),b=await owner();
+    const authenticated=cloudProjects({db,account:header=>account(header?.replace(/^Bearer /,'')),objects,now,newId:randomUUID});
+    const server=serviceServer({now,newId:randomUUID,ready:async()=>true,projects:authenticated,origins:[]});
+    server.listen(0,'127.0.0.1');await once(server,'listening');
+    const origin=`http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const client=(uid:string)=>new CloudProjectApi({origin,fetch,identity:()=>({uid,epoch:1}),token:async()=>uid,sha256:async bytes=>createHash('sha256').update(bytes).digest('hex'),maxArtifactBytes:128*1024*1024});
+    const first=client(a),second=client(b),actor=first.capture(),other=second.capture();
+    const bytes=new Uint8Array(8_000_023);for(let i=0;i<bytes.length;i++)bytes[i]=i%251;
+    const input={name:'Complete browser project',baseRevision:null,key:randomUUID(),bytes};
+    try{
+      const created=await first.upload(actor,input);
+      expect(created).toMatchObject({revision:'1',bytes:bytes.length});
+      expect(await first.upload(actor,input)).toEqual(created);
+      const listed=await first.list(actor);expect(listed.projects).toEqual([created]);expect(listed.storage.usedBytes).toBe(bytes.length);
+      expect((await second.list(other)).projects).toEqual([]);
+      await expect(second.download(other,created.id)).rejects.toMatchObject({status:404});
+      expect(Buffer.compare(Buffer.from((await first.download(actor,created.id)).bytes),Buffer.from(bytes))).toBe(0);
+      const changed=bytes.slice();changed[changed.length-1]=changed[changed.length-1]!^255;
+      const replacement=await first.upload(actor,{...input,id:created.id,baseRevision:'1',key:randomUUID(),bytes:changed});
+      expect(replacement.revision).toBe('2');
+      expect(await first.upload(actor,input)).toEqual(created);
+      expect(Buffer.compare(Buffer.from((await first.download(actor,created.id)).bytes),Buffer.from(changed))).toBe(0);
+      await expect(first.upload(actor,{...input,id:created.id,baseRevision:'1',key:randomUUID()})).rejects.toMatchObject({status:409,project:{id:created.id,revision:'2'}});
+      const deletionKey=randomUUID(),deleted=await first.delete(actor,created.id,'2',deletionKey);
+      expect(deleted).toMatchObject({id:created.id,revision:'3',bytes:0});expect(deleted.deletedAt).not.toBeNull();
+      expect(await first.delete(actor,created.id,'2',deletionKey)).toEqual(deleted);
+      await expect(first.download(actor,created.id)).rejects.toMatchObject({status:404});
+    }finally{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}
   });
   it('account deletion cannot finish while cloud content remains and removes all project metadata before identity deletion',async()=>{
     const uid=await owner(),{project}=await save(uid,[Buffer.from('personal cloud data')]),identityRemove=vi.fn(async()=>{}),privacy=accountPrivacy({db,account,recentIdentity:async header=>{const row=(await db.query('SELECT firebase_uid,email FROM accounts WHERE id=$1',[header])).rows[0];return {uid:String(row.firebase_uid),email:String(row.email)}},objects:{write:async()=>{},url:async()=>'',remove:async()=>{}},identity:{remove:identityRemove},projects:service,now,newId:randomUUID});

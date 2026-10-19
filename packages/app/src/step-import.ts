@@ -12,6 +12,7 @@ export type StepPhase = 'picking' | 'reading' | 'loading/converting' | 'checking
 export interface StepImportState { name: string; phase: StepPhase; cancellable: boolean }
 export interface StepAdmission {
   signal: AbortSignal;
+  retainSource?(name:string,bytes:Uint8Array):{complete():void;discard():void};
   convert(quantity: Quantity, to: 'm' | 'rad'): Promise<number>;
   commit(command: ReturnType<typeof stepCommand>): Promise<Ack>;
 }
@@ -38,6 +39,7 @@ export class StepImporter {
     admission.signal.addEventListener('abort', expire, { once: true });
     if (admission.signal.aborted) expire();
     let worker: StepWorker | undefined;
+    let retained:ReturnType<NonNullable<StepAdmission['retainSource']>>|undefined;
     const check = () => { if (abort.signal.aborted) throw cancelled(); };
     const wait = <T>(promise: Promise<T>): Promise<T> => new Promise((resolve, reject) => {
       const stop = () => reject(cancelled());
@@ -52,6 +54,7 @@ export class StepImporter {
       // readStep bounds metadata before reading and retains only one private byte snapshot.
       const source = await wait(readStep(input, io));
       if (source === null) return { cancelled: true };
+      retained=admission.retainSource?.(source.name,source.bytes);
       phase('reading');
       // Validation queries use the engine's Quantity parser, independently of display choices.
       const linearDeflection = await wait(admission.convert(input.linearDeflection, 'm'));
@@ -77,9 +80,11 @@ export class StepImporter {
       active.publishing = true;
       phase('publishing');
       const ack = await admission.commit(stepCommand(input, geometry.data, geometrySha256));
+      retained?.complete();
       this.reported(report);
       return { ...ack, report };
     } finally {
+      retained?.discard();
       if (worker) { worker.onmessage = null; worker.onerror = null; worker.terminate(); }
       admission.signal.removeEventListener('abort', expire);
       this.active = undefined; this.status(null);

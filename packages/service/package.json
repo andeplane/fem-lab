@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc --noEmit && node build.mjs",
+    "build": "tsc --noEmit -p tsconfig.build.json && node build.mjs",
     "start": "node dist/main.mjs",
     "dev": "tsx src/main.ts",
     "test": "vitest run --coverage",
