@@ -105,7 +105,12 @@ it('boots the real session host, saves and reopens projects, and revokes retaine
   const originalUi = mounted.props!;
   expect((await initial.query.model()).name).toBeTruthy();
   expect(initial.registry.list().commands.length).toBeGreaterThan(50);
+  const galleryFilter = { query: 'cantilever', tag: 'beam', difficulty: 1 } as const;
+  await initial.dispatch({ cmd: 'example.filter', ...galleryFilter });
+  const originalFilter = mounted.props!.store.state.exampleFilter;
   const first = await initial.dispatch({ cmd: 'project.new', name: 'first' }) as { id: string };
+  expect(mounted.props!.store.state.exampleFilter).toEqual(galleryFilter);
+  expect(mounted.props!.store.state.exampleFilter).not.toBe(originalFilter);
   const sample: Required<Progress> = { phase: 'solve', fraction: 0.5, message: 'refinement 2: relative residual 2.5e-6' };
   workers.at(-1)!.progressSample = sample;
   const received: unknown[] = [];
@@ -146,10 +151,12 @@ it('boots the real session host, saves and reopens projects, and revokes retaine
   await expect(firstUi.dispatch({ cmd: 'geometry.remove', name: 'missing' })).rejects.toMatchObject({ code: 'not-found' });
   expect(firstUi.store.state.lastError?.code).toBe('not-found');
   const second = await firstUi.dispatch({ cmd: 'project.new', name: 'second' }) as { id: string };
+  expect(mounted.props!.store.state.exampleFilter).toEqual(galleryFilter);
   await expect(initial.query.model()).rejects.toMatchObject({ code: 'session.expired' });
   await expect(initial.dispatch({ cmd: 'geometry.remove', name: 'body' })).rejects.toMatchObject({ code: 'session.expired' });
   expect((await window.fem.query.model()).bodies).toHaveLength(0);
   await window.fem.dispatch({ cmd: 'project.open', id: first.id });
+  expect(mounted.props!.store.state.exampleFilter).toEqual(galleryFilter);
   expect((await window.fem.query.model()).bodies).toHaveLength(1);
   expect(mounted.props!.store.state.model?.name).toBe('first edited');
   // Replacement Fit waits until the Result and shell have published their overlays.
@@ -227,9 +234,12 @@ it('boots the real session host, saves and reopens projects, and revokes retaine
   const archiveError = 'A completed output exceeded the project archive capacity.';
   const anonymousRecovery = await anonymousStorage.update(failedArchive.id, previous => ({ ...previous!, artifact: oldComplete.artifact, artifactTag: oldComplete.artifactTag, artifactError: archiveError }));
   const anonymousUi = mounted.props!;
+  await window.fem.dispatch({ cmd: 'example.filter', ...galleryFilter });
   emitIdentity('A');
+  expect(anonymousUi.store.state.exampleFilter).toEqual({ tag: null, difficulty: null });
   expect(anonymousUi.store.state.model).toBeNull(); expect(anonymousUi.store.state.projects).toEqual([]);
   await vi.waitFor(() => { expect(mounted.props).not.toBe(anonymousUi); expect(mounted.props!.store.state.account.uid).toBe('A'); expect(mounted.props!.store.state.ready).toBe(true); });
+  expect(mounted.props!.store.state.exampleFilter).toEqual({ tag: null, difficulty: null });
   expect(mounted.props!.store.state.projects).toEqual([]);
   await expect(anonymousUi.query!({ query: 'query.model' })).rejects.toMatchObject({ code: 'session.expired' });
   await window.fem.dispatch({ cmd: 'account.uploadProject', id: failedArchive.id });
@@ -247,7 +257,9 @@ it('boots the real session host, saves and reopens projects, and revokes retaine
   expect(adopted.cmds).toEqual(anonymousRecovery.cmds); expect(adopted.cloud?.dirty).toBe(true);
   await vi.waitFor(() => expect(mounted.props!.store.state.projectSync.projects[adoptedId]?.phase).toBe('error'));
   expect(await anonymousStorage.read(failedArchive.id)).toEqual(anonymousRecovery);
+  await window.fem.dispatch({ cmd: 'example.filter', ...galleryFilter });
   await window.fem.dispatch({ cmd: 'project.new', name: 'private A å' });
+  expect(mounted.props!.store.state.exampleFilter).toEqual(galleryFilter);
   for (const command of [
     { cmd: 'geometry.addLine', name: 'shaft', points: [['0 m', '0 m', '0 m'], ['1 m', '0 m', '0 m']], divisions: 1, kind: 'beam' },
     { cmd: 'material.add', name: 'steel', E: '200 GPa', nu: 0.3 },
@@ -278,11 +290,13 @@ it('boots the real session host, saves and reopens projects, and revokes retaine
   const aResults = await window.fem.registry.query({ query: 'query.results' });
   expect(aResults).toMatchObject({ records: expect.arrayContaining([expect.objectContaining({ step: 'axial' })]) });
   emitIdentity('B');
+  expect(aUi.store.state.exampleFilter).toEqual({ tag: null, difficulty: null });
   expect(aUi.store.state.model).toBeNull(); expect(aUi.store.state.result).toBeNull(); expect(aUi.store.state.project).toBeNull();
   expect(aUi.store.state.projectFiles).toEqual([]); expect(aUi.store.state.folder).toBeNull(); expect(aUi.store.state.projects).toEqual([]);
   await expect(aUi.dispatch({ cmd: 'file.download', id: aFile.id })).rejects.toMatchObject({ code: 'session.expired' });
   await expect(aConsole.query.model()).rejects.toMatchObject({ code: 'session.expired' });
   await vi.waitFor(() => { expect(mounted.props).not.toBe(aUi); expect(mounted.props!.store.state.account.uid).toBe('B'); expect(mounted.props!.store.state.ready).toBe(true); });
+  expect(mounted.props!.store.state.exampleFilter).toEqual({ tag: null, difficulty: null });
   expect(location.hash).toBe('#/');
   expect(mounted.props!.store.state.projects).toEqual([]); expect(mounted.props!.store.state.projectFiles).toEqual([]);
   expect((await window.fem.query.model()).bodies).toEqual([]);
@@ -292,7 +306,9 @@ it('boots the real session host, saves and reopens projects, and revokes retaine
   await window.fem.dispatch({ cmd: 'file.write', path: 'B-output.txt', text: 'B-only output' });
   await window.fem.dispatch({ cmd: 'project.save' });
   const bUi = mounted.props!;
+  await window.fem.dispatch({ cmd: 'example.filter', query: 'private B', tag: 'thermal', difficulty: 2 });
   emitIdentity('A');
+  expect(bUi.store.state.exampleFilter).toEqual({ tag: null, difficulty: null });
   expect(bUi.store.state.projectFiles).toEqual([]);
   await vi.waitFor(() => { expect(mounted.props).not.toBe(bUi); expect(mounted.props!.store.state.account.uid).toBe('A'); expect(mounted.props!.store.state.ready).toBe(true); expect(mounted.props!.store.state.projects.some(row => row.id === aId)).toBe(true); });
   expect(mounted.props!.store.state.projects.some(row => row.id === bProject.id)).toBe(false);
@@ -308,15 +324,21 @@ it('boots the real session host, saves and reopens projects, and revokes retaine
     expect(await payloads.at(-1)!.text()).toBe(expectedBytes);
   }
   const beforeAba = mounted.props!; const oldAbaConsole = window.fem;
+  await window.fem.dispatch({ cmd: 'example.filter', ...galleryFilter });
   emitIdentity('B'); emitIdentity('A');
+  expect(beforeAba.store.state.exampleFilter).toEqual({ tag: null, difficulty: null });
   expect(beforeAba.store.state.projectFiles).toEqual([]); expect(beforeAba.store.state.model).toBeNull();
   await expect(oldAbaConsole.query.model()).rejects.toMatchObject({ code: 'session.expired' });
   await vi.waitFor(() => { expect(mounted.props).not.toBe(beforeAba); expect(mounted.props!.store.state.account.uid).toBe('A'); expect(mounted.props!.store.state.ready).toBe(true); });
+  expect(mounted.props!.store.state.exampleFilter).toEqual({ tag: null, difficulty: null });
   expect(mounted.props!.store.state.projectFiles).toEqual([]); expect((await window.fem.query.model()).bodies).toEqual([]);
   expect(mounted.props!.store.state.projects.some(row => row.id === aId)).toBe(true);
+  await window.fem.dispatch({ cmd: 'example.filter', ...galleryFilter });
   const beforeSignOut = mounted.props!; emitIdentity(null);
+  expect(beforeSignOut.store.state.exampleFilter).toEqual({ tag: null, difficulty: null });
   expect(beforeSignOut.store.state.projects).toEqual([]);
   await vi.waitFor(() => { expect(mounted.props).not.toBe(beforeSignOut); expect(mounted.props!.store.state.account.uid).toBeNull(); expect(mounted.props!.store.state.ready).toBe(true); expect(mounted.props!.store.state.projects.some(row => row.id === anonymous.id)).toBe(true); });
+  expect(mounted.props!.store.state.exampleFilter).toEqual({ tag: null, difficulty: null });
   expect(mounted.props!.store.state.projects.some(row => row.id === aId || row.id === bProject.id)).toBe(false);
   await window.fem.dispatch({ cmd: 'project.open', id: anonymous.id });
   expect((await window.fem.query.model()).bodies).toHaveLength(1);
