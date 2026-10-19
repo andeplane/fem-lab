@@ -27,10 +27,10 @@
     },
     {
       "title": "Define the material, with alpha",
-      "explain": "`material.add` takes `alpha`, the coefficient of thermal expansion, alongside `E` and `nu` — without it, `load.temperature` has nothing to convert a temperature change into. `k` (conductivity) is here too, though only a heat-transfer Step would use it.",
+      "explain": "`material.add` takes `alpha`, the coefficient of thermal expansion, alongside `E` and `nu` — without it, `load.temperature` has nothing to convert a temperature change into. `k` (conductivity) is here too, though only a heat-transfer Step would use it. These are assumed illustrative aluminium constants for this thermal-strain exercise, not certified 6061-T6 or EN 573-3 material data.",
       "expect": { "cmd": "material.add", "match": { "name": "aluminium" } },
       "highlight": "material.add",
-      "doIt": { "cmd": "material.add", "name": "aluminium", "E": "70 GPa", "nu": 0.33, "rho": "2700 kg/m^3", "alpha": "2.3e-5 1/K", "k": "205 W/(m*K)", "source": "EN 573-3 6061-T6" }
+      "doIt": { "cmd": "material.add", "name": "aluminium", "E": "70 GPa", "nu": 0.33, "rho": "2700 kg/m^3", "alpha": "2.3e-5 1/K", "k": "205 W/(m*K)", "source": "Assumed illustrative aluminium constants for the thermal-strain example; not a certified material grade" }
     },
     {
       "title": "Assign it",
