@@ -18,6 +18,12 @@ Build in this order: choose an idealisation and geometry, assign properties, mes
 
 ## Find an operation
 
+Click the **FEM Lab logo** at the top left, or **Projects**, to return to the main menu and project list. The open workspace stays intact; close the menu or use browser **Back** to return to it. **Back** and **Forward** also move between the examples gallery and saved project workspaces.
+
+The address uses `#/` for the menu, `#/examples` for the gallery and `#/projects/<id>` for a saved workspace. Refreshing a project URL opens its saved artifact, including retained Results and files, without rerunning solves. After opening an example, the address points to the saved project so refresh recovers your edits. Keep browser autosave enabled, or explicitly save before refreshing; changes made with saving off cannot be recovered from a URL.
+
+Project URLs refer to this browser's storage for the current account. They are not public share links and may not resolve in a different browser. A missing or inaccessible project returns to the menu with an error. Use a [share link or exported file](./import-export.md) to send a Model to someone else. Existing Journal share links, tutorial links and example links continue to work.
+
 Use **Search commands** or **Ctrl+K / Command+K**. Search for a Command such as `material.add`, or an existing object by name. A command with required arguments opens its form. A natural-language intent preview depends on Assistant availability; searching registered Commands does not require AI.
 
 The bottom panels expose Results, Checks, Script, Journal and other analysis views. Examples and Tutorials open guided overlays. Escape closes the active supported overlay. You can resize docked panels; view changes do not change the engine Journal.

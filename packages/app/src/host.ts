@@ -517,6 +517,12 @@ export function appCloudCommands(cloud?:CloudProjectHost):HostDef[]{
 export function appHostCommands(store: Store, transport: EngineTransport, viewer: ViewerRef, _refresh: () => Promise<void>, results?: ResultsView, registry?: () => Registry, comparison?: ResultComparison,cloud?:CloudProjectHost): HostDef[] {
   let intentRun = 0;
   return [
+    {
+      name: 'navigation.home', execution: 'sessionView',
+      description: 'Return to the main menu and project list without replacing the open Model, its Results or files. The browser host records this navigation so Back returns to the workspace. Never journaled.',
+      schema: z.object({}), tool: true,
+      run: () => { store.togglePanel('examples', false); store.togglePanel('projects', true); },
+    },
     ...tourCommands(store, {
       preferences: { getItem: key => localStorage.getItem(key), setItem: (key, value) => localStorage.setItem(key, value) },
       openCantilever: async () => {

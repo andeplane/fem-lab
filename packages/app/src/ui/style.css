@@ -206,7 +206,13 @@ textarea:focus {
   height: 100%;
   color: var(--text-high);
   font-weight: 600;
+  background: transparent;
+  border: 0;
+  border-right: 1px solid var(--border-panel);
+  border-radius: 0;
+  cursor: pointer;
 }
+.logo:hover { color: var(--accent); }
 .logo i {
   width: 16px;
   height: 16px;
