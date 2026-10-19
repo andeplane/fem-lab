@@ -143,7 +143,11 @@ export function Palette({ s, dispatch, commands }: { s: UiState; dispatch: Dispa
 }
 
 export function filterExamples(items: ExampleEntry[], filter: ExampleFilter): ExampleEntry[] {
-  return items.filter((item) => (filter.tag === null || item.tags.includes(filter.tag)) && (filter.difficulty === null || item.difficulty === filter.difficulty));
+  const terms = (filter.query ?? '').replaceAll('-', ' ').trim().toLowerCase().split(/\s+/).filter(Boolean);
+  return items.filter((item) => {
+    const text = [item.name, item.title, item.summary, item.tag, ...item.tags].join(' ').replaceAll('-', ' ').toLowerCase();
+    return terms.every(term => text.includes(term)) && (filter.tag === null || item.tags.includes(filter.tag)) && (filter.difficulty === null || item.difficulty === filter.difficulty);
+  });
 }
 
 export const expectedValue = (expected: ExampleEntry['expected']): string =>
@@ -166,7 +170,7 @@ export function Examples({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   if (!open) return null;
   const tags = [...new Set(items.flatMap((item) => item.tags))].sort();
   const shown = filterExamples(items, s.exampleFilter);
-  const filtered = s.exampleFilter.tag !== null || s.exampleFilter.difficulty !== null;
+  const filtered = Boolean(s.exampleFilter.query) || s.exampleFilter.tag !== null || s.exampleFilter.difficulty !== null;
   const applyFilter = (patch: Partial<ExampleFilter>) =>
     void dispatch({ cmd: 'example.filter', ...s.exampleFilter, ...patch }).catch(() => undefined);
   return (
@@ -181,6 +185,11 @@ export function Examples({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
           </Cmd>
         </div>
         <div class="gallery-filters">
+          <label class="gallery-search">
+            <span>Search</span>
+            <input type="search" aria-label="Search examples" placeholder="Search names, descriptions, tags…" data-cmd="example.filter"
+              value={s.exampleFilter.query ?? ''} onInput={(e) => applyFilter({ query: e.currentTarget.value })} />
+          </label>
           <label>
             <span>Tag</span>
             <select
@@ -250,7 +259,7 @@ export function Examples({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
           {loaded && items.length === 0 ? <div class="empty-note">No bundled examples were found. `npm run dev` copies them from crates/engine/benches/journals.</div> : null}
           {loaded && items.length > 0 && shown.length === 0 ? (
             <div class="empty-note gallery-empty">
-              <span>No examples match both filters.</span>
+              <span>No examples match your search and filters.</span>
               <Cmd dispatch={dispatch} cmd="example.filter" class="tbutton outline" args={{ tag: null, difficulty: null }}>
                 reset filters
               </Cmd>
