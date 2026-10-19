@@ -617,7 +617,7 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
     {
       name: 'example.filter',
       execution: 'workspace',
-      description: 'Search the Examples gallery by case-insensitive words in names, descriptions and tags, combined with one metadata tag and difficulty level. All search words must match. Pass null for tag/difficulty and an empty query to reset. Omitting query clears text search. Changes only the gallery view.',
+      description: 'Search the Examples gallery by case-insensitive words in names, descriptions and tags, combined with one metadata tag and difficulty level. All search words must match. Pass null for tag/difficulty and an empty query to reset. Omitting query clears text search. Filters stay with the live workspace across same-owner project navigation and clear on account changes or sign-out. Changes only the gallery view.',
       schema: z.object({ tag: z.string().nullable(), difficulty: z.number().int().min(1).max(3).nullable(), query: z.string().optional().describe('Search words; empty or omitted clears text search.') }),
       tool: true,
       run: (input) => {
