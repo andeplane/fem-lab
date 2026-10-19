@@ -32,6 +32,7 @@ import { AnimationCapture, browserAnimationCaptureEnvironment } from './animatio
 import { App } from './ui/App';
 import { StartupHost, startupWait, WORKSPACE_STATUS, workspaceStatus } from './startup';
 import { SessionWorkspace } from './session-workspace';
+import { WorkspaceNavigation, browserNavigationHistory } from './navigation';
 import { SessionTransport, sameSession } from './session-transport';
 import type { ReplacementSource } from './session-protocol';
 import { bindRegistryProducer, type RegistryProducer } from './producer-registry';
@@ -447,14 +448,14 @@ class Producer {
   private native: Registry;
   private readonly lifetime = new AbortController();
   private detach = () => {};
-  constructor(public bundle: Bundle, public transport: SessionTransport) {
+  constructor(public bundle: Bundle, public transport: SessionTransport, private readonly recordsNavigation = true) {
     this.native = this.makeNative();
     this.registry = this.makeNative();
     this.registry.dispatch = (command) => this.dispatch(command);
     this.registry.query = (query) => this.query(query);
     bindRegistryProducer(this.registry, async () => {
       const owner = this.bundle; const transport = this.transport;
-      const child = new Producer(owner, await transport.fork());
+      const child = new Producer(owner, await transport.fork(), this.recordsNavigation);
       return child.handle();
     });
     this.listen();
@@ -548,6 +549,10 @@ class Producer {
     const before = this.bundle; const native = this.native; const transport = this.transport;
     const definition = native.describe(command.cmd);
     before.assertOwner();
+    if (this.recordsNavigation && interruptsNavigation(command, definition.execution)) {
+      await admitUserNavigation(definition.execution);
+      before.assertOwner();
+    }
     // Expired retained output is a local delivery status, never an engineering failure or a
     // reason to erase a currently displayed solve error. The private cache owns its authority.
     if (command.cmd === 'file.download') return native.dispatch(command);
@@ -584,8 +589,22 @@ class Producer {
       if(this.inputs.length){current.inventory.replace([...current.inventory.snapshot(),...this.inputs]);this.inputs=[];await current.refresh();}
       current.publishFiles();
       current.store.log('command', command.cmd);
+      if (displayed === current) {
+        if (definition.execution === 'replacement') {
+          // Only a newly opened Model/example needs its first complete snapshot here.
+          // Restores already claimed their artifact; saving them again would upload an
+          // unchanged cloud revision. Empty new projects keep normal autosave batching.
+          if (command.cmd !== 'project.new' && command.cmd !== 'model.new' && current.currentId) {
+            const saved = await current.repository.read(current.currentId);
+            if (!saved.artifact && !saved.artifactError) await current.prepareToLeave();
+          }
+          current.assertOwner();
+          if (this.recordsNavigation) navigation.record();
+        } else if (this.recordsNavigation && (command.cmd === 'navigation.home' || command.cmd === 'panel.toggle' && ['projects', 'examples'].includes(String(command['panel'])))) navigation.record();
+        else if (this.recordsNavigation && definition.execution === 'modelWrite' && (!location.hash || location.hash.startsWith('#/'))) navigation.record();
+      }
       return ack;
-    } catch (error) { publication.fail(error); throw error; }
+    } catch (error) { if (this.recordsNavigation || !this.lifetime.signal.aborted) publication.fail(error); throw error; }
     finally { if (long) this.bundle.store.set({ solving: null, progress: null }); }
   }
   async query(query: { query: string } & Record<string, unknown>): Promise<unknown> {
@@ -598,6 +617,52 @@ class Producer {
 
 let displayed: Bundle | undefined;
 let publishedOnce=false;
+let navigationBooted = false;
+let initialUserActivation = false;
+function interruptsNavigation(command: { cmd: string } & Record<string, unknown>, execution: string): boolean {
+  return ['replacement', 'modelWrite', 'workspace'].includes(execution) || command.cmd === 'navigation.home' || command.cmd === 'panel.toggle' && ['projects', 'examples'].includes(String(command['panel']));
+}
+async function admitUserNavigation(execution: string): Promise<void> {
+  // Mark the intention before any fork/await, including the initial boot's asynchronous reads.
+  initialUserActivation = true;
+  // Menus have no document targets and stay responsive during a private download.
+  if (execution === 'sessionView') { navigation.interrupt(); return; }
+  await navigation.interruptAndWait();
+  await workspace.whenIdle();
+}
+const navigation = new WorkspaceNavigation(browserNavigationHistory(window), {
+  current: () => ({ id: displayed?.currentId ?? null, home: displayed?.store.state.panels['projects'] === true, examples: displayed?.store.state.panels['examples'] === true }),
+  show: page => {
+    if (!displayed || displayed.revoked) return;
+    const store = displayed.store;
+    const started = Boolean(store.state.model && (store.state.model.bodies.length || store.state.revision));
+    store.set({ panels: { ...store.state.panels, projects: page === 'home' && started, examples: page === 'examples' } });
+  },
+  open: async (id, signal) => {
+    signal.throwIfAborted();
+    const owner = displayed;
+    if (!owner) throw expired();
+    if (owner.store.state.project?.autosave === false && unsaved(owner.store.state)) throw new FemError('unsupported', 'Save this project before opening another workspace with browser history.', 'navigation', 'project.save');
+    if (owner.ownerUid && accounts.state.status === 'loading') await new Promise<void>(resolve => {
+      const stop = accounts.subscribe(account => {
+        if (account.status !== 'loading' || accounts.version !== owner.ownerEpoch) { queueMicrotask(stop); resolve(); }
+      });
+    });
+    owner.assertOwner();
+    // A fresh signed-in browser may need the private catalogue before its uncached open.
+    if (owner.ownerUid && !owner.store.state.projects.some(project => project.id === id)) await sync.refresh();
+    signal.throwIfAborted();
+    owner.assertOwner();
+    if (displayed !== owner) throw expired();
+    const producer = new Producer(owner, await owner.transport.fork(), false);
+    const lease = producer.handle();
+    const cancel = () => { void lease.release(); };
+    signal.addEventListener('abort', cancel, { once: true });
+    try { signal.throwIfAborted(); await producer.registry.dispatch({ cmd: 'project.open', id }); }
+    finally { signal.removeEventListener('abort', cancel); await lease.release(); }
+  },
+  fail: error => displayed?.fail(error),
+});
 export async function prepareAccountNavigation(): Promise<void> {
   const id = await displayed?.prepareAccountReturn();
   if (id) sessionStorage.setItem('femlab.accountReturnProject', JSON.stringify({id,owner:displayed!.ownerUid}));
@@ -612,6 +677,7 @@ const workspace = new SessionWorkspace<Bundle>({
   build: async (transport, snapshot, source) => { if(displayed?.revoked&&source!==undefined)throw expired();const bundle = new Bundle(await transport.fork(), source ? recoveredFiles.get(source) : undefined); try { await bundle.initialize(snapshot, source); } catch (error) { try { await bundle.abandon(); } finally { bundle.dispose(); } throw error; } bundles.set(transport.channel, bundle); return bundle; },
   publish: ({ resources: bundle }) => {
     const priorPublication=publishedOnce;publishedOnce=true;
+    const identityChanged = displayed && (displayed.ownerUid !== bundle.ownerUid || displayed.ownerEpoch !== bundle.ownerEpoch);
     // A folder is a workspace capability; replacing the engine keeps the current selection.
     if (displayed&&!displayed.revoked&&displayed.ownerUid===bundle.ownerUid) bundle.store.setFolder(displayed.store.state.folder);
     if (displayed&&!displayed.revoked&&displayed.ownerUid===bundle.ownerUid && !bundle.store.state.result && bundle.store.state.viewMode !== 'results') bundle.store.set({ tab: displayed.store.state.tab });
@@ -622,6 +688,8 @@ const workspace = new SessionWorkspace<Bundle>({
     displayed = bundle;
     const ui = new Producer(bundle, bundle.uiTransport);
     const dispatch: Registry['dispatch'] = async command => {
+      if (interruptsNavigation(command, ui.registry.describe(command.cmd).execution)) await admitUserNavigation(ui.registry.describe(command.cmd).execution);
+      bundle.assertOwner();
       if (['control', 'sessionView'].includes(ui.registry.describe(command.cmd).execution)) return ui.registry.dispatch(command);
       const producer = new Producer(bundle, await bundle.transport.fork());
       try { return await producer.registry.dispatch(command); }
@@ -633,6 +701,8 @@ const workspace = new SessionWorkspace<Bundle>({
     // before the fork; a retained facade follows only a replacement it initiated itself.
     const consoleDispatch: Registry['dispatch'] = async command => {
       const owner = consoleProducer;
+      if (interruptsNavigation(command, owner.registry.describe(command.cmd).execution)) await admitUserNavigation(owner.registry.describe(command.cmd).execution);
+      owner.bundle.assertOwner();
       const operation = new Producer(owner.bundle, await owner.transport.fork());
       try {
         const ack = await operation.registry.dispatch(command);
@@ -649,12 +719,13 @@ const workspace = new SessionWorkspace<Bundle>({
     const proxy = makeFemProxy(consoleDispatch, query => consoleProducer.registry.query(query));
     window.fem = new Proxy({} as Window['fem'], { get: (_target, key) => key === 'registry' ? consoleRegistry : key === 'dispatch' ? consoleDispatch : key === 'gpuSelfTest' ? (n: number) => consoleProducer.transport.gpuSelfTest(n) : Reflect.get(proxy, key) });
     bundle.store.dispatch = dispatch;
+    if (identityChanged) navigation.reset();
     if (!root.querySelector('.shell, .start-layout, .start')) root.textContent = '';
     startup.retire();
     detachStartupAccount();
     render(<App sessionKey={bundle.transport.stamp.session.backendEpoch} store={bundle.store} dispatch={dispatch} query={query => ui.registry.query(query)} viewer={bundle.viewer} rightViewer={bundle.rightViewer} comparison={bundle.comparison} commands={ui.registry.list().commands} registry={ui.registry} />, root);
     bundle.activateProjectSync();
-    if(priorPublication&&bundle.freshStart)queueMicrotask(()=>{void resumeAccountReturn(bundle).catch(error=>bundle.fail(error));});
+    if(priorPublication)queueMicrotask(()=>{void finishBoot(bundle).catch(error=>bundle.fail(error));});
   },
 });
 const startup = new StartupHost({
@@ -677,26 +748,39 @@ window.addEventListener('online',()=>{void sync.refresh().catch(()=>undefined);}
 // The existing Start component is mounted before any awaited adapter, storage or engine work.
 render(<App startup={startup} />, root);
 void startup.loadProjects();
-void accounts.initialize();
+const accountReady = accounts.initialize();
 void startup.start().catch(() => undefined); // Failure remains visible, with registered Retry.
 
 async function finishBoot(owner: Bundle): Promise<void> {
+  await accountReady;
+  if (displayed !== owner || owner.revoked) return;
   await owner.refresh();
   // Never retarget initial navigation onto a session that replaced this startup publication.
   if (displayed !== owner) return;
+  if (navigationBooted) {
+    if (owner.freshStart) await resumeAccountReturn(owner);
+    return;
+  }
+  navigationBooted = true;
+  if (initialUserActivation) { await navigation.start(false); return; }
+  // Managed routes acquire their cancellation scope synchronously, before any producer fork.
+  if (location.hash.startsWith('#/') && !sessionStorage.getItem('femlab.accountReturnProject')) { await navigation.start(); return; }
   // Use the ordinary producer lease: automatic navigation can follow only replacements it
   // initiates, and a late share decode cannot target a project selected by the person.
   const operation = new Producer(owner, await owner.transport.fork());
-  const navigation = operation.handle();
+  const lease = operation.handle();
   try {
-    if(await resumeAccountReturn(owner))return;
+    if (initialUserActivation) { await navigation.start(false); return; }
+    if(await resumeAccountReturn(owner)) { await navigation.start(false); return; }
+    if (location.hash.startsWith('#/')) { await navigation.start(); return; }
     const example = new URLSearchParams(location.search).get('example');
-    if (example) await navigation.registry.dispatch({ cmd: 'file.openExample', name: example });
+    if (example) await lease.registry.dispatch({ cmd: 'file.openExample', name: example });
     const commands = await readShareFragment(location.hash);
     if (commands) {
       await operation.transport.replaceWith({ kind: 'commands', commands: commands as Command[] });
     }
-  } finally { await navigation.release(); }
+    await navigation.start(!example);
+  } finally { await lease.release(); }
 }
 
 /** An auth return never selects another account's or an anonymous browser project's bytes. */

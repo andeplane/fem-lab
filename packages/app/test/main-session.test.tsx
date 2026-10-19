@@ -118,6 +118,14 @@ it('boots the real session host, saves and reopens projects, and revokes retaine
   await expect(appHost.prepareAccountNavigation()).rejects.toMatchObject({ code: 'unsupported', suggestion: 'project.save' });
   const saved = await initial.dispatch({ cmd: 'project.save' }) as { commands: number };
   expect(saved.commands).toBe(2);
+  await vi.waitFor(() => expect(location.hash).toBe(`#/projects/${first.id}`));
+  const beforeMenu = await window.fem.query.document();
+  await window.fem.dispatch({ cmd: 'navigation.home' });
+  expect(location.hash).toBe('#/');
+  expect(mounted.props!.store.state.panels['projects']).toBe(true);
+  expect(await window.fem.query.document()).toEqual(beforeMenu);
+  await window.fem.dispatch({ cmd: 'panel.toggle', panel: 'projects', open: false });
+  expect(location.hash).toBe(`#/projects/${first.id}`);
   const beforeLogin = await window.fem.query.journal();
   await appHost.prepareAccountNavigation();
   expect(JSON.parse(sessionStorage.getItem('femlab.accountReturnProject')!)).toEqual({ id: first.id, owner: null });
@@ -275,6 +283,7 @@ it('boots the real session host, saves and reopens projects, and revokes retaine
   await expect(aUi.dispatch({ cmd: 'file.download', id: aFile.id })).rejects.toMatchObject({ code: 'session.expired' });
   await expect(aConsole.query.model()).rejects.toMatchObject({ code: 'session.expired' });
   await vi.waitFor(() => { expect(mounted.props).not.toBe(aUi); expect(mounted.props!.store.state.account.uid).toBe('B'); expect(mounted.props!.store.state.ready).toBe(true); });
+  expect(location.hash).toBe('#/');
   expect(mounted.props!.store.state.projects).toEqual([]); expect(mounted.props!.store.state.projectFiles).toEqual([]);
   expect((await window.fem.query.model()).bodies).toEqual([]);
   expect(await window.fem.registry.query({ query: 'query.results' })).toMatchObject({ records: [] });
