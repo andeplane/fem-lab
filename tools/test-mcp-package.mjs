@@ -93,6 +93,33 @@ try {
   const staticImport = await call('file_importAbaqus', { ...staticArgs, unitForce: '1 N' });
   assert.equal(staticImport.report.analysisConfigured, true);
   assert.equal((await call('query_model', {})).steps[0].solved, false);
+  // Named-material regressions: the installed tool must preserve the entire selected
+  // catalogue definition, then survive a real saved Journal replay without a provider call.
+  assert(names.has('material_addFromLibrary'), 'installed catalogue application tool is missing');
+  for (const [entry, expected] of [
+    ['s355j2', { E: '210 GPa', nu: 0.3, rho: '7850 kg/m^3', alpha: '0.000012 1/K', yield: '355 MPa' }],
+    ['6061-t6-sheet', { E: '68.3 GPa', nu: 0.33, rho: '2710 kg/m^3', alpha: '0.0000227 1/K', k: '152 W/(m K)', cp: '879 J/(kg K)', yield: '248 MPa' }],
+  ]) {
+    await call('model_new', { name: entry });
+    const catalogue = await call('query_materialLibrary', { name: entry });
+    const validation = await call('validate_script', { code: `await fem.material.addFromLibrary({ entry: '${entry}', name: 'material' });` });
+    assert.equal(validation.ok, true, JSON.stringify(validation));
+    await call('material_addFromLibrary', { entry, name: 'material' });
+    const before = await call('query_model', {});
+    const journal = await call('query_journal', {});
+    assert.deepEqual(journal.entries.at(-1).cmd, { cmd: 'material.add', name: 'material', source: catalogue.entries[0].materialAddSource, ...expected });
+    await call('export_file', { format: 'journal', path: `${entry}.femlab.json` });
+    const saved = JSON.parse(readFileSync(path.join(directory, `${entry}.femlab.json`), 'utf8'));
+    assert.deepEqual(saved.journal.entries, journal.entries);
+    await call('model_new', { name: 'replacement' });
+    for (const row of saved.journal.entries) {
+      const { cmd, ...args } = row.cmd;
+      await call(cmd.replaceAll('.', '_'), args);
+    }
+    const restored = await call('query_model', {});
+    assert.deepEqual(restored.materials, before.materials);
+    assert.equal(restored.hash, before.hash);
+  }
   // Release publication consumes the exact tarball that this process installed and tested.
   if (process.argv[2]) {
     const destination = path.resolve(process.argv[2]);
