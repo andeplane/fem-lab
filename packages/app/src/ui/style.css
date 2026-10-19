@@ -1610,6 +1610,7 @@ textarea:focus {
 }
 .gallery-filters {
   display: flex;
+  flex-wrap: wrap;
   align-items: end;
   gap: 10px;
   padding: 10px 16px;
@@ -1624,7 +1625,7 @@ textarea:focus {
   text-transform: uppercase;
   color: var(--text-faint);
 }
-.gallery-filters select {
+.gallery-filters select, .gallery-filters input {
   min-width: 150px;
   height: 28px;
   padding: 0 24px 0 8px;
@@ -1634,6 +1635,8 @@ textarea:focus {
   border: 1px solid var(--border-panel);
   border-radius: var(--radius);
 }
+.gallery-search { flex: 1 1 220px; min-width: 0; }
+.gallery-search input { width: 100%; min-width: 0; }
 .gallery-count {
   margin: 0 auto 7px 0;
   color: var(--text-dim);

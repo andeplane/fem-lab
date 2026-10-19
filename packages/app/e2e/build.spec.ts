@@ -226,7 +226,7 @@ test.describe('@cpu the gallery, the palette and the Script tab', () => {
     await page.keyboard.press('Enter');
     await expect(difficulty).toHaveValue('3');
     await expect(page.locator('.ex-card')).toHaveCount(0);
-    await expect(page.locator('.gallery-empty')).toContainText('No examples match both filters.');
+    await expect(page.locator('.gallery-empty')).toContainText('No examples match your search and filters.');
 
     const reset = page.locator('.gallery-empty button[data-cmd="example.filter"]');
     await reset.focus();
@@ -234,6 +234,15 @@ test.describe('@cpu the gallery, the palette and the Script tab', () => {
     await expect(page.locator('.ex-card')).toHaveCount(exampleCount);
     await expect(tag).toHaveValue('');
     await expect(difficulty).toHaveValue('');
+    const search = page.getByRole('searchbox', { name: 'Search examples' });
+    await search.fill('CANTILEVER hex20');
+    await expect(page.locator('.ex-card')).toHaveCount(1);
+    await expect(page.locator('.ex-card')).toContainText('Cantilever beam, hex20');
+    await search.fill('no such example');
+    await expect(page.locator('.ex-card')).toHaveCount(0);
+    await page.locator('.gallery-empty button[data-cmd="example.filter"]').click();
+    await expect(search).toHaveValue('');
+    await expect(page.locator('.ex-card')).toHaveCount(exampleCount);
   });
 
   test('opens an example from the gallery and shows its Journal', async ({ page }) => {
