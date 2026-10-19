@@ -98,8 +98,8 @@ function exportFileCommand(deps: ScopedDeps): HostDef {
 
 /**
  * The registry this host serves: every engine Command and Query over the wasm engine, plus the
- * two host Commands a headless host can honour — `script.run` (the `run_script` tool) and
- * `export.file`. No view, no selection, no panels: this host has no screen to move.
+ * headless host Commands for scripts, catalogue materials, Abaqus import and scoped exports.
+ * No view, no selection, no panels: this host has no screen to move.
  */
 type ScopedDeps = Omit<ServerDeps, 'engine' | 'projectFiles'> & { engine: EngineHandle; projectFiles: ProjectFiles };
 
@@ -151,7 +151,7 @@ function scopedRegistry(deps: ScopedDeps): Registry {
     ...d,
     description: 'First parse and type-check against the generated fem API with a separate 10000 ms validation deadline; invalid source returns diagnostics without executing. Then run TypeScript against the asynchronous fem API in an isolated QuickJS runtime. Only registry Commands/Queries, console and setTimeout/clearTimeout are available; no Node globals, imports, filesystem or network APIs. File exports use export.file and its host project policy. timeoutMs is greater than 0 and at most 30000 (default 30000), including startup. Timeout terminates the script and refuses further Commands; already admitted Commands may finish and are not rolled back. Nested script.run is refused. Returns { result, console, error? }; Commands enter the Journal like any other.',
   }));
-  registry = new Registry({ schema: SCHEMA, host, hostCommands: [...script, ...HOST_COMMANDS.filter(d => d.name === 'file.importAbaqus'), exportFileCommand(deps)], hostQueries: HOST_QUERIES.filter((d) => d.name === 'query.validateScript') });
+  registry = new Registry({ schema: SCHEMA, host, hostCommands: [...script, ...HOST_COMMANDS.filter(d => d.name === 'file.importAbaqus' || d.name === 'material.addFromLibrary'), exportFileCommand(deps)], hostQueries: HOST_QUERIES.filter((d) => d.name === 'query.validateScript') });
   return registry;
 }
 
