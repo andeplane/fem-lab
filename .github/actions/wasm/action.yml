@@ -1,0 +1,88 @@
+name: wasm build
+description: >-
+  Restore the wasm modules, the Node wasm build, the project-I/O helper, the schema document and
+  the release CLI for exactly these Rust sources from the Actions cache, or build and cache them.
+  Most pull requests and merges do not touch Rust, so they reuse the bundle main last built
+  instead of spending ten minutes rebuilding identical bytes (issue #820).
+
+runs:
+  using: composite
+  steps:
+    # Everything that can change the bytes is in the key. Caches written on main are readable by
+    # every pull request; a pull request's own cache is visible only to that pull request.
+    - id: key
+      shell: bash
+      run: echo "key=wasm-v1-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml', 'crates/**', 'vendor/**', 'package-lock.json', 'tools/build-wasm.mjs', 'tools/build-wasm-threads.mjs', 'tools/build-project-io.mjs', 'tools/wasm-wait-smoke.rs', 'tools/test-wasm-wait.mjs', 'tools/test-stl-wasm.mjs', 'packages/app/public/third-party/browser-threads/**') }}" >> "$GITHUB_OUTPUT"
+    - id: cache
+      uses: actions/cache/restore@v4
+      with:
+        key: ${{ steps.key.outputs.key }}
+        path: |
+          packages/app/src/generated/wasm
+          packages/app/src/generated/wasm-threads
+          tools/wasm-node
+          tools/project-io
+          engine.schema.json
+          target/release/femlab
+
+    - if: steps.cache.outputs.cache-hit != 'true'
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: "1.94"
+        targets: wasm32-unknown-unknown
+    - if: steps.cache.outputs.cache-hit != 'true'
+      uses: Swatinem/rust-cache@v2
+    - if: steps.cache.outputs.cache-hit != 'true'
+      name: install the wasm-bindgen CLI matching Cargo.lock
+      shell: bash
+      run: |
+        V=$(grep -A1 'name = "wasm-bindgen"' Cargo.lock | tail -1 | cut -d'"' -f2)
+        cargo install --locked wasm-bindgen-cli --version "$V"
+    # `npm ci` first: `build-wasm.mjs` shrinks both outputs with binaryen's `wasm-opt`, and the
+    # size budget is measured on the module this step produces.
+    - if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: npm ci
+    - if: steps.cache.outputs.cache-hit != 'true'
+      name: install pinned browser atomics toolchain
+      shell: bash
+      run: rustup toolchain install nightly-2026-09-05 --profile minimal --component rust-src --target wasm32-unknown-unknown
+    - if: steps.cache.outputs.cache-hit != 'true'
+      name: wasm32 STL length regressions with debug overflow checks
+      shell: bash
+      run: |
+        node tools/build-wasm.mjs --dev
+        node tools/test-stl-wasm.mjs debug
+    - if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: node tools/build-wasm.mjs
+    - if: steps.cache.outputs.cache-hit != 'true'
+      name: wasm32 STL length regressions in the optimized shipping module
+      shell: bash
+      run: node tools/test-stl-wasm.mjs optimized
+    - if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: node tools/build-wasm-threads.mjs
+    - if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: cargo build -p femlab --release
+    - if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: cargo test --locked -p femlab-project-io
+    - if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: node tools/build-project-io.mjs
+    - if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: ./target/release/femlab schema --out engine.schema.json
+    - if: steps.cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        key: ${{ steps.key.outputs.key }}
+        path: |
+          packages/app/src/generated/wasm
+          packages/app/src/generated/wasm-threads
+          tools/wasm-node
+          tools/project-io
+          engine.schema.json
+          target/release/femlab

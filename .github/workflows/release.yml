@@ -6,7 +6,9 @@ on:
   pull_request:
     paths:
       - '.github/workflows/ci.yml'
+      - '.github/workflows/gpu.yml'
       - '.github/workflows/release.yml'
+      - '.github/actions/wasm/**'
       - 'tools/release-artifacts.py'
       - 'tools/test_release_artifacts.py'
       - 'tools/test-mcp-package.mjs'
@@ -41,12 +43,17 @@ jobs:
         if: github.event_name == 'push'
         run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
 
-  # The same suite as PR CI, with Windows, GPU and browser GPU failures made fatal.
+  # The weekly deep suite (ADR 0046): main's checks plus macOS and Windows, with browser GPU
+  # failures made fatal, and the full lavapipe coverage gate with the D5 case.
   validation:
     needs: metadata
     uses: ./.github/workflows/ci.yml
     with:
       strict: true
+
+  gpu-validation:
+    needs: metadata
+    uses: ./.github/workflows/gpu.yml
 
   native:
     needs: metadata
@@ -129,7 +136,7 @@ jobs:
           if-no-files-found: error
 
   artifacts:
-    needs: [metadata, validation, native, web-package]
+    needs: [metadata, validation, gpu-validation, native, web-package]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
