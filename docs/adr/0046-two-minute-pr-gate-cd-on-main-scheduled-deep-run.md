@@ -40,8 +40,8 @@ Three tiers, each in its own workflow:
   plus `rust (macos-latest)`, `windows` and the D5 66k-DOF lavapipe case. A dispatch of `ci.yml`
   with `deep` runs the same set on any branch. Release validation calls both workflows, with
   `strict` making WebGPU smoke fatal, so nothing ships without the deep set.
-  `deep-report.yml` turns each failed job of a scheduled run into a `bug`, `ci` issue (or a
-  comment on the open one for that job), because no PR goes red to tell anyone; agents take
+  `deep-report.yml` turns each failed job of a scheduled run into a `bug`, `ci` issue (or, if that job already has one, a
+  comment that reopens it when closed), because no PR goes red to tell anyone; agents take
   those issues like any other.
 
 No threshold moved; only where and how often checks run.
