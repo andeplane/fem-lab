@@ -52,6 +52,10 @@ describe('read-only script validation', () => {
     ['rejects a browser action on the MCP host', 'mcp', 'await fem.view.fit();', false],
     ['accepts the registered MCP export action', 'mcp', 'await fem.export.file({ format: "journal", path: "model.json" });', true],
     ['rejects an invalid MCP export format', 'mcp', 'await fem.export.file({ format: "invented", path: "model.json" });', false],
+    ['accepts catalogue application in the browser', 'browser', 'await fem.material.addFromLibrary({ entry: "s355j2", name: "steel" });', true],
+    ['accepts catalogue application on MCP', 'mcp', 'await fem.material.addFromLibrary({ entry: "6061-t6-sheet", name: "sheet" });', true],
+    ['rejects catalogue property overrides in the browser', 'browser', 'await fem.material.addFromLibrary({ entry: "s355j2", name: "steel", rho: "1 kg/m^3" });', false],
+    ['rejects a missing catalogue entry on MCP', 'mcp', 'await fem.material.addFromLibrary({ name: "sheet" });', false],
   ] as const)('%s', (_name, host, code, ok) => {
     const result = validateScript(code, servingHosts[host]);
     if (ok) expect(result).toEqual({ ok: true, diagnostics: [] });
