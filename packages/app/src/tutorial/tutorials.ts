@@ -17,6 +17,7 @@ import solveCostAndSolvers from '../../tutorials/solve-cost-and-solvers.json';
 import steelRoofTruss from '../../tutorials/steel-roof-truss.json';
 import symmetryAnd2d from '../../tutorials/symmetry-and-2d.json';
 import thermalBar from '../../tutorials/thermal-bar.json';
+import thermalDesignCheck from '../../tutorials/thermal-design-check.json';
 import thermalStressChaining from '../../tutorials/thermal-stress-chaining.json';
 import transientHeat from '../../tutorials/transient-heat.json';
 import type { Tutorial } from './types';
@@ -29,6 +30,7 @@ export const TUTORIALS: Tutorial[] = [
   thermalBar,
   readAResult,
   heatConduction,
+  thermalDesignCheck,
   modalAnalysis,
   freeFreeModal,
   transientHeat,

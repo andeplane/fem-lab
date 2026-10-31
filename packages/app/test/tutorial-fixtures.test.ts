@@ -1,13 +1,15 @@
 import { batchModule } from '../../../tools/checked-batch.mjs';
 // A Node-only check (no DOM): every bundled `tutorials/*.json` and every example
 // `benches/journals/*.json` parses, every tutorial has the shape `types.ts` promises, and each
-// tutorial's `doIt` Commands, replayed in order through the wasm build, actually run — the same
-// engine the browser gets, not a second implementation to trust by coincidence.
+// tutorial's engine `doIt` Commands, replayed in order through the wasm build, actually run.
+// Registered view-only host actions are checked separately: they never enter the Journal.
+// This is the same engine the browser gets, not a second implementation to trust by coincidence.
 import { readFileSync, readdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { HOST_COMMANDS } from '@femlab/registry';
 import { TUTORIALS } from '../src/tutorial/tutorials';
 import type { Tutorial } from '../src/tutorial/types';
 
@@ -18,8 +20,26 @@ const journalsDir = path.join(root, 'crates', 'engine', 'benches', 'journals');
 
 const require = createRequire(import.meta.url);
 const wasm = batchModule(require(path.join(root, 'tools', 'wasm-node', 'femlab_engine_wasm.js'))) as {
-  Engine: new (threads: number) => { replay_hashes(json: string, skipSolves: boolean, verify: boolean): Promise<string> };
+  Engine: new (threads: number) => {
+    replay_hashes(json: string, skipSolves: boolean, verify: boolean): Promise<string>;
+    query(json: string): string;
+    free(): void;
+  };
 };
+
+/** Hosts own view actions; unregistered Commands still reach Rust and fail there. */
+function engineCommands(tutorial: Tutorial) {
+  return tutorial.steps.flatMap(step => {
+    if (!step.doIt) return [];
+    const host = HOST_COMMANDS.find(command => command.name === step.doIt!.cmd);
+    if (!host) return [step.doIt];
+    expect(host.execution, `${tutorial.id}: ${host.name} must only change the view`).toBe('sessionView');
+    expect(step.expect, `${tutorial.id}: host actions cannot wait for a Journal entry`).toBeNull();
+    const { cmd: _cmd, ...args } = step.doIt;
+    expect(host.schema.safeParse(args).success, `${tutorial.id}: ${host.name} arguments`).toBe(true);
+    return [];
+  });
+}
 
 async function replay(commands: ({ cmd: string } & Record<string, unknown>)[]): Promise<void> {
   const entries = commands.map((cmd, seq) => ({ seq, cmd, hashAfter: '' }));
@@ -35,7 +55,7 @@ describe('tutorials/*.json', () => {
   it('bundles the four built-ins the PLAN promises plus one per procedure', () => {
     expect(files.length).toBeGreaterThanOrEqual(11);
     expect(TUTORIALS.map((t) => t.id).sort()).toEqual(
-      ['cantilever', 'heat-conduction', 'journal-as-program', 'mesh-convergence', 'modal-analysis', 'plate-with-hole', 'pressure-vessel', 'free-free-modal', 'read-a-result', 'symmetry-and-2d', 'thermal-bar', 'transient-heat', 'composite-block-shear', 'solve-cost-and-solvers', 'thermal-stress-chaining', 'steel-roof-truss', 'column-buckling', 'concrete-floor-slab'].sort(),
+      ['cantilever', 'heat-conduction', 'journal-as-program', 'mesh-convergence', 'modal-analysis', 'plate-with-hole', 'pressure-vessel', 'free-free-modal', 'read-a-result', 'symmetry-and-2d', 'thermal-bar', 'thermal-design-check', 'transient-heat', 'composite-block-shear', 'solve-cost-and-solvers', 'thermal-stress-chaining', 'steel-roof-truss', 'column-buckling', 'concrete-floor-slab'].sort(),
     );
     // every file in the folder is registered: adding one and forgetting the import fails here
     expect(files.map((f) => path.basename(f, '.json')).sort()).toEqual(TUTORIALS.map((t) => t.id).sort());
@@ -66,9 +86,45 @@ describe('tutorials/*.json', () => {
   });
 
   it.each(TUTORIALS.map((t): [string, Tutorial] => [t.id, t]))('%s: its doIt Commands replay through the wasm engine', async (_id, tutorial) => {
-    const commands = tutorial.steps.filter((s) => s.doIt).map((s) => s.doIt!);
+    const commands = engineCommands(tutorial);
     await replay(commands); // rejects (and fails the test) if the sequence does not run
     // mesh-convergence solves three meshes in one Command, so 5 s is not enough for this one
+  }, 30_000);
+});
+
+describe('thermal design tutorial: independent fin reference and the stated requirement', () => {
+  it('passes only the tip requirement at the stated convection and fails when cooling halves', async () => {
+    const tutorial = TUTORIALS.find(t => t.id === 'thermal-design-check')!;
+    expect(tutorial.steps).toHaveLength(18);
+    expect(tutorial.steps[13]!.doIt).toEqual({ cmd: 'solve.run', step: 'conduct' });
+    expect(tutorial.steps[14]!).toMatchObject({ expect: null, highlight: 'view.fit', doIt: { cmd: 'view.fit' } });
+    const original = engineCommands(tutorial);
+    expect(original).toHaveLength(13);
+    expect(original.filter(command => command.cmd === 'solve.run')).toHaveLength(1);
+    for (const h of [50, 25]) {
+      const commands = original.map(command => {
+        return command.cmd === 'load.convection' ? { ...command, h: `${h} W/(m^2 K)` } : command;
+      });
+      const engine = new wasm.Engine(1);
+      try {
+        await engine.replay_hashes(JSON.stringify(commands.map((cmd, seq) => ({ seq, cmd, hashAfter: '' }))), false, false);
+        const probe = (x: string) => JSON.parse(engine.query(JSON.stringify({
+          query: 'query.probe', field: 'temperature', at: [x, '12.5 mm', '1 mm'],
+        }))) as { value: { value: number; unit: string } };
+        const tip = probe('150 mm').value;
+        const root = probe('0 mm').value;
+        // Independent 1D adiabatic-tip solution. The 3D mesh has a small cross-section
+        // variation (Bi = 2.44e-4 at h=50); allow 0.05 K, far below the design margin.
+        const m = Math.sqrt(h * 2 * (0.025 + 0.002) / (205 * 0.025 * 0.002));
+        const reference = 20 + (120 - 20) / Math.cosh(m * 0.15);
+        expect(tip.unit).toBe('degC');
+        expect(root.unit).toBe('degC');
+        expect(Math.abs(tip.value - reference)).toBeLessThan(0.05);
+        expect(root.value).toBeCloseTo(120, 8);
+        expect(tip.value <= 40).toBe(h === 50);
+        expect(root.value > 40).toBe(true); // An all-body 40 °C requirement fails in both cases.
+      } finally { engine.free(); }
+    }
   }, 30_000);
 });
 
