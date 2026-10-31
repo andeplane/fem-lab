@@ -3,19 +3,19 @@ on:
   push:
     branches: [main]
   schedule:
-    - cron: '0 4 * * 1'
+    - cron: '0 4 1,15 * *'
   workflow_dispatch:
     inputs:
       deep:
         type: boolean
         default: false
-        description: Also run macOS and Windows (the weekly set).
+        description: Also run macOS and Windows (the deep set).
   workflow_call:
     inputs:
       strict:
         type: boolean
         default: false
-        description: Release validation. Runs the weekly set and makes WebGPU smoke failures fatal.
+        description: Release validation. Runs the deep set and makes WebGPU smoke failures fatal.
       deep:
         type: boolean
         default: false
@@ -24,13 +24,13 @@ on:
 # Three tiers (issue #820, ADR 0046, superseding ADR 0022's two gates). Pull requests run the
 # two-minute Linux gate in `pr.yml`. A push to main runs this workflow on Linux: workspace Rust
 # tests, the wasm bundle, web, the native-vs-wasm hashes and every Chromium smoke variant; when it
-# is green, `deploy.yml` publishes its `dist`. The weekly schedule, a dispatch with `deep` and
+# is green, `deploy.yml` publishes its `dist`. The schedule (1st and 15th), a dispatch with `deep` and
 # release validation (`strict`) add macOS and Windows. The lavapipe coverage gate lives in
 # `gpu.yml`. Main can go red on what a PR did not run; whoever merged fixes forward before
 # anything else lands. Job names are check names, so keep them.
 
 # Merges land minutes apart and each run must say whether that commit is green, so main runs are
-# never cancelled; the event is in the group so a merge never cancels the weekly run.
+# never cancelled; the event is in the group so a merge never cancels the scheduled run.
 concurrency:
   group: ${{ github.workflow }}-ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -50,7 +50,7 @@ jobs:
           python-version: '3.12'
       - run: python3 -m unittest discover -s infra/stripe -p 'test_*.py' -v
 
-  # Linux on every run; macOS (billed at ten times the Linux rate) only on the weekly set. Full
+  # Linux on every run; macOS (billed at ten times the Linux rate) only on the deep set. Full
   # crate coverage belongs to `gpu.yml`. The shared cache key lets pull requests' Rust jobs start
   # from this job's build.
   rust:

@@ -6,7 +6,7 @@ on:
 # untouched. It proves the change type-checks, its unit tests pass and the app still builds within
 # its bundle budget. Rust tests run only when Rust changed. Browser smoke, Linux CLI replays, the
 # native-vs-wasm hashes and coverage run on merge (`ci.yml`); macOS, Windows and the GPU matrix run
-# weekly. Branch protection requires the single `pr gate` check, so jobs can move between tiers
+# on the 1st and 15th of each month. Branch protection requires the single `pr gate` check, so jobs can move between tiers
 # without touching repository settings.
 
 concurrency:

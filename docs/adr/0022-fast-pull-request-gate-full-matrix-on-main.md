@@ -1,6 +1,6 @@
 # ADR 0022 — A fast pull-request gate, the full matrix on main
 
-Status: superseded by [ADR 0046](0046-two-minute-pr-gate-cd-on-main-weekly-deep-run.md) (2026-10-31). Accepted 2026-09-07. Issue #441.
+Status: superseded by [ADR 0046](0046-two-minute-pr-gate-cd-on-main-scheduled-deep-run.md) (2026-10-31). Accepted 2026-09-07. Issue #441.
 
 ## Context
 

@@ -1,4 +1,4 @@
-# ADR 0046 — A two-minute PR gate, CD on main, a weekly deep run
+# ADR 0046 — A two-minute PR gate, CD on main, a scheduled deep run
 
 Status: accepted (2026-10-31). Issue #820. Supersedes ADR 0022.
 
@@ -35,18 +35,22 @@ Three tiers, each in its own workflow:
   SwiftShader advisory). `deploy.yml` runs on that workflow's green completion and publishes the
   `dist` it built and tested; it no longer builds anything itself. `gpu.yml` runs the strict
   100 % lavapipe coverage gate when a merge changes the engine or geometry crates.
-- **Weekly deep run** (Monday 04:00 UTC, `ci.yml` and `gpu.yml` on schedule): everything above
+- **Deep run twice a month** (04:00 UTC on the 1st and 15th, `ci.yml` and `gpu.yml` on
+  schedule): everything above
   plus `rust (macos-latest)`, `windows` and the D5 66k-DOF lavapipe case. A dispatch of `ci.yml`
   with `deep` runs the same set on any branch. Release validation calls both workflows, with
   `strict` making WebGPU smoke fatal, so nothing ships without the deep set.
+  `deep-report.yml` turns each failed job of a scheduled run into a `bug`, `ci` issue (or a
+  comment on the open one for that job), because no PR goes red to tell anyone; agents take
+  those issues like any other.
 
 No threshold moved; only where and how often checks run.
 
 ## Consequences
 
 - A PR no longer runs browser smoke or the CLI replay tests. Regressions there surface on main
-  minutes after the merge, and a macOS or Windows-only failure surfaces within a week (or in
-  release validation). As before, whoever merged fixes forward before anything else lands.
+  minutes after the merge, and a macOS or Windows-only failure surfaces within about two weeks
+  (or in release validation) as an issue. As before, whoever merged fixes forward before anything else lands.
 - A PR that changes Rust takes longer than two minutes: it compiles and tests the workspace and,
   on its first push, builds the wasm bundle it then caches for its later pushes.
 - The site deploys only from a green main run, so a red main also holds the deployment until it

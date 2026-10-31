@@ -11,12 +11,12 @@ on:
       - 'rust-toolchain.toml'
       - '.github/workflows/gpu.yml'
   schedule:
-    - cron: '0 4 * * 1'
+    - cron: '0 4 1,15 * *'
   workflow_dispatch:
   workflow_call:
 
 # The strict engine and geometry coverage gate on lavapipe (ADR 0007), about three quarters of an
-# hour of runner time. It runs when a merge changes the engine or geometry crates, weekly, on
+# hour of runner time. It runs when a merge changes the engine or geometry crates, twice a month, on
 # demand and in release validation; a merge that only touches the app or docs cannot change it
 # (issue #820, ADR 0046). The 100 % threshold is unchanged.
 
@@ -66,6 +66,6 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       # The 66k-DOF D5 case costs a release build and a quarter of an hour on lavapipe, so it runs
-      # weekly, on demand and before a release, not on every engine merge.
+      # twice a month, on demand and before a release, not on every engine merge.
       - if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main') }}
         run: cargo test --release -p femlab-engine --features gpu-tests --test gpu_kernels -- --ignored sixty_six --nocapture

@@ -1,0 +1,40 @@
+name: deep report
+on:
+  workflow_run:
+    workflows: [ci, gpu]
+    types: [completed]
+
+# The scheduled deep run has no PR to turn red, so every failed job becomes a GitHub issue that an
+# agent can pick up (issue #820, ADR 0046). One open issue per job: a repeat failure comments on
+# the existing issue instead of filing a duplicate.
+permissions:
+  actions: read
+  issues: write
+
+jobs:
+  report:
+    if: github.event.workflow_run.event == 'schedule' && github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          WORKFLOW: ${{ github.event.workflow_run.name }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          gh api --paginate "repos/$GH_REPO/actions/runs/$RUN_ID/jobs?filter=latest" \
+            --jq '.jobs[] | select(.conclusion == "failure") | [.name, .html_url, ([.steps[]? | select(.conclusion == "failure") | .name] | join(", "))] | @tsv' |
+          while IFS=$'\t' read -r job url steps; do
+            title="Scheduled deep CI: $WORKFLOW / $job failed"
+            body=$(printf 'The scheduled deep run failed in **%s**.\n\n- Job: %s\n- Failed step(s): %s\n- Run: %s\n- Commit: %s\n\nReproduce from the job log, fix the cause on a branch and close this issue from the PR. Do not skip, quarantine or loosen the check. See ADR 0046.\n' "$job" "$url" "${steps:-unknown}" "$RUN_URL" "$SHA")
+            existing=$(gh issue list --state open --label ci --search "\"$title\" in:title" --json number,title --jq ".[] | select(.title == \"$title\") | .number" | head -1)
+            if [ -n "$existing" ]; then
+              gh issue comment "$existing" --body "Failed again in the scheduled run.
+
+          $body"
+            else
+              gh issue create --title "$title" --label bug --label ci --body "$body"
+            fi
+          done
