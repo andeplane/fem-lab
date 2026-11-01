@@ -21,7 +21,7 @@ function definitions(source,functionName,registeredFactories=[]){
   for(const factory of registeredFactories)if(array.elements.filter(node=>ts.isSpreadElement(node)&&ts.isCallExpression(node.expression)&&node.expression.expression.getText(source)===factory).length!==1)throw new Error(`Documentation needs exactly one ${factory} registration in ${functionName}.`);
   return array.elements.flatMap(node=>{
     if(ts.isObjectLiteralExpression(unwrap(node)))return [metadata(node,source)];
-    if(ts.isSpreadElement(node)&&ts.isCallExpression(node.expression)&&registeredFactories.includes(node.expression.expression.getText(source)))return [];
+    if(ts.isSpreadElement(node)&&ts.isCallExpression(node.expression)&&registeredFactories.includes(node.expression.expression.getText(source)))return node.expression.expression.getText(source)==='appCloudCommands'?definitions(source,'appCloudCommands'):[];
     throw new Error(`Documentation needs explicit ${functionName} definitions; update its source reader for this registration shape.`);
   });
 }
@@ -51,7 +51,7 @@ export async function appReferenceSource(){
   const parse=async name=>ts.createSourceFile(name,await readFile(path.join(root,name),'utf8'),ts.ScriptTarget.Latest,true,name.endsWith('tsx')?ts.ScriptKind.TSX:ts.ScriptKind.TS);
   const [host,startup,main,ui,tour]=await Promise.all(['packages/app/src/host.ts','packages/app/src/startup.ts','packages/app/src/main.tsx','packages/app/src/ui/schema.ts','packages/app/src/tutorial/tour-state.ts'].map(parse));
   checkMainRegistrations(main);
-  const commands=definitions(host,'appHostCommands',['tourCommands']),queries=definitions(host,'appHostQueries'),tourDefinitions=definitions(tour,'tourCommands'),startupDefinitions=[];
+  const commands=definitions(host,'appHostCommands',['tourCommands','appCloudCommands']),queries=definitions(host,'appHostQueries'),tourDefinitions=definitions(tour,'tourCommands'),startupDefinitions=[];
   function visit(node){if(ts.isObjectLiteralExpression(node)&&property(node,'name')&&property(node,'schema'))startupDefinitions.push(metadata(node,startup));ts.forEachChild(node,visit);}
   visit(startup);
   if(!startupDefinitions.length)throw new Error('Documentation could not read startup registry metadata.');

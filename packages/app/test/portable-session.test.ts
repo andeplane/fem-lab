@@ -2,6 +2,7 @@ import { createRequire } from 'node:module';
 import { describe, expect, it, vi } from 'vitest';
 import type { Command, DocumentSnapshot, PortableProject, RunLease, Stamp } from '@femlab/registry';
 import { scientificJson, MAX_MODEL_FILE_BYTES, modelFileEncoder } from '@femlab/registry';
+import { encodeProjectArtifact, decodeProjectArtifact } from '../src/project-artifact';
 import { SessionRuntime } from '../src/session-runtime';
 import { SessionChannel, SessionTransport } from '../src/session-transport';
 import { SessionWorkspace } from '../src/session-workspace';
@@ -108,6 +109,53 @@ describe('portable project Worker transport', () => {
       const actual = (await restored.exportProject()).project.results[0]!.result.fields.reaction!.data[1];
       expect(Object.is(actual, -0)).toBe(true);
     } finally { h.dispose(); }
+  });
+
+  it('keeps native checked provenance, retained f64 bits and exact files through the complete persisted bundle', async () => {
+    const h = setup();
+    const owner = new wasm.SessionEngine(1, 'native-complete-bundle');
+    try {
+      const stamp = JSON.parse(owner.stamp()) as Stamp;
+      const lease = JSON.parse(owner.begin_run(JSON.stringify(stamp.session))) as RunLease;
+      const context = { session: lease.stamp.session, runId: lease.runId, operationId: '1' };
+      const ticket = owner.begin_replacement(JSON.stringify(context), lease.stamp.stateVersion);
+      const candidate = await wasm.PreparedEngine.create(ticket, { gpu: false, threads: 1 });
+      await candidate.commands(scientificJson(thermal.map(command => command.cmd === 'material.add' ? { ...command, nu: -0 } : command)));
+      candidate.finish(modelFileEncoder(), MAX_MODEL_FILE_BYTES);
+      const native = JSON.parse(owner.commit_candidate(candidate)) as DocumentSnapshot;
+      const reader = JSON.parse(owner.begin_run(JSON.stringify(native.stamp.session))) as RunLease;
+      const exported = JSON.parse(owner.query(JSON.stringify({ context: { session: reader.stamp.session, runId: reader.runId, operationId: '1' }, query: { query: 'query.portableProject' } }))) as { value: PortableProject };
+      const project = exported.value;
+      expect(project.results).toHaveLength(2);
+      expect(Object.is(project.file.model.materials![0]!.nu, -0)).toBe(true);
+      const reaction = project.results[0]!.result.fields.reaction!;
+      expect(reaction.data[1]).toBe(0); reaction.data[1] = -0;
+      const files = [{ id: 'original', role: 'input' as const, name: 'original.inp', mime: 'application/octet-stream', data: new Uint8Array([0, 255, 13, 10, 128]) }];
+      const bytes = encodeProjectArtifact({ name: 'signed-zero archive', createdAt: 1, engine: project, files });
+      const decoded = decodeProjectArtifact(bytes);
+      expect(encodeProjectArtifact(decoded)).toEqual(bytes);
+      expect(decoded.files).toEqual(files);
+      const { transport } = await h.workspace.start();
+      const restored = await transport.replaceWith({ kind: 'portable', portable: decoded.engine as PortableProject }, transport.stamp);
+      const actual = (await restored.exportProject()).project;
+      expect(actual.file.journal).toEqual(native.file.journal);
+      expect((await restored.snapshot()).model.hash).toBe(native.model.hash);
+      expect(Object.is(actual.file.model.materials![0]!.nu, -0)).toBe(true);
+      expect(Object.is(actual.results[0]!.result.fields.reaction!.data[1], -0)).toBe(true);
+      expect(actual.results.map(result => result.id)).toEqual(project.results.map(result => result.id));
+      for (let index = 0; index < project.results.length; index++) {
+        for (const [name, field] of Object.entries(project.results[index]!.result.fields)) {
+          const expected = new Float64Array(field!.data);
+          const received = new Float64Array(actual.results[index]!.result.fields[name]!.data);
+          expect(new Uint8Array(received.buffer)).toEqual(new Uint8Array(expected.buffer));
+        }
+      }
+      expect(h.workers[1]!.requests.filter(request => request.op === 'dispatch')).toEqual([]);
+      const checked = await restored.replaceWith({ kind: 'journal', entries: actual.file.journal.entries, skipSolves: true }, restored.stamp);
+      expect((await checked.snapshot()).model.hash).toBe(native.model.hash);
+      expect(Object.is((await checked.snapshot()).file.model.materials![0]!.nu, -0)).toBe(true);
+      expect((await checked.exportProject()).project.results).toEqual([]);
+    } finally { owner.free(); h.dispose(); }
   });
 
   it.each(['journal', 'file'] as const)('keeps checked native signed-zero Model provenance through %s recovery', async kind => {
