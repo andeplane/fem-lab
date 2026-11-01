@@ -14,7 +14,8 @@ Dismiss the tour with **Continue on my own**, its close button, or **Escape**. D
 2. Use **Read a result** and **Mesh convergence** to compare the numerical answer with reactions and an independent reference.
 3. Move to **Symmetry and 2D** and a plate-with-hole example before modeling a finely detailed 3D part.
 4. Choose a physics path: heat conduction/transient heat/thermal-stress chaining, modal/free-free modal, or trusses and column buckling.
-5. Use **Journal as program** and **Solve cost and solvers** when repeating analyses or growing a Model.
+5. Try **Thermal design check** to state a steady tip-temperature requirement before solving, probe the fin tip and compare with an independent fin formula.
+6. Use **Journal as program** and **Solve cost and solvers** when repeating analyses or growing a Model.
 
 The tutorial's **Do it** action dispatches the same registered Command as a form. You can also perform the action yourself. Read the explanatory step before advancing; completing clicks is not an independent validation of the result.
 
@@ -45,8 +46,28 @@ Use **Search** in the gallery to find words in example names, descriptions and t
 
 The exact catalogue is generated from the shipped Journal fixtures and metadata; the list above is a learning selection.
 
+## Make a thermal design decision
+
+Choose **Tutorials → Thermal design check**. Use a separate Model: the guide builds the existing `heated-fin-convection` case and solves steady conduction with the local engine. No account or hosted AI is required. Its numerical material constants are assumed illustrative aluminium values for the fin reference, including conductivity 205 W/(m K); they are not certified 6061-T6 or EN 573-3 material data. Geometry, boundary conditions and numerical constants match the checked example; the tutorial explicitly identifies the assumptions.
+
+The illustrative requirement is **at most 40 °C at the centre of the insulated tip**, at `[150 mm, 12.5 mm, 1 mm]`. With a 120 °C held root, 20 °C ambient and an assumed convection coefficient of 50 W/(m² K) on all four long faces, expect about **37.41 °C** there. The independent adiabatic-tip fin formula gives **37.3946 °C**. On the post-solve inspection step, **Do it for me** fits the fin in the viewer without changing the Journal or Results; use **Next** after inspecting it. Probe the actual result in Celsius:
+
+```ts
+const tip = await fem.query.probe({
+  field: 'temperature',
+  at: ['150 mm', '12.5 mm', '1 mm'],
+});
+console.log(tip.value); // approximately { value: 37.41, unit: 'degC' }
+```
+
+This passes the stated tip-only check under those assumptions, with about 2.59 K of margin. The global maximum is the prescribed 120 °C root: a 40 °C limit anywhere in the Body would fail. `heat-steady` gives no transient peak or warm-up time, and convection is supplied rather than computed from fluid flow. Uncertain inputs can reverse the decision even when the mesh agrees closely with the analytical reference.
+
+The closing step explains corresponding Abaqus steady-state heat-transfer, Ansys Steady-State Thermal and Nastran heat-transfer terminology. These describe comparable workflows; the tutorial does not establish equivalent solver implementations or certify a design.
+
 ## Keep a comparison record
 
 Before changing an example, save a portable Model file or keep it as a separate project. Change one assumption at a time, solve the named Step again, and write down the quantity and units being compared. A tutorial's reference value is tied to its stated geometry, boundary conditions and formulation; it is not a target to force a different model to match.
 
 The repository's [Benchmark record](https://github.com/andeplane/fem-lab/blob/main/docs/BENCHMARKS.md) documents analytical/reference cases and convergence tests. For interpreting disagreement, start with [verification](./results-verification.md), [mesh settings](./meshing.md) and [physics limitations](./physics.md).
+
+The `heated-fin-convection` and `heated-fin` examples, and the **Thermal bar** tutorial, use assumed illustrative aluminium constants, including conductivity 205 W/(m K), rather than certified 6061-T6 or EN 573-3 property data. Their Journals, gallery explanations and tutorial material step state that assumption. Replacing those inputs with an actual alloy data set changes the physical problem: solve it again and update the analytical reference before comparing temperatures.

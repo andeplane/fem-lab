@@ -55,6 +55,7 @@ export const PATH: PathResult = { s: [0, 0.5, 1], values: [0, null, 2], unit: 'M
 
 /** One reply per Query the host Commands read; everything else is the capabilities blob. */
 const REPLIES: Record<string, unknown> = {
+  'query.materialLibrary': { entries: [{ materialAddSource: 'Sample catalogue source', E: null, nu: null, rho: null, alpha: null, k: null, cp: null, yield: null }], sources: [] },
   'query.script': { text: 'fem.model.new({ name: "beam" })' },
   'query.model': { name: 'beam', revision: 10, meshSettings: {}, warnings: [] },
   'query.result': RESULT,

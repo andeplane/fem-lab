@@ -1,0 +1,247 @@
+{
+  "id": "thermal-design-check",
+  "title": "Thermal design check",
+  "minutes": 10,
+  "summary": "Set an illustrative steady tip-temperature limit, solve a cooled fin, and distinguish a conditional pass from the global maximum and uncertain inputs.",
+  "steps": [
+    {
+      "title": "State the requirement before solving",
+      "explain": "For this exercise only, require the centre of the insulated tip at [150 mm, 12.5 mm, 1 mm] to remain at or below 40 °C in steady operation. This is an illustrative tip-only requirement, not a product safety limit. The root is held at 120 °C. Define what is limited before looking at a contour.",
+      "expect": null
+    },
+    {
+      "title": "Start the fin Model",
+      "explain": "Start an empty Model. Its geometry, boundary conditions and numerical material constants match the checked heated-fin-convection example; this guide states their illustrative provenance and adds a design question.",
+      "expect": {
+        "cmd": "model.new"
+      },
+      "highlight": "model.new",
+      "doIt": {
+        "cmd": "model.new",
+        "name": "heated-fin-convection"
+      }
+    },
+    {
+      "title": "Use Celsius for the result",
+      "explain": "The engine stores absolute temperature in kelvin. Celsius here is a display unit; 20 degC is not 20 K.",
+      "expect": {
+        "cmd": "model.setUnits"
+      },
+      "highlight": "model.setUnits",
+      "doIt": {
+        "cmd": "model.setUnits",
+        "units": {
+          "length": "mm",
+          "temperature": "degC"
+        }
+      }
+    },
+    {
+      "title": "Add the thin aluminium fin",
+      "explain": "The fin is 150 mm long, 25 mm wide and 2 mm thick. The held root is x = 0; the tip to check is x = 150 mm.",
+      "expect": {
+        "cmd": "geometry.addBox"
+      },
+      "highlight": "geometry.addBox",
+      "doIt": {
+        "cmd": "geometry.addBox",
+        "name": "fin",
+        "size": [
+          "150 mm",
+          "25 mm",
+          "2 mm"
+        ]
+      }
+    },
+    {
+      "title": "Record conductivity",
+      "explain": "Use the assumed illustrative aluminium conductivity k = 205 W/(m K). These reference constants are not certified 6061-T6 or EN 573-3 material data. Density and heat capacity are recorded for completeness but do not turn a heat-steady Step into a transient simulation.",
+      "expect": {
+        "cmd": "material.add"
+      },
+      "highlight": "material.add",
+      "doIt": {
+        "cmd": "material.add",
+        "name": "aluminium",
+        "E": "70 GPa",
+        "nu": 0.33,
+        "rho": "2700 kg/m^3",
+        "alpha": "2.3e-5 1/K",
+        "k": "205 W/(m K)",
+        "cp": "900 J/(kg K)",
+        "source": "Assumed illustrative aluminium constants for the analytical fin reference; not a certified material grade"
+      }
+    },
+    {
+      "title": "Assign aluminium to the fin",
+      "explain": "A Material applies only after it is assigned to the Body.",
+      "expect": {
+        "cmd": "material.assign"
+      },
+      "highlight": "material.assign",
+      "doIt": {
+        "cmd": "material.assign",
+        "material": "aluminium",
+        "bodies": [
+          "fin"
+        ]
+      }
+    },
+    {
+      "title": "Use the checked quadratic mesh",
+      "explain": "Use the existing example mesh: 30 × 5 × 2 cells with quadratic interpolation. Compare a probe with an independent formula as well as inspecting the contour.",
+      "expect": {
+        "cmd": "mesh.set"
+      },
+      "highlight": "mesh.set",
+      "doIt": {
+        "cmd": "mesh.set",
+        "mesher": {
+          "kind": "lattice",
+          "size": {
+            "nx": 30,
+            "ny": 5,
+            "nz": 2
+          }
+        },
+        "order": 2
+      }
+    },
+    {
+      "title": "Hold the root at 120 °C",
+      "explain": "The heat source maintains a fixed root temperature, deliberately above the tip requirement. An all-body temperature limit of 40 °C would already fail.",
+      "expect": {
+        "cmd": "constraint.temperature"
+      },
+      "highlight": "constraint.temperature",
+      "doIt": {
+        "cmd": "constraint.temperature",
+        "name": "root",
+        "on": "fin.xmin",
+        "value": "120 degC"
+      }
+    },
+    {
+      "title": "Cool the upper face",
+      "explain": "Air at 20 °C removes heat with the assumed h = 50 W/(m² K). This boundary coefficient is supplied; there is no fluid-flow calculation.",
+      "expect": {
+        "cmd": "load.convection"
+      },
+      "highlight": "load.convection",
+      "doIt": {
+        "cmd": "load.convection",
+        "name": "airTop",
+        "on": "fin.zmax",
+        "h": "50 W/(m^2 K)",
+        "tInf": "20 degC"
+      }
+    },
+    {
+      "title": "Cool the lower face",
+      "explain": "Apply the same ambient and coefficient to the lower long face.",
+      "expect": {
+        "cmd": "load.convection"
+      },
+      "highlight": "load.convection",
+      "doIt": {
+        "cmd": "load.convection",
+        "name": "airBottom",
+        "on": "fin.zmin",
+        "h": "50 W/(m^2 K)",
+        "tInf": "20 degC"
+      }
+    },
+    {
+      "title": "Cool the front edge",
+      "explain": "Include the thin front long face. The analytical perimeter includes all four long faces.",
+      "expect": {
+        "cmd": "load.convection"
+      },
+      "highlight": "load.convection",
+      "doIt": {
+        "cmd": "load.convection",
+        "name": "airFront",
+        "on": "fin.ymin",
+        "h": "50 W/(m^2 K)",
+        "tInf": "20 degC"
+      }
+    },
+    {
+      "title": "Cool the back edge",
+      "explain": "Complete the cooled perimeter. Leave the tip without a heat boundary Command: it is insulated, matching the adiabatic-tip reference.",
+      "expect": {
+        "cmd": "load.convection"
+      },
+      "highlight": "load.convection",
+      "doIt": {
+        "cmd": "load.convection",
+        "name": "airBack",
+        "on": "fin.ymax",
+        "h": "50 W/(m^2 K)",
+        "tInf": "20 degC"
+      }
+    },
+    {
+      "title": "Add the steady thermal Step",
+      "explain": "Include the held root and four convection loads. heat-steady predicts equilibrium after transients decay; it gives no warm-up time or transient peak.",
+      "expect": {
+        "cmd": "step.add"
+      },
+      "highlight": "step.add",
+      "doIt": {
+        "cmd": "step.add",
+        "name": "conduct",
+        "procedure": "heat-steady",
+        "constraints": [
+          "root"
+        ],
+        "loads": [
+          "airTop",
+          "airBottom",
+          "airFront",
+          "airBack"
+        ],
+        "output": [
+          "temperature"
+        ]
+      }
+    },
+    {
+      "title": "Solve the stated assumptions",
+      "explain": "Run the Step. Expect about 37.41 °C at the tip, compared with 37.39 °C from the independent one-dimensional fin solution. Read the actual result before deciding.",
+      "expect": {
+        "cmd": "solve.run"
+      },
+      "highlight": "solve.run",
+      "doIt": {
+        "cmd": "solve.run",
+        "step": "conduct"
+      }
+    },
+    {
+      "title": "Probe the tip, not the global maximum",
+      "explain": "Choose Do it for me to fit the solved fin in the viewer; this changes only the camera. Read the centre of the tip. In a script or browser console, run `await fem.query.probe({field: \"temperature\", at: [\"150 mm\", \"12.5 mm\", \"1 mm\"]})`. With Celsius selected, confirm value.unit is degC and read value.value: expect about 37.41 °C. The root/global maximum is about 120 °C and answers a different question. Choose Next after inspecting the result.",
+      "expect": null,
+      "highlight": "view.fit",
+      "doIt": {
+        "cmd": "view.fit"
+      }
+    },
+    {
+      "title": "Make the bounded decision",
+      "explain": "For this tip-only requirement, 37.41 °C ≤ 40 °C: pass under the assumed steady conditions, with about 2.59 K of margin. Celsius differences and kelvin differences have the same size. A 40 °C limit anywhere in the Body would fail at the 120 °C root. Neither decision describes a transient.",
+      "expect": null
+    },
+    {
+      "title": "Check what could change the decision",
+      "explain": "The margin depends on convection, ambient and root temperatures, conductivity and geometry. The same analytical fin formula at h = 25 W/(m² K) predicts about 54.65 °C at the tip: a fail. That is an analytical sensitivity estimate, not a second FEM solve performed here. To solve it, edit all four convection loads consistently and solve conduct again. A small mesh error does not bound uncertain inputs.",
+      "expect": null
+    },
+    {
+      "title": "The independent reference and equivalent terminology",
+      "explain": "The reference assumes a nearly uniform cross-section temperature, four convecting long faces and an insulated tip. Compare the value before accepting the design decision.",
+      "expect": null,
+      "theory": "The adiabatic-tip fin solution is\n$$T(x)=T_\\infty+(T_b-T_\\infty)\\frac{\\cosh m(L-x)}{\\cosh mL},\\qquad m=\\sqrt{\\frac{hP}{kA}}.$$\nHere $L=0.15\\,\\mathrm m$, $A=0.025\\times0.002=5\\times10^{-5}\\,\\mathrm{m^2}$, $P=2(0.025+0.002)=0.054\\,\\mathrm m$ and $k=205\\,\\mathrm{W/(m\\,K)}$. With $h=50\\,\\mathrm{W/(m^2\\,K)}$, $T_b=120\\,^\\circ\\mathrm C$ and $T_\\infty=20\\,^\\circ\\mathrm C$, the independent reference gives $T(L)=37.3946\\,^\\circ\\mathrm C$ versus about $37.41\\,^\\circ\\mathrm C$ computed. The through-thickness Biot number $h(t/2)/k=2.44\\times10^{-4}$ supports the uniform cross-section approximation; it does not remove uncertainty in $h$.\n\n**Decision:** the illustrative requirement is $T_{tip}\\le40\\,^\\circ\\mathrm C$, with margin $40-T_{tip}\\approx2.59\\,\\mathrm K$. It passes only this steady tip-temperature check. The global maximum is the prescribed $120\\,^\\circ\\mathrm C$ root. There is no transient peak calculation, fluid solver or automatic design certification.\n\n**Equivalent terminology.** `heat-steady` corresponds to an Abaqus steady-state heat-transfer step, Ansys Steady-State Thermal, or a Nastran steady-state heat-transfer solution. `constraint.temperature` is a prescribed temperature boundary; `load.convection` is a film/convection boundary. A temperature probe or requested nodal temperature supplies the value compared with a requirement. Names vary by product and do not imply identical elements or solvers.\n\nThis is re-authored around FEM Lab's existing fin example and its analytical reference. Autodesk Fusion's Thermal analysis tutorial is a reference for the design-question learning goal: https://help.autodesk.com/cloudhelp/ENU/Fusion-Simulate/files/GUID-4B1F8D61-6F33-4E6A-B08A-4E562026762C.htm ."
+    }
+  ]
+}

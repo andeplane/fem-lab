@@ -21,10 +21,23 @@ takes more than about a second in a release build; `packages/app/test/tutorial-f
 Journals through the wasm build used in the browser, with `--skip-solves`, since a solve entry's
 hash is the Model hash and is unaffected by the Result.
 
+When changing a canonical Journal, regenerate both its embedded `hashAfter` values and the
+adjacent `<name>.hashes` file through the real engine. Descriptive material provenance is
+part of the Model hash even when all physical constants stay the same. Check both forms:
+WASM replay verifies the embedded values, and the native CLI test also compares its output
+with the sibling hash file.
+
 Tags: **P1 · verify** (a hand-checkable textbook case), **NAFEMS** (a published Standard
 Benchmark or a well-known named case, cross-referenced in `docs/BENCHMARKS.md`), **everyday** (a
 model an engineer would actually build, with no literature reference to check against).
 Difficulty is 1 (a first model), 2 (a real workflow) or 3 (needs the theory to read the answer).
+
+The `heated-fin-convection` and `heated-fin` examples use assumed illustrative aluminium
+constants, including conductivity 205 W/(m K). Their material sources and the matching
+`thermal-bar` tutorial record that assumption; they do not certify a 6061-T6 grade or
+attribute those thermal properties to EN 573-3. Their physical inputs and existing reference
+values are unchanged. For a real alloy/product condition, use applicable property data and
+recompute both the solve and its reference.
 
 ## The numbers, checked
 
@@ -90,7 +103,7 @@ path, not a stress: the lattice puts two or three elements across a bolt hole),
 | `cantilever-modal` | 2 | A clamped-free steel beam with a rectangular section — four bending frequencies from one modal Step, two in each plane. | fₙ = (βₙ²/2π)·√(EI/ρAL⁴) | [modal-analysis](../packages/app/tutorials/modal-analysis.json) |
 | `free-free-beam-modal` | 3 | The same rectangular-section beam as `cantilever-modal`, this time with no constraints at all — six zero-frequency rigid-body modes, then the beam's own bending frequencies. | Free-free fₙ = (βₙ²/2π)·√(EI/ρAL⁴), β₁ = 4.730041 | [free-free-modal](../packages/app/tutorials/free-free-modal.json) |
 | `mesh-convergence-cantilever` | 2 | The cantilever solved at three mesh sizes by `study.converge`, with the observed rate and a Richardson estimate of the converged value. | δ = PL³/3EI = 0.1905 mm | [mesh-convergence](../packages/app/tutorials/mesh-convergence.json) |
-| `heated-fin-convection` | 2 | An aluminium fin held at its root temperature and cooled by air on all four long faces — steady conduction against the 1D fin formula. | θ/θ_b = cosh m(L−x) / cosh mL | [heat-conduction](../packages/app/tutorials/heat-conduction.json) |
+| `heated-fin-convection` | 2 | A fin with assumed aluminium properties, held at its root temperature and cooled by air on all four long faces — steady conduction against the 1D fin formula. | θ/θ_b = cosh m(L−x) / cosh mL | [heat-conduction](../packages/app/tutorials/heat-conduction.json) |
 | `thermal-stress-plate` | 3 | A heat Step conducts a linear temperature field through a plate, and a static Step named after it picks that field up as thermal stress. | σₓₓ = −EαΔT/(1−ν) = −150 MPa | [thermal-stress-chaining](../packages/app/tutorials/thermal-stress-chaining.json) |
 | `explicit-free-fall` | 3 | An unconstrained block under gravity, integrated by central differences — explicit dynamics checked against a schoolbook drop. | u = gt²/2 = 4.905 µm at 1 ms | — |
 | `steel-roof-truss` | 2 | A 12 m parallel-chord Pratt roof truss in CHS 88.9 × 5 S355, pinned one end and rollered the other, 20 kN at each top-chord joint. | δ = Σ N n L / EA = 7.0427 mm | [steel-roof-truss](../packages/app/tutorials/steel-roof-truss.json) |
