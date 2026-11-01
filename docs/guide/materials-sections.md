@@ -34,4 +34,17 @@ A shell Section supplies thickness for the `surface` mesher's midsurface. Direct
 
 Check local/reference directions and ply order before interpreting top/bottom or per-ply stress. Shell stresses and moments have special element-node locations and sign conventions, described in [Results](./results-verification.md). The laminate formulation is not a prediction of delamination or a universal composite failure criterion.
 
-Use `query.materialLibrary` to inspect available library entries and their provenance, then check that they match your intended analysis. See the [reference](./api-reference.md) for complete Material/Section schemas and [physics limits](./physics.md) for supported combinations.
+## Apply a catalogue Material
+
+In the browser or MCP host, inspect `query.materialLibrary` first. Confirm the grade, condition, product form, temperature basis and limitations match the actual part. The following example runs in an existing Model containing a Body named `beam`. Use `material.addFromLibrary` with the entry's canonical id and your new Material name:
+
+```ts
+const library = await fem.query.materialLibrary({ name: '6061-t6-sheet' });
+console.log(library.entries[0]); // inspect applicability and property sources first
+await fem.material.addFromLibrary({ entry: '6061-t6-sheet', name: 'sheet' });
+await fem.material.assign({ material: 'sheet', bodies: ['beam'] });
+```
+
+The application copies every available `E`, `nu`, `rho`, `alpha`, `k`, `cp` and `yield` value and the exact catalogue provenance into one ordinary `material.add` Journal entry. Values remain saved and replayable even when the current Step does not use them. Missing properties stay absent; the operation never invents conductivity, heat capacity or another missing value. Assignment to Bodies remains a separate Command. Ambiguous or unknown entries fail without creating a Material. This convenience Command is available in the browser and MCP, while custom materials still use `material.add` with only the properties you know. A catalogue yield value alone does not activate plasticity.
+
+See the [reference](./api-reference.md) for complete Material/Section schemas and [physics limits](./physics.md) for supported combinations.

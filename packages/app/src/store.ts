@@ -57,6 +57,8 @@ export type ExampleDifficulty = 1 | 2 | 3;
 export interface ExampleFilter {
   tag: string | null;
   difficulty: ExampleDifficulty | null;
+  /** All whitespace-separated terms must match the name, description or tags. */
+  query?: string;
 }
 export interface ConsoleLine {
   level: ConsoleLevel;
@@ -132,7 +134,7 @@ export interface UiState {
   tourStep: number;
   /** Explicit tutorial-start generation; lets a view Command replace an already open runner. */
   tutorialStart: number;
-  /** The Examples gallery's two independent, registry-driven filters. */
+  /** The Examples gallery's registry-driven text, tag and difficulty filters. */
   exampleFilter: ExampleFilter;
   /** View-only panel dimensions in CSS pixels; resizing never changes the Model or Journal. */
   panelSizes: PanelSizes;

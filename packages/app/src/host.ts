@@ -18,7 +18,7 @@ import type { ResultsView } from './results';
 import type { ResultComparison } from './result-comparison';
 import type { ScriptHost } from './script-host';
 import { type Autosave, type ShareCommand, indexedDbStore, makeAutosave, memoryStore, shareUrl } from './share';
-import { EMPTY_SELECTION, type ExampleDifficulty, type Store, type ViewMode, visibilityReducer } from './store';
+import { EMPTY_SELECTION, type ExampleFilter, type Store, type ViewMode, visibilityReducer } from './store';
 import type { ColormapName } from './viewer/colormap';
 import type { CameraState, Viewer } from './viewer/viewer';
 import { treeGroups } from './ui/Tree';
@@ -517,6 +517,12 @@ export function appCloudCommands(cloud?:CloudProjectHost):HostDef[]{
 export function appHostCommands(store: Store, transport: EngineTransport, viewer: ViewerRef, _refresh: () => Promise<void>, results?: ResultsView, registry?: () => Registry, comparison?: ResultComparison,cloud?:CloudProjectHost): HostDef[] {
   let intentRun = 0;
   return [
+    {
+      name: 'navigation.home', execution: 'sessionView',
+      description: 'Return to the main menu and project list without replacing the open Model, its Results or files. The browser host records this navigation so Back returns to the workspace. Never journaled.',
+      schema: z.object({}), tool: true,
+      run: () => { store.togglePanel('examples', false); store.togglePanel('projects', true); },
+    },
     ...tourCommands(store, {
       preferences: { getItem: key => localStorage.getItem(key), setItem: (key, value) => localStorage.setItem(key, value) },
       openCantilever: async () => {
@@ -611,12 +617,12 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
     {
       name: 'example.filter',
       execution: 'workspace',
-      description: 'Filter the Examples gallery by one metadata tag and one difficulty level. Pass `null` for either field to show every value in that dimension; this changes only the gallery view.',
-      schema: z.object({ tag: z.string().nullable(), difficulty: z.number().int().min(1).max(3).nullable() }),
+      description: 'Search the Examples gallery by case-insensitive words in names, descriptions and tags, combined with one metadata tag and difficulty level. All search words must match. Pass null for tag/difficulty and an empty query to reset. Omitting query clears text search. Filters stay with the live workspace across same-owner project navigation and clear on account changes or sign-out. Changes only the gallery view.',
+      schema: z.object({ tag: z.string().nullable(), difficulty: z.number().int().min(1).max(3).nullable(), query: z.string().optional().describe('Search words; empty or omitted clears text search.') }),
       tool: true,
       run: (input) => {
-        const { tag, difficulty } = input as { tag: string | null; difficulty: ExampleDifficulty | null };
-        store.set({ exampleFilter: { tag, difficulty } });
+        const { tag, difficulty, query } = input as ExampleFilter;
+        store.set({ exampleFilter: { tag, difficulty, ...(query ? { query } : {}) } });
       },
     },
     {

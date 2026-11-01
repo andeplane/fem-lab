@@ -5,6 +5,37 @@ import {readFile} from 'node:fs/promises';
 async function ready(page:Page){await page.waitForFunction(()=>Boolean(window.fem),undefined,{timeout:60000});await page.waitForFunction(async()=>Boolean((await window.fem.registry.query({query:'query.workspaceStatus'}) as {ready:boolean}).ready));}
 async function identify(page:Page,uid:string|null){await page.evaluate(uid=>window.cloudFixture.identify(uid),uid);await expect.poll(()=>page.evaluate(async()=>{const account=await window.fem.registry.query({query:'query.account'}) as {uid:string|null;status:string};return {uid:account.uid,status:account.status};}).catch(()=>null)).toEqual({uid,status:uid?'active':'anonymous'});await ready(page);}
 async function projects(page:Page){return page.evaluate(async()=>(await window.fem.registry.query({query:'query.projects'}) as {projects:{id:string;name:string}[]}).projects);}
+test('private project routes wait for account readiness and reject another owner in a fresh browser',async({page,browser})=>{
+  const server=new CloudFixtureServer();await server.install(page.context());
+  await page.addInitScript(()=>localStorage.setItem('femlab.tour.dismissed','1'));await page.goto('./');await ready(page);await identify(page,'fixture-A');
+  await page.evaluate(()=>window.fem.dispatch({cmd:'file.openExample',name:'cantilever'}));await page.evaluate(()=>window.fem.dispatch({cmd:'project.save'}));
+  await expect.poll(()=>server.owners.get('fixture-A')?.size??0).toBe(1);
+  const saved=[...server.owners.get('fixture-A')!.values()][0]!;
+  const expected=await page.evaluate(async()=>({model:await window.fem.query.model(),results:await window.fem.query.results()}));
+  const url=new URL(page.url());url.hash='#/projects/cloud-'+saved.project.id;
+  const fresh=await browser.newContext();const wrong=await browser.newContext();
+  let releaseProfile!:()=>void;const profileGate=new Promise<void>(resolve=>{releaseProfile=resolve;});
+  let sawProfile!:()=>void;const profileRequested=new Promise<void>(resolve=>{sawProfile=resolve;});
+  try{
+    await server.install(fresh);await fresh.addInitScript(()=>{window.cloudFixtureInitialUid='fixture-A';localStorage.setItem('femlab.tour.dismissed','1');});
+    await fresh.route('**/__cloud_fixture/v1/account',async route=>{sawProfile();await profileGate;await server.route(route);});
+    const restored=await fresh.newPage();await restored.goto(url.href);await profileRequested;
+    expect(restored.url()).toBe(url.href); // Do not discard the requested route while the profile loads.
+    releaseProfile();
+    await expect(restored.locator('.workspace')).toBeVisible();
+    await expect.poll(()=>restored.evaluate(()=>window.fem.query.model())).toEqual(expected.model);
+    expect(await restored.evaluate(()=>window.fem.query.results())).toEqual(expected.results);
+    await expect(restored).toHaveURL(url.href);
+    const download=restored.waitForEvent('download');await restored.evaluate(()=>window.fem.dispatch({cmd:'project.downloadBundle'}));
+    const bundle=decodeProjectArtifact(new Uint8Array(await readFile((await (await download).path())!)));
+    expect((bundle.engine as {file:{model:unknown}}).file.model).toEqual((decodeProjectArtifact(Uint8Array.from(Buffer.concat(saved.chunks))).engine as {file:{model:unknown}}).file.model);
+    await identify(restored,null);await expect(restored).toHaveURL(/#\/$/);expect((await restored.evaluate(()=>window.fem.query.model())).bodies).toEqual([]);
+    await server.install(wrong);await wrong.addInitScript(()=>{window.cloudFixtureInitialUid='fixture-B';localStorage.setItem('femlab.tour.dismissed','1');});
+    const denied=await wrong.newPage();await denied.goto(url.href);await expect(denied).toHaveURL(/#\/$/);
+    expect((await denied.evaluate(()=>window.fem.query.model())).bodies).toEqual([]);
+    expect(await denied.evaluate(()=>window.fem.query.results())).toMatchObject({records:[]});
+  }finally{releaseProfile();await fresh.close();await wrong.close();}
+});
 test('account cloud saves preserve full solved artifacts, exact files, offline edits and private browser partitions',async({page,browser},testInfo)=>{
   test.setTimeout(240000);const server=new CloudFixtureServer();await server.install(page.context());await page.addInitScript(()=>localStorage.setItem('femlab.tour.dismissed','1'));await page.goto('./');await ready(page);
   const anonymous=await page.evaluate(()=>window.fem.dispatch({cmd:'project.new',name:'browser original'})) as {id:string};await page.evaluate(()=>window.fem.dispatch({cmd:'geometry.addBox',name:'guest-only',size:['1 m','1 m','1 m']}));await page.evaluate(()=>window.fem.dispatch({cmd:'project.save'}));
