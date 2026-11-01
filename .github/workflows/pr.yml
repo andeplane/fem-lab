@@ -2,7 +2,7 @@ name: pr
 on:
   pull_request:
 
-# The pull-request gate (issue #820, ADR 0046): Linux only, about two minutes when Rust is
+# The pull-request gate (issue #820, ADR 0047): Linux only, about two minutes when Rust is
 # untouched. It proves the change type-checks, its unit tests pass and the app still builds within
 # its bundle budget. Rust tests run only when Rust changed. Browser smoke, Linux CLI replays, the
 # native-vs-wasm hashes and coverage run on merge (`ci.yml`); macOS, Windows and the GPU matrix run
@@ -129,6 +129,7 @@ jobs:
               npm run test -w packages/evals
               npm run test -w packages/service
               npm run build -w packages/service
+              node tools/test-service-build.mjs
               npm run test -w packages/mcp
               npm run build -w packages/mcp
           - slice: app tests

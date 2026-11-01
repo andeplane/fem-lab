@@ -18,7 +18,7 @@ on:
 # The strict engine and geometry coverage gate on lavapipe (ADR 0007), about three quarters of an
 # hour of runner time. It runs when a merge changes the engine or geometry crates, twice a month, on
 # demand and in release validation; a merge that only touches the app or docs cannot change it
-# (issue #820, ADR 0046). The 100 % threshold is unchanged.
+# (issue #820, ADR 0047). The 100 % threshold is unchanged.
 
 concurrency:
   group: ${{ github.workflow }}-gpu-${{ github.event_name }}-${{ github.ref }}

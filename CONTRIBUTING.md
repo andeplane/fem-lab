@@ -27,7 +27,7 @@ minutes when Rust is untouched; Rust changes add `rust lint` and `rust tests`. T
 applies to administrators too. Wait for the check on the current PR head; a local pass, an
 earlier revision or a pending job cannot authorize a merge. Browser smoke, the CLI replays, the
 native-vs-wasm hashes and engine coverage run on merge to main, and macOS, Windows and the D5
-GPU case run on the 1st and 15th of each month, as [ADR 0046](docs/adr/0046-two-minute-pr-gate-cd-on-main-scheduled-deep-run.md)
+GPU case run on the 1st and 15th of each month, as [ADR 0047](docs/adr/0047-two-minute-pr-gate-cd-on-main-scheduled-deep-run.md)
 describes. Because the PR gate does not run browser smoke, run the affected Chromium specs
 locally (below) before pushing; to run the deep set on a branch, dispatch the `ci` workflow
 with `deep`.

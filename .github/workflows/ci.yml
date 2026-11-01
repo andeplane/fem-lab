@@ -21,7 +21,7 @@ on:
         default: false
         description: Also run macOS and Windows without making WebGPU smoke fatal.
 
-# Three tiers (issue #820, ADR 0046, superseding ADR 0022's two gates). Pull requests run the
+# Three tiers (issue #820, ADR 0047, superseding ADR 0022's two gates). Pull requests run the
 # two-minute Linux gate in `pr.yml`. A push to main runs this workflow on Linux: workspace Rust
 # tests, the wasm bundle, web, the native-vs-wasm hashes and every Chromium smoke variant; when it
 # is green, `deploy.yml` publishes its `dist`. The schedule (1st and 15th), a dispatch with `deep` and

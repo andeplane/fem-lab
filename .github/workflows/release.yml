@@ -43,7 +43,7 @@ jobs:
         if: github.event_name == 'push'
         run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
 
-  # The deep suite (ADR 0046): main's checks plus macOS and Windows, with browser GPU
+  # The deep suite (ADR 0047): main's checks plus macOS and Windows, with browser GPU
   # failures made fatal, and the full lavapipe coverage gate with the D5 case.
   validation:
     needs: metadata

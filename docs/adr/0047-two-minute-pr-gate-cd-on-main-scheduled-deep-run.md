@@ -1,4 +1,4 @@
-# ADR 0046 — A two-minute PR gate, CD on main, a scheduled deep run
+# ADR 0047 — A two-minute PR gate, CD on main, a scheduled deep run
 
 Status: accepted (2026-10-31). Issue #820. Supersedes ADR 0022.
 
