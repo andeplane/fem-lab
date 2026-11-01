@@ -68,4 +68,40 @@ test.describe('@cpu workspace navigation', () => {
     expect(bounds!.x).toBeGreaterThanOrEqual(0); expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
     await page.screenshot({ path: 'test-results/navigation-search-mobile.png' });
   });
+
+  test('Back and Forward restore the filtered gallery after opening a matching example', async ({ page }) => {
+    await page.goto('./#/examples');
+    await expect(page.locator('.gallery')).toBeVisible();
+    const search = page.getByRole('searchbox', { name: 'Search examples' });
+    const tag = page.getByLabel('Filter examples by tag');
+    const difficulty = page.getByLabel('Filter examples by difficulty');
+    await search.fill('CANTILEVER hex20');
+    await tag.selectOption('beam');
+    await difficulty.selectOption('1');
+    await expect(page.locator('.ex-card')).toHaveCount(1);
+    await expect(page.locator('.ex-card .ex-title')).toHaveText('Cantilever beam, hex20');
+    await expect(page.locator('.gallery-count')).toHaveText('1 / 27');
+    const titles = await page.locator('.ex-card .ex-title').allTextContents();
+    const cards = await page.locator('.ex-card').allTextContents();
+    const count = await page.locator('.gallery-count').textContent();
+    await page.locator('button[title="file.openExample cantilever-hex20"]').click();
+    await expect(page.locator('button.solve')).toHaveText(/Solved · rev \d+/);
+    await expect(page).toHaveURL(/#\/projects\/[^/]+$/);
+    const projectUrl = page.url();
+    for (let traversal = 0; traversal < 2; traversal++) {
+      await page.goBack();
+      await expect(page).toHaveURL(/#\/examples$/);
+      await expect(page.locator('.gallery')).toBeVisible();
+      await expect(search).toHaveValue('CANTILEVER hex20');
+      await expect(tag).toHaveValue('beam');
+      await expect(difficulty).toHaveValue('1');
+      await expect(page.locator('.ex-card')).toHaveCount(cards.length);
+      expect(await page.locator('.ex-card').allTextContents()).toEqual(cards);
+      expect(await page.locator('.ex-card .ex-title').allTextContents()).toEqual(titles);
+      expect(await page.locator('.gallery-count').textContent()).toBe(count);
+      await page.goForward();
+      await expect(page).toHaveURL(projectUrl);
+      await expect(page.locator('.gallery')).toHaveCount(0);
+    }
+  });
 });

@@ -678,6 +678,8 @@ const workspace = new SessionWorkspace<Bundle>({
   publish: ({ resources: bundle }) => {
     const priorPublication=publishedOnce;publishedOnce=true;
     const identityChanged = displayed && (displayed.ownerUid !== bundle.ownerUid || displayed.ownerEpoch !== bundle.ownerEpoch);
+    // Gallery filtering belongs to the live owner's workspace, not the replaced Model.
+    if (displayed && !displayed.revoked && !identityChanged) bundle.store.set({ exampleFilter: { ...displayed.store.state.exampleFilter } });
     // A folder is a workspace capability; replacing the engine keeps the current selection.
     if (displayed&&!displayed.revoked&&displayed.ownerUid===bundle.ownerUid) bundle.store.setFolder(displayed.store.state.folder);
     if (displayed&&!displayed.revoked&&displayed.ownerUid===bundle.ownerUid && !bundle.store.state.result && bundle.store.state.viewMode !== 'results') bundle.store.set({ tab: displayed.store.state.tab });
