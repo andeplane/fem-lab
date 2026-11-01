@@ -122,7 +122,10 @@ test.describe('@cpu projects in this browser', () => {
 
     await page.reload();
     await ready(page);
-    await expect(page.locator('.start')).toBeVisible();
+    // A project URL restores its workspace. The logo returns to Recent without unloading it.
+    await expect(page.locator('input.model-name')).toHaveValue('plate-with-hole');
+    await page.getByRole('button', { name: 'FEM Lab — main menu' }).click();
+    await expect(page.getByRole('dialog', { name: 'Projects', exact: true })).toBeVisible();
     const cards = page.locator('.recent');
     await expect(cards).toHaveCount(2);
     // Newest first, and each card says how much of a Journal it holds.
@@ -134,7 +137,8 @@ test.describe('@cpu projects in this browser', () => {
     // Reopening replays the Journal: same Model, same hash, same last `hashAfter`.
     await cards.nth(1).locator('button[data-cmd="project.open"]').click();
     await expect(page.locator('.workspace')).toBeVisible();
-    expect(await modelHash(page)).toBe(hash);
+    // The old workspace remains visible under the menu until the requested project publishes.
+    await expect.poll(() => modelHash(page)).toBe(hash);
     const last = await page.evaluate(async () => {
       const journal = (await window.fem.query.journal()) as unknown as { entries: { hashAfter: string }[] };
       return journal.entries.at(-1)!.hashAfter;
