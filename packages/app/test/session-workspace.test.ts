@@ -55,6 +55,105 @@ function saveHost(transport: SessionTransport) {
   return { host, registry };
 }
 
+it.each([false, true])('resets a closed owner to a fresh empty engine without replaying private resources (old Journal populated: %s)', async populated => {
+  const workers: TestWorker[] = []; const sources: unknown[] = []; let builds = 0;
+  const privateBytes = new Uint8Array([7, 8, 9]); const beforeReset = vi.fn(async () => undefined); const oldDispose = vi.fn();
+  const workspace = new SessionWorkspace({
+    spawn: () => { const worker = new TestWorker(); workers.push(worker); return worker as unknown as Worker; },
+    epoch: () => `reset-${workers.length}`, engine: { gpu: false, threads: 1 },
+    build: async (_transport, _snapshot, source) => { sources.push(source); return { privateFiles: builds++ === 0 || source !== undefined ? [privateBytes] : [], prepareIdentityReset: beforeReset, dispose: builds === 1 ? oldDispose : vi.fn() }; },
+    publish: vi.fn(),
+  });
+  const old = await workspace.start(); if (populated) await old.transport.dispatch(body);
+  old.transport.channel.close(); const oldRequests = workers[0]!.requests.length;
+  const fresh = await workspace.reset();
+  try {
+    expect(beforeReset).toHaveBeenCalledOnce(); expect(oldDispose).toHaveBeenCalledOnce();
+    expect(fresh.transport.stamp.session).not.toEqual(old.transport.stamp.session);
+    expect(fresh.initial.file.journal.entries).toEqual([]); expect(fresh.initial.model.bodies).toEqual([]);
+    expect(fresh.resources.privateFiles).toEqual([]); expect(old.resources.privateFiles).toEqual([privateBytes]);
+    expect(sources).toEqual([undefined, undefined]);
+    expect(workers[0]!.requests).toHaveLength(oldRequests);
+    expect(workers[1]!.requests.map(request => request.op)).not.toContain('prepare');
+    expect(workers[1]!.requests.map(request => request.op)).not.toContain('reserve');
+    await expect(old.transport.query({ query: 'query.model' })).rejects.toMatchObject({ code: 'session.expired' });
+  } finally { fresh.transport.channel.close(); }
+});
+
+it('rejects concurrent resets and keeps whenIdle pending through private reset preparation', async () => {
+  const held = deferred(); const preparing = deferred(); const workers: TestWorker[] = [];
+  const workspace = new SessionWorkspace({
+    spawn: () => { const worker = new TestWorker(); workers.push(worker); return worker as unknown as Worker; },
+    epoch: () => `busy-reset-${workers.length}`, engine: { gpu: false, threads: 1 },
+    build: async () => ({ dispose: vi.fn(), prepareIdentityReset: async () => { preparing.resolve(); await held.promise; } }), publish: vi.fn(),
+  });
+  await workspace.start(); const resetting = workspace.reset(); await preparing.promise;
+  let idle = false; const waiting = workspace.whenIdle().then(() => { idle = true; });
+  await expect(workspace.reset()).rejects.toMatchObject({ code: 'session.transitioning' });
+  await Promise.resolve(); expect(idle).toBe(false); expect(workers).toHaveLength(1);
+  held.resolve(); const fresh = await resetting; await waiting;
+  expect(idle).toBe(true); fresh.transport.channel.close();
+});
+
+it('closes a failed reset candidate and preserves the previous owner until a later reset succeeds', async () => {
+  const workers: TestWorker[] = []; let builds = 0; const oldDispose = vi.fn(); const publish = vi.fn();
+  const workspace = new SessionWorkspace({
+    spawn: () => { const worker = new TestWorker(); workers.push(worker); return worker as unknown as Worker; },
+    epoch: () => `failed-reset-${workers.length}`, engine: { gpu: false, threads: 1 },
+    build: async () => { if (++builds === 2) throw new Error('private bundle validation failed'); return { dispose: builds === 1 ? oldDispose : vi.fn() }; }, publish,
+  });
+  const old = await workspace.start(); await old.transport.dispatch(body);
+  const before = await old.transport.snapshot();
+  await expect(workspace.reset()).rejects.toThrow('private bundle validation failed'); await workspace.whenIdle();
+  expect(workspace.active).toBe(old); expect(workers[1]!.terminated).toBe(true); expect(workers[0]!.terminated).toBe(false);
+  expect(oldDispose).not.toHaveBeenCalled(); expect(publish).toHaveBeenCalledOnce(); expect(await old.transport.snapshot()).toEqual(before);
+  const fresh = await workspace.reset();
+  expect(fresh.initial.file.journal.entries).toEqual([]); expect(oldDispose).toHaveBeenCalledOnce(); fresh.transport.channel.close();
+});
+
+it('whenIdle waits for private startup and cancellation cleanup, then resolves every waiter', async () => {
+  const building = deferred(); const release = deferred(); const abandoned = deferred(); const releaseAbandon = deferred();
+  const workers: TestWorker[] = [];
+  const workspace = new SessionWorkspace({
+    spawn: () => { const worker = new TestWorker(); workers.push(worker); return worker as unknown as Worker; },
+    epoch: () => `idle-${workers.length}`, engine: { gpu: false, threads: 1 },
+    build: async () => { building.resolve(); await release.promise; return { dispose: vi.fn(), abandon: async () => { abandoned.resolve(); await releaseAbandon.promise; } }; },
+    publish: vi.fn(),
+  });
+  await workspace.whenIdle();
+  const cancel = new AbortController(); const starting = workspace.start(cancel.signal);
+  const stopped = expect(starting).rejects.toThrow('cancel private build');
+  await building.promise;
+  let ready = 0; const first = workspace.whenIdle().then(() => { ready++; }); const second = workspace.whenIdle().then(() => { ready++; });
+  await Promise.resolve(); expect(ready).toBe(0);
+  cancel.abort(new Error('cancel private build')); release.resolve(); await abandoned.promise;
+  await Promise.resolve(); expect(ready).toBe(0);
+  releaseAbandon.resolve(); await stopped; await Promise.all([first, second]); expect(ready).toBe(2);
+  await workspace.whenIdle();
+});
+
+it('whenIdle waits until failed replacement resource cleanup and old reservation release finish', async () => {
+  const workers: TestWorker[] = []; const abandoning = deferred(); const release = deferred(); let builds = 0;
+  const workspace = new SessionWorkspace({
+    spawn: () => { const worker = new TestWorker(); workers.push(worker); return worker as unknown as Worker; },
+    epoch: () => `replace-idle-${workers.length}`, engine: { gpu: false, threads: 1 },
+    build: async () => ({ dispose: vi.fn(), ...(builds++ === 0 ? {} : { abandon: async () => { abandoning.resolve(); await release.promise; } }) }),
+    publish: () => undefined,
+  });
+  const active = await workspace.start();
+  // Candidate resources exist, but retiring the old producer fails and enters async cleanup.
+  const original = active.transport.channel.request.bind(active.transport.channel);
+  vi.spyOn(active.transport.channel, 'request').mockImplementation((request, ...args) => request.op === 'retire' ? Promise.reject(new Error('retire failed')) : original(request, ...args));
+  const replacing = workspace.replace(active.transport, { kind: 'commands', commands: [fresh] });
+  const failed = expect(replacing).rejects.toThrow('retire failed');
+  await abandoning.promise;
+  let idle = false; const waiting = workspace.whenIdle().then(() => { idle = true; });
+  await Promise.resolve(); const releasedEarly = idle;
+  release.resolve(); await failed; await waiting;
+  try { expect(releasedEarly).toBe(false); await active.transport.dispatch(body); }
+  finally { active.transport.channel.close(); }
+});
+
 it('saves and exports the checked SI document under unreadable display units and bounds later oversized files before I/O', async () => {
   const { workspace } = setup();
   const commands = JSON.parse(readFileSync(require.resolve('../../../crates/engine/tests/fixtures/document-display-overflow.json'), 'utf8')) as Command[];

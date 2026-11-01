@@ -233,6 +233,7 @@ const KEY = 'folder';
 const INFO = 'folder:info';
 /** Set across the one read that can take the browser down with it; cleared when it comes back. */
 export const RESTORING = 'femlab.folder.restoring';
+const ownerKey=(key:string,owner:string|null)=>owner===null?key:'\0femlab:folder-owner:v1:'+JSON.stringify([owner,key]);
 
 /** What start-up may read: the folder's name, and when it was remembered. Never the handle. */
 export interface RememberedFolder {
@@ -271,14 +272,14 @@ async function writeHandleRecords(factory: IDBFactory, change: (store: IDBObject
   } finally { db.close(); }
 }
 
-export async function rememberHandle(handle: DirHandle, factory: IDBFactory = indexedDB, now: () => number = () => Date.now(), crumbs: Breadcrumbs = localStorage): Promise<void> {
+export async function rememberHandle(handle: DirHandle, factory: IDBFactory = indexedDB, now: () => number = () => Date.now(), crumbs: Breadcrumbs = localStorage, owner:string|null=null): Promise<void> {
   await writeHandleRecords(factory, store => {
-    store.put(handle, KEY);
-    store.put({ name: handle.name, at: now() } satisfies RememberedFolder, INFO);
+    store.put(handle, ownerKey(KEY,owner));
+    store.put({ name: handle.name, at: now() } satisfies RememberedFolder, ownerKey(INFO,owner));
   });
   // A new explicit selection supersedes the previous failed restore, even with the same name.
   // Keep the guard until replacement storage has actually committed.
-  crumbs.removeItem(RESTORING);
+  crumbs.removeItem(ownerKey(RESTORING,owner));
 }
 
 /**
@@ -286,16 +287,16 @@ export async function rememberHandle(handle: DirHandle, factory: IDBFactory = in
  * read that is safe to make at start-up (#247). A handle left by an older build has no descriptor
  * beside it and can never be offered again, so it is dropped rather than kept unreadable forever.
  */
-export async function recentFolder(factory: IDBFactory = indexedDB): Promise<{ name: string } | null> {
-  const remembered = await rememberedFolder(factory);
+export async function recentFolder(factory: IDBFactory = indexedDB, owner:string|null=null): Promise<{ name: string } | null> {
+  const remembered = await rememberedFolder(factory,owner);
   return remembered ? { name: remembered.name } : null;
 }
 
-export async function rememberedFolder(factory: IDBFactory = indexedDB): Promise<RememberedFolder | null> {
-  const info = await tx<unknown>(factory, HANDLES, 'readonly', (s) => s.get(INFO));
+export async function rememberedFolder(factory: IDBFactory = indexedDB, owner:string|null=null): Promise<RememberedFolder | null> {
+  const info = await tx<unknown>(factory, HANDLES, 'readonly', (s) => s.get(ownerKey(INFO,owner)));
   if (isRemembered(info)) return info;
   const keys = await tx<IDBValidKey[]>(factory, HANDLES, 'readonly', (s) => s.getAllKeys());
-  if (keys.length > 0) await forgetHandle(factory);
+  if (keys.length > 0) await forgetHandle(factory,localStorage,owner);
   return null;
 }
 
@@ -304,24 +305,24 @@ export async function rememberedFolder(factory: IDBFactory = indexedDB): Promise
  * `file.not-found` when the record cannot become a usable handle — including when the previous
  * attempt never came back, which is how the Chromium 153 crash is survived exactly once.
  */
-export async function recallHandle(factory: IDBFactory = indexedDB, crumbs: Breadcrumbs = localStorage): Promise<DirHandle | null> {
-  const remembered = await rememberedFolder(factory);
+export async function recallHandle(factory: IDBFactory = indexedDB, crumbs: Breadcrumbs = localStorage, owner:string|null=null): Promise<DirHandle | null> {
+  const remembered = await rememberedFolder(factory,owner);
   if (!remembered) return null;
-  if (crumbs.getItem(RESTORING) === remembered.name) {
-    await forgetHandle(factory, crumbs);
+  if (crumbs.getItem(ownerKey(RESTORING,owner)) === remembered.name) {
+    await forgetHandle(factory, crumbs,owner);
     throw unavailable(`restoring ‘${remembered.name}’ ended this browser last time, so it is not tried again`);
   }
-  crumbs.setItem(RESTORING, remembered.name);
-  const value = await tx<unknown>(factory, HANDLES, 'readonly', (s) => s.get(KEY));
-  crumbs.removeItem(RESTORING);
+  crumbs.setItem(ownerKey(RESTORING,owner), remembered.name);
+  const value = await tx<unknown>(factory, HANDLES, 'readonly', (s) => s.get(ownerKey(KEY,owner)));
+  crumbs.removeItem(ownerKey(RESTORING,owner));
   if (isDirHandle(value)) return value;
-  await forgetHandle(factory, crumbs);
+  await forgetHandle(factory, crumbs,owner);
   throw unavailable(`the remembered folder ‘${remembered.name}’ is no longer available in this browser`);
 }
 
-export async function forgetHandle(factory: IDBFactory = indexedDB, crumbs: Breadcrumbs = localStorage): Promise<void> {
-  crumbs.removeItem(RESTORING);
-  await writeHandleRecords(factory, store => { store.delete(KEY); store.delete(INFO); });
+export async function forgetHandle(factory: IDBFactory = indexedDB, crumbs: Breadcrumbs = localStorage, owner:string|null=null): Promise<void> {
+  crumbs.removeItem(ownerKey(RESTORING,owner));
+  await writeHandleRecords(factory, store => { store.delete(ownerKey(KEY,owner)); store.delete(ownerKey(INFO,owner)); });
 }
 
 /**
@@ -329,13 +330,13 @@ export async function forgetHandle(factory: IDBFactory = indexedDB, crumbs: Brea
  * A folder that was moved, deleted or whose permission is gone is forgotten and reported the same
  * way as one that never deserialised, so the caller has one failure to handle instead of three.
  */
-export async function reopenRemembered(factory: IDBFactory = indexedDB, crumbs: Breadcrumbs = localStorage): Promise<ProjectFolder | null> {
-  const handle = await recallHandle(factory, crumbs);
+export async function reopenRemembered(factory: IDBFactory = indexedDB, crumbs: Breadcrumbs = localStorage, owner:string|null=null): Promise<ProjectFolder | null> {
+  const handle = await recallHandle(factory, crumbs,owner);
   if (!handle) return null;
   try {
     return await ProjectFolder.fromHandle(handle);
   } catch (error) {
-    await forgetHandle(factory, crumbs);
+    await forgetHandle(factory, crumbs,owner);
     throw unavailable(`the remembered folder ‘${handle.name}’ could not be read: ${error instanceof Error ? error.message : String(error)}`);
   }
 }

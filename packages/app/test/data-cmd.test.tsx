@@ -753,6 +753,8 @@ describe('the shell', () => {
       'chat.send',
       'project.new',
       'project.new',
+      'account.open',
+      'project.importBundle',
       'file.open',
       'form.open',
       'form.open',
@@ -777,11 +779,15 @@ describe('the shell', () => {
     expect(root.textContent).toContain('41 Commands · edited 4 minutes ago');
     expect(root.textContent).toContain('12 Commands · edited 1 day ago');
     expect(root.querySelector('img.recent-thumb')!.getAttribute('src')).toBe('data:image/webp;base64,AA');
+    const registered = new Set([...HOST_COMMANDS, ...appHostCommands(store, transport, { current: null }, async () => undefined)].map(definition => definition.name));
+    for (const name of ['account.open', 'project.importBundle', 'project.downloadBundle']) expect(registered.has(name), name).toBe(true);
     expect([...root.querySelectorAll('.recents [data-cmd]')].map((el) => el.getAttribute('data-cmd'))).toEqual([
       'project.open',
+      'project.downloadBundle',
       'project.rename',
       'project.delete',
       'project.open',
+      'project.downloadBundle',
       'project.rename',
       'project.delete',
     ]);

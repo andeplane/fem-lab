@@ -119,9 +119,9 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   const engineState = s.hostCaps ? engineChip(s.hostCaps, s.engineCaps) : 'starting…';
   return (
     <header class="topbar">
-      <div class="logo">
+      <Cmd dispatch={dispatch} cmd="navigation.home" class="logo" label="FEM Lab — main menu" title="Main menu">
         <i /> FEM Lab
-      </div>
+      </Cmd>
       <ModelName name={s.model?.name ?? 'no model'} dirty={dirty} dispatch={dispatch} />
       <ProjectSaved s={s} />
       <Cmd dispatch={dispatch} cmd="panel.toggle" class="palette-field" args={{ panel: 'palette', open: true }} title="Search commands (⌘K)">

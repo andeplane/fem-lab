@@ -32,6 +32,14 @@ Select the submission folder for `INCLUDE` and NODE/ELEMENT `INPUT=` dependencie
 
 Import does not solve: solve each named Step explicitly. Nonlinear/contact source analyses, unsupported formulations and binary `.odb`/`.cae` files are not silently downgraded. Reduced-integration, hybrid and modified elements are rejected rather than substituted. Export a supported text `.inp` from the source application.
 
+## Complete project bundles and captured files
+
+**Download project bundle** packages the complete saved project, including its portable engine state, Journal and retained Results plus captured original inputs and completed output files. The cloud wrapper is `femlab-project-bundle/1`; it is distinct from a legacy `femlab/1` Model file and the engine's portable solved-project payload. A bundle has a 128 MiB total limit, 64 MiB engine JSON limit, 32 MiB per-file limit and at most 256 files.
+
+Successful file imports capture the exact admitted source bytes, including dependencies actually read for a supported import. Successful generated outputs can also be retained and downloaded by name. Selecting a project folder does not capture all of its files. Chats and arbitrary unrelated folder contents do not join the project bundle.
+
+New signed-in projects synchronize this bundle privately when connected. An anonymous project needs an explicit **Upload a copy** to join the account. Network/quota errors leave the browser copy available; check status and export a backup before deleting local data. Account-record JSON export contains a project metadata index, not these files or artifact bytes. See [projects/storage](./projects-storage.md).
+
 ## Export the right artifact
 
 | Format | Use |

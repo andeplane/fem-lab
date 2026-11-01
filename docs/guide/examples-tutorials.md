@@ -42,7 +42,11 @@ Open one from a script or browser console:
 await fem.example.open({ name: 'cantilever-hex20' });
 ```
 
-The gallery can filter by tag and difficulty. Its exact catalogue is generated from the shipped Journal fixtures and metadata; the list above is a learning selection.
+Use **Search** in the gallery to find words in example names, descriptions and tags. Search ignores case and matches every word you enter, in any order. Combine it with the tag and difficulty filters to narrow the results; the count updates as you type. **Reset filters** clears all three controls, including when nothing matches. This needs no account or AI. The same view action is available through `example.filter` with `query`, `tag` and `difficulty`.
+
+Opening an example or switching projects keeps those filters in the current workspace. Use browser **Back** to return to the same filtered gallery. Account changes and sign-out clear the filters; reloading the page starts with the default gallery filters.
+
+The exact catalogue is generated from the shipped Journal fixtures and metadata; the list above is a learning selection.
 
 ## Make a thermal design decision
 

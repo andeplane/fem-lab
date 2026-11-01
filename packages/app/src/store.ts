@@ -6,6 +6,7 @@ import { EMPTY_ACCOUNT, type AccountState, parseRef, refOf } from '@femlab/regis
 import type { GeometryDraftState } from './geometry-draft';
 import type { PaletteIntent } from './ai/palette-intent';
 import type { HostCaps } from './capabilities';
+import type {ProjectSyncState} from './project-sync';
 import type { ActiveBenchmark } from './benchmark';
 import { projectSkills, type ProjectFolder } from './ai/project';
 import { BUILTIN_SKILLS } from './ai/skills';
@@ -56,6 +57,8 @@ export type ExampleDifficulty = 1 | 2 | 3;
 export interface ExampleFilter {
   tag: string | null;
   difficulty: ExampleDifficulty | null;
+  /** All whitespace-separated terms must match the name, description or tags. */
+  query?: string;
 }
 export interface ConsoleLine {
   level: ConsoleLevel;
@@ -86,6 +89,10 @@ export function verificationState(record: AssistantVerification, state: UiState)
 
 export interface UiState {
   account: AccountState;
+  projectSync:ProjectSyncState;
+  anonymousProjects:ProjectMeta[];
+  projectFiles:{id:string;role:'input'|'output';name:string;mime:string;bytes:number}[];
+  projectArtifactError:string|null;
   /** Two immutable solve presentations; never serialized into the Model or Journal. */
   resultComparison: import('@femlab/registry').ResultComparisonState;
   assistantVerifications: AssistantVerification[];
@@ -127,7 +134,7 @@ export interface UiState {
   tourStep: number;
   /** Explicit tutorial-start generation; lets a view Command replace an already open runner. */
   tutorialStart: number;
-  /** The Examples gallery's two independent, registry-driven filters. */
+  /** The Examples gallery's registry-driven text, tag and difficulty filters. */
   exampleFilter: ExampleFilter;
   /** View-only panel dimensions in CSS pixels; resizing never changes the Model or Journal. */
   panelSizes: PanelSizes;
@@ -246,6 +253,7 @@ export const EMPTY_HOVER: UiState['hover'] = { bodies: [], faces: [], sets: [] }
 
 export const initialState: UiState = {
   account: structuredClone(EMPTY_ACCOUNT),
+  projectSync:{uid:null,projects:{},storage:null,refreshing:false,error:null},anonymousProjects:[],projectArtifactError:null,projectFiles:[],
   assistantVerifications: [],
 
   autosave: null,

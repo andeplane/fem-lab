@@ -18,7 +18,7 @@ import type { ResultsView } from './results';
 import type { ResultComparison } from './result-comparison';
 import type { ScriptHost } from './script-host';
 import { type Autosave, type ShareCommand, indexedDbStore, makeAutosave, memoryStore, shareUrl } from './share';
-import { EMPTY_SELECTION, type ExampleDifficulty, type Store, type ViewMode, visibilityReducer } from './store';
+import { EMPTY_SELECTION, type ExampleFilter, type Store, type ViewMode, visibilityReducer } from './store';
 import type { ColormapName } from './viewer/colormap';
 import type { CameraState, Viewer } from './viewer/viewer';
 import { treeGroups } from './ui/Tree';
@@ -116,10 +116,11 @@ export function autosaveHistory(): AutosaveVersion[] {
 
 export interface SessionHostServices {
   completedFiles?: CompletedFilesHost;
+  pickedInput?(name:string,mime:string,data:string|Uint8Array):void;
   projects: Projects;
   active(): Promise<void>;
   replay(commands: ShareCommand[], benchmark?: ActiveBenchmark): Promise<void>;
-  captureImport(): Omit<ReturnType<HostContext['abaqus']['capture']>, 'io'>;
+  captureImport(): Omit<ReturnType<HostContext['abaqus']['capture']>, 'io'>&{io?:AbaqusIo};
 }
 
 const missingSession = (): never => { throw new FemError('session.expired', 'this host has no captured project session'); };
@@ -165,7 +166,7 @@ export function makeHostContext(
     account,
     transport,
     ...(comparison ? { resultComparison: comparison } : {}),
-    abaqus: { capture: () => ({ ...session.captureImport(), io: abaqusIo ?? browserAbaqusIo(document, crypto, store.state.folder) }) },
+    abaqus: { capture: () => {const captured=session.captureImport();return {...captured,io:abaqusIo??captured.io??browserAbaqusIo(document,crypto,store.state.folder)};} },
     view: {
       fit: () => comparison?.active ? comparison.preset('iso') : v().fit(),
       setCamera: (c) => {
@@ -364,7 +365,7 @@ export function makeHostContext(
             const file = input.files?.[0];
             if (!file) return reject(new FemError('file.not-found', 'no file was chosen', 'picker'));
             if (file.size > MAX_MODEL_FILE_BYTES) return reject(new FemError('schema', 'Model file exceeds the 16 MiB import limit', 'picker', 'open a smaller file written by file.save'));
-            file.text().then(resolve, reject);
+            file.text().then(data=>{session.pickedInput?.(file.name,file.type||'application/json',data);resolve(data);}, reject);
           };
           input.click();
         }),
@@ -377,7 +378,7 @@ export function makeHostContext(
             const file = input.files?.[0];
             if (!file) return reject(new FemError('file.not-found', 'no file was chosen', 'picker'));
             if (file.size > MAX_GEOMETRY_FILE_BYTES) return reject(new FemError('schema', 'the geometry file exceeds the 32 MiB import limit', 'picker', 'decimate the mesh in the tool that wrote it'));
-            file.arrayBuffer().then((buffer) => resolve(new Uint8Array(buffer)), reject);
+            file.arrayBuffer().then(buffer=>{const data=new Uint8Array(buffer);session.pickedInput?.(file.name,file.type||'application/octet-stream',data);resolve(data);}, reject);
           };
           input.click();
         }),
@@ -402,7 +403,7 @@ export function makeHostContext(
       },
       restore: async (id) => {
         const revisions = await save.readAll();
-        lastAutosaves = revisions.map(summary);
+        if(save===autosave)lastAutosaves = revisions.map(summary);
         const saved = id === undefined ? revisions[0] : revisions.find((revision) => revision.id === id);
         if (id !== undefined && !saved) {
           throw new FemError('not-found', `autosave revision '${id}' was not found`, 'file.restore.id', 'query.autosaveHistory to choose an available revision, then call file.restore with its id');
@@ -500,9 +501,28 @@ async function editDefinition(store: Store, transport: EngineTransport, target: 
  * `+ add …` chip, every blocker fix link and the palette's ⇥). They go in through `Registry`'s
  * `hostCommands` option, so `registry.list()` still covers every `[data-cmd]` in the DOM.
  */
-export function appHostCommands(store: Store, transport: EngineTransport, viewer: ViewerRef, _refresh: () => Promise<void>, results?: ResultsView, registry?: () => Registry, comparison?: ResultComparison): HostDef[] {
+export interface CloudProjectHost {refresh():Promise<void>;adopt(id:string):Promise<unknown>;restore(id:string):Promise<unknown>;keepCopy(id:string):Promise<unknown>;download(id?:string):Promise<unknown>;downloadAsset(id:string):Promise<unknown>;importBundle():Promise<unknown>}
+export function appCloudCommands(cloud?:CloudProjectHost):HostDef[]{
+  const projects=():CloudProjectHost=>{if(!cloud)throw new FemError('unsupported','cloud projects are not available in this host','account.syncProjects');return cloud;};
+  return [
+    {name:'account.syncProjects',execution:'sessionView',description:'Refresh private cloud projects and retry queued browser saves for the signed-in account. Offline work stays in its original account browser cache. Does not create or adopt an anonymous project.',schema:z.object({}),tool:false,run:()=>projects().refresh()},
+    {name:'account.uploadProject',execution:'replacement',description:'Explicitly copy one anonymous browser project to the signed-in account and queue its full artifact upload. Keeps the original anonymous project. Never transfers projects between signed-in accounts.',schema:z.object({id:z.string()}),tool:false,run:input=>projects().adopt((input as {id:string}).id)},
+    {name:'account.restoreProject',execution:'replacement',description:'Explicitly apply the latest cloud revision after validating its complete artifact, or accept an already deleted cloud revision when the control is labeled Accept cloud deletion. Replaces this account’s cached version only after validation; keep a browser copy first to preserve conflicting edits.',schema:z.object({id:z.string()}),tool:false,run:input=>projects().restore((input as {id:string}).id)},
+    {name:'account.keepProjectCopy',execution:'replacement',description:'Keep an independent owned browser project copy with a new cloud operation before resolving a conflict. Preserves the original operation and any expired idempotency key; never silently retries it as a new project.',schema:z.object({id:z.string()}),tool:false,run:input=>projects().keepCopy((input as {id:string}).id)},
+    {name:'project.downloadBundle',execution:'modelRead',description:'Download a complete portable project bundle containing retained solved Results and captured input/output files. It is separate from a femlab/1 model file and does not solve on restore.',schema:z.object({id:z.string().optional()}),tool:false,run:input=>projects().download((input as {id?:string}).id)},
+    {name:'project.downloadAsset',execution:'modelRead',description:'Download one retained original input or successful output file by its project-local asset ID. Does not read unrelated folder files.',schema:z.object({id:z.string()}),tool:false,run:input=>projects().downloadAsset((input as {id:string}).id)},
+    {name:'project.importBundle',execution:'replacement',description:'Pick and validate a complete FEM Lab project bundle before replacing the active document. Restores retained Results without recomputing; signed-in copies automatically queue cloud sync.',schema:z.object({}),tool:false,run:()=>projects().importBundle()}
+  ];
+}
+export function appHostCommands(store: Store, transport: EngineTransport, viewer: ViewerRef, _refresh: () => Promise<void>, results?: ResultsView, registry?: () => Registry, comparison?: ResultComparison,cloud?:CloudProjectHost): HostDef[] {
   let intentRun = 0;
   return [
+    {
+      name: 'navigation.home', execution: 'sessionView',
+      description: 'Return to the main menu and project list without replacing the open Model, its Results or files. The browser host records this navigation so Back returns to the workspace. Never journaled.',
+      schema: z.object({}), tool: true,
+      run: () => { store.togglePanel('examples', false); store.togglePanel('projects', true); },
+    },
     ...tourCommands(store, {
       preferences: { getItem: key => localStorage.getItem(key), setItem: (key, value) => localStorage.setItem(key, value) },
       openCantilever: async () => {
@@ -510,6 +530,7 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
         location.hash = tutorialHash('cantilever', 0);
       },
     }),
+    ...appCloudCommands(cloud),
     {
       name: 'palette.resolve',
       execution: 'sessionView',
@@ -596,12 +617,12 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
     {
       name: 'example.filter',
       execution: 'workspace',
-      description: 'Filter the Examples gallery by one metadata tag and one difficulty level. Pass `null` for either field to show every value in that dimension; this changes only the gallery view.',
-      schema: z.object({ tag: z.string().nullable(), difficulty: z.number().int().min(1).max(3).nullable() }),
+      description: 'Search the Examples gallery by case-insensitive words in names, descriptions and tags, combined with one metadata tag and difficulty level. All search words must match. Pass null for tag/difficulty and an empty query to reset. Omitting query clears text search. Filters stay with the live workspace across same-owner project navigation and clear on account changes or sign-out. Changes only the gallery view.',
+      schema: z.object({ tag: z.string().nullable(), difficulty: z.number().int().min(1).max(3).nullable(), query: z.string().optional().describe('Search words; empty or omitted clears text search.') }),
       tool: true,
       run: (input) => {
-        const { tag, difficulty } = input as { tag: string | null; difficulty: ExampleDifficulty | null };
-        store.set({ exampleFilter: { tag, difficulty } });
+        const { tag, difficulty, query } = input as ExampleFilter;
+        store.set({ exampleFilter: { tag, difficulty, ...(query ? { query } : {}) } });
       },
     },
     {
@@ -631,7 +652,7 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
           picker.onchange = () => {
             const file = picker.files?.[0];
             if (!file) return reject(new FemError('file.not-found', 'no file was chosen', 'picker'));
-            file.text().then(resolve, reject);
+            file.text().then(resolve,reject);
           };
           picker.addEventListener('cancel', () => reject(new FemError('file.not-found', 'no file was chosen', 'picker')), { once: true });
           picker.click();
