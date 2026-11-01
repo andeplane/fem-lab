@@ -61,6 +61,14 @@ describe('the examples gallery', () => {
     expect(expectedValue(items[1]!.expected)).toBe('21.06 · 42.01 Hz');
   });
 
+  it('matches all search words across names, descriptions and tags, ignoring case and whitespace', () => {
+    expect(filterExamples(items, { tag: null, difficulty: null, query: '  THERMAL  plane ' }).map(e => e.name)).toEqual(['thermal']);
+    expect(filterExamples(items, { tag: 'beam', difficulty: 2, query: 'modal' }).map(e => e.name)).toEqual(['modal']);
+    expect(filterExamples(items, { tag: 'beam', difficulty: 1, query: 'modal' })).toEqual([]);
+    expect(filterExamples(items, { tag: null, difficulty: null, query: 'unknown' })).toEqual([]);
+    expect(filterExamples(items, { tag: null, difficulty: null, query: '   ' })).toEqual(items);
+  });
+
   it('routes filter changes through the registry into app view state', async () => {
     const store = new Store();
     const transport = { dispatch: async () => undefined, query: async () => undefined } as unknown as WorkerTransport;
@@ -73,6 +81,8 @@ describe('the examples gallery', () => {
     });
     await registry.dispatch({ cmd: 'example.filter', tag: 'beam', difficulty: 2 });
     expect(store.state.exampleFilter).toEqual({ tag: 'beam', difficulty: 2 });
+    await registry.dispatch({ cmd: 'example.filter', tag: 'beam', difficulty: 2, query: 'modal' });
+    expect(store.state.exampleFilter).toEqual({ tag: 'beam', difficulty: 2, query: 'modal' });
     await registry.dispatch({ cmd: 'example.filter', tag: null, difficulty: null });
     expect(store.state.exampleFilter).toEqual({ tag: null, difficulty: null });
   });
