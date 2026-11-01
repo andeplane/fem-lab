@@ -21,11 +21,16 @@ behavior, verification and any remaining limitations. Review before merging; all
 green. After merge, verify that the issue closed and remove `in progress` if it remains. If
 work stops, remove the label and explain why on the issue.
 
-`main` requires an up-to-date PR and these GitHub Actions checks: **billing release guards**,
-**rust (macos-latest)**, **wasm build**, **web (codegen, typecheck, tests, app build)** and
-**browser smoke (cpu, sw, gpu)**. The protection applies to administrators too. Wait for the
-checks on the current PR head; a local pass, an earlier revision or a pending job cannot
-authorize a merge. The additional main/release matrix follows [ADR 0022](docs/adr/0022-fast-pull-request-gate-full-matrix-on-main.md).
+`main` requires an up-to-date PR and one GitHub Actions check, **pr gate**, which aggregates
+the Linux pull-request jobs in [pr.yml](.github/workflows/pr.yml). It finishes in about two
+minutes when Rust is untouched; Rust changes add `rust lint` and `rust tests`. The protection
+applies to administrators too. Wait for the check on the current PR head; a local pass, an
+earlier revision or a pending job cannot authorize a merge. Browser smoke, the CLI replays, the
+native-vs-wasm hashes and engine coverage run on merge to main, and macOS, Windows and the D5
+GPU case run on the 1st and 15th of each month, as [ADR 0047](docs/adr/0047-two-minute-pr-gate-cd-on-main-scheduled-deep-run.md)
+describes. Because the PR gate does not run browser smoke, run the affected Chromium specs
+locally (below) before pushing; to run the deep set on a branch, dispatch the `ci` workflow
+with `deep`.
 
 ## Preserve the architecture
 
@@ -44,7 +49,8 @@ with the implementation: they are also the AI tool descriptions.
 
 Build the wasm artifacts before host tests using the sequence in
 [Getting started](docs/GETTING-STARTED.md). The exact current CI commands and platforms are in
-[ci.yml](.github/workflows/ci.yml). Typical checks from the repository root are:
+[pr.yml](.github/workflows/pr.yml), [ci.yml](.github/workflows/ci.yml) and
+[gpu.yml](.github/workflows/gpu.yml). Typical checks from the repository root are:
 
 ```sh
 cargo fmt --all --check

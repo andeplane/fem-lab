@@ -1,12 +1,18 @@
 name: deploy
 on:
-  push:
+  # Publish the `dist` that main's CI built, tested and smoke-tested, once that run is green.
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
     branches: [main]
+  # Redeploy the newest green main build without waiting for a merge.
   workflow_dispatch:
 
-# The app is a static site: it needs no server, so GitHub Pages is the whole deployment.
+# The app is a static site: it needs no server, so GitHub Pages is the whole deployment. It no
+# longer builds anything itself (issue #820): the bundle CI tested is the bundle that ships.
 permissions:
   contents: read
+  actions: read
   pages: write
   id-token: write
 
@@ -14,65 +20,36 @@ concurrency:
   group: pages
   cancel-in-progress: true
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.94"
-          targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - name: install the wasm-bindgen CLI matching Cargo.lock
-        run: |
-          V=$(grep -A1 'name = "wasm-bindgen"' Cargo.lock | tail -1 | cut -d'"' -f2)
-          cargo install --locked wasm-bindgen-cli --version "$V"
-      # `npm ci` first: `build-wasm.mjs` runs the binaryen `wasm-opt` from node_modules, and
-      # without it the published module is a third larger.
-      - run: npm ci
-      - name: install pinned browser atomics toolchain
-        run: rustup toolchain install nightly-2026-09-05 --profile minimal --component rust-src --target wasm32-unknown-unknown
-      - run: node tools/build-wasm.mjs
-      - run: node tools/build-wasm-threads.mjs
-      # Build once for Chromium to replay every real example through the viewer, then package
-      # those fixed 320×180 canvases in the final deploy artifact.
-      - run: npm run build -w packages/app
-      - name: playwright version for thumbnails
-        id: thumbnail-pw
-        run: echo "v=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ steps.thumbnail-pw.outputs.v }}
-      - run: npx playwright install --with-deps chromium
-        working-directory: packages/app
-      # Never let a picture stop the site from shipping. `copy-examples.mjs` already writes
-      # `thumbnail: null` for anything missing and the gallery renders a "preview pending" card,
-      # so a failed or slow software-rendered pass costs a thumbnail, not a deployment.
-      - run: npm run thumbnails -w packages/app
-        continue-on-error: true
-      # `prebuild` now sees the generated PNGs; `postbuild` still refuses to publish a key.
-      - run: npm run build -w packages/app
-      # Jekyll would drop the underscore-prefixed files GitHub Pages otherwise serves fine.
-      - run: touch packages/app/dist/.nojekyll
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: packages/app/dist
-
   deploy:
-    needs: build
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - id: run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          if [ -z "$RUN_ID" ]; then
+            RUN_ID=$(gh run list --workflow ci.yml --branch main --event push --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+          fi
+          echo "id=$RUN_ID" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+          run-id: ${{ steps.run.outputs.id }}
+          github-token: ${{ github.token }}
+      # Jekyll would drop the underscore-prefixed files GitHub Pages otherwise serves fine.
+      - run: touch dist/.nojekyll
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
       - id: deployment
         uses: actions/deploy-pages@v4

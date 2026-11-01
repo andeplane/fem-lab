@@ -2,28 +2,37 @@ name: ci
 on:
   push:
     branches: [main]
-  pull_request:
+  schedule:
+    - cron: '0 4 1,15 * *'
+  workflow_dispatch:
+    inputs:
+      deep:
+        type: boolean
+        default: false
+        description: Also run macOS and Windows (the deep set).
   workflow_call:
     inputs:
       strict:
         type: boolean
         default: false
-        description: Require every GPU check for release validation; Windows is always required.
+        description: Release validation. Runs the deep set and makes WebGPU smoke failures fatal.
+      deep:
+        type: boolean
+        default: false
+        description: Also run macOS and Windows without making WebGPU smoke fatal.
 
-# Two gates (issue #441, ADR 0022). A pull request runs the fast set: Rust on macOS (fmt, clippy,
-# tests), the wasm build, the web build and Chromium smoke on the CPU path — enough to prove the
-# change works on macOS and in Chrome. A push to main, and release validation (`strict: true`),
-# run everything: Linux Rust, Windows, the native-vs-wasm hash comparison, every smoke variant
-# and the required lavapipe GPU job with full 100 % library coverage. So main can go red on what a PR did
-# not run; whoever merged fixes forward before anything else lands. The condition is written out
-# at each job (`github.event_name != 'pull_request' || inputs.strict`); job names are the check
-# names, so keep them.
+# Three tiers (issue #820, ADR 0047, superseding ADR 0022's two gates). Pull requests run the
+# two-minute Linux gate in `pr.yml`. A push to main runs this workflow on Linux: workspace Rust
+# tests, the wasm bundle, web, the native-vs-wasm hashes and every Chromium smoke variant; when it
+# is green, `deploy.yml` publishes its `dist`. The schedule (1st and 15th), a dispatch with `deep` and
+# release validation (`strict`) add macOS and Windows. The lavapipe coverage gate lives in
+# `gpu.yml`. Main can go red on what a PR did not run; whoever merged fixes forward before
+# anything else lands. Job names are check names, so keep them.
 
-# One run per ref: a new push cancels the older run of the same branch, so the shared queue holds
-# only what can still matter (issue #290). Not on main: merges land minutes apart there, and a run
-# that is always cancelled never tells anyone whether main is green.
+# Merges land minutes apart and each run must say whether that commit is green, so main runs are
+# never cancelled; the event is in the group so a merge never cancels the scheduled run.
 concurrency:
-  group: ${{ github.workflow }}-ci-${{ github.ref }}
+  group: ${{ github.workflow }}-ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
@@ -41,14 +50,16 @@ jobs:
           python-version: '3.12'
       - run: python3 -m unittest discover -s infra/stripe -p 'test_*.py' -v
 
-  # macOS on every event; Linux only on the full set. Full crate coverage belongs to the GPU job.
+  # Linux on every run; macOS (billed at ten times the Linux rate) only on the deep set. Full
+  # crate coverage belongs to `gpu.yml`. The shared cache key lets pull requests' Rust jobs start
+  # from this job's build.
   rust:
     name: rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON((github.event_name == 'pull_request' && !inputs.strict) && '["macos-latest"]' || '["ubuntu-latest", "macos-latest"]') }}
+        os: ${{ fromJSON((github.event_name == 'schedule' || inputs.deep || inputs.strict) && '["ubuntu-latest", "macos-latest"]' || '["ubuntu-latest"]') }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -57,87 +68,26 @@ jobs:
           targets: wasm32-unknown-unknown
           components: rustfmt, clippy, llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
       - run: cargo check -p femlab-engine -p femlab-geometry -p femlab-engine-wasm --target wasm32-unknown-unknown
 
-  # GPU kernels for real on a GPU-less runner: Mesa lavapipe is the Vulkan adapter (ADR 0007).
-  # Backends::PRIMARY picks Vulkan on Linux; wgpu reads WGPU_BACKEND only through Backends::from_env, which we do not call.
-  gpu:
-    name: gpu kernels on lavapipe
-    if: github.event_name != 'pull_request' || inputs.strict
-    runs-on: ubuntu-latest
-    env:
-      LVP_POISON_MEMORY: "true"
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.94"
-          components: llvm-tools-preview
-      - uses: Swatinem/rust-cache@v2
-      - run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers vulkan-tools
-      - run: vulkaninfo --summary || true
-      - run: cargo install cargo-llvm-cov --locked
-      # Coverage is measured in debug: release inlining mis-attributes regions and the job then
-      # reports 99 % on lines that ran. The 66k-DOF D5 sibling is `#[ignore]`d out of that binary
-      # and run on its own in release, where it takes seconds instead of ten minutes. Override
-      # the ordinary level-1 test profile here so instrumentation retains exact source regions.
-      - name: strict GPU coverage
-        id: gpu_coverage
-        run: CARGO_PROFILE_TEST_OPT_LEVEL=0 cargo llvm-cov -p femlab-engine -p femlab-geometry --features gpu-tests --fail-under-lines 100 --fail-under-functions 100 --fail-under-regions 100
-      # Preserve the failed gate; export its existing profiles so a missed region is located
-      # precisely rather than guessed from rounded percentages. This does not rebuild or retest.
-      - name: export failed GPU coverage detail
-        if: ${{ failure() && steps.gpu_coverage.outcome == 'failure' }}
-        run: CARGO_PROFILE_TEST_OPT_LEVEL=0 cargo llvm-cov report -p femlab-engine -p femlab-geometry --json --output-path gpu-coverage.json
-      - uses: actions/upload-artifact@v4
-        if: ${{ failure() && steps.gpu_coverage.outcome == 'failure' }}
-        with:
-          name: gpu-coverage-detail
-          path: gpu-coverage.json
-          if-no-files-found: error
-          retention-days: 7
-      - run: cargo test --release -p femlab-engine --features gpu-tests --test gpu_kernels -- --ignored sixty_six --nocapture
-
   # The wasm module, the Node wasm build, the schema document and the release CLI, built once and
   # handed to every job that needs them: `web` bundles the module, `smoke` and `wasm-hash` replay
-  # Journals against the CLI. Runs on every event because the web gate depends on it.
+  # Journals against the CLI. The composite action reuses the cached bundle when no Rust input
+  # changed, and otherwise builds it and caches it for later merges and every pull request.
   wasm:
     name: wasm build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.94"
-          targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: install the wasm-bindgen CLI matching Cargo.lock
-        run: |
-          V=$(grep -A1 'name = "wasm-bindgen"' Cargo.lock | tail -1 | cut -d'"' -f2)
-          cargo install --locked wasm-bindgen-cli --version "$V"
-      # `npm ci` first: `build-wasm.mjs` shrinks both outputs with binaryen's `wasm-opt`, and the
-      # `web` job's size budget is measured on the module this job uploads.
-      - run: npm ci
-      - name: install pinned browser atomics toolchain
-        run: rustup toolchain install nightly-2026-09-05 --profile minimal --component rust-src --target wasm32-unknown-unknown
-      - name: wasm32 STL length regressions with debug overflow checks
-        run: |
-          node tools/build-wasm.mjs --dev
-          node tools/test-stl-wasm.mjs debug
-      - run: node tools/build-wasm.mjs
-      - name: wasm32 STL length regressions in the optimized shipping module
-        run: node tools/test-stl-wasm.mjs optimized
-      - run: node tools/build-wasm-threads.mjs
-      - run: cargo build -p femlab --release
-      - run: cargo test --locked -p femlab-project-io
-      - run: node tools/build-project-io.mjs
-      - run: ./target/release/femlab schema --out engine.schema.json
+      - uses: ./.github/actions/wasm
       - uses: actions/upload-artifact@v4
         with:
           name: wasm
@@ -152,7 +102,6 @@ jobs:
   # The engine is a library with two hosts: the same Journal must hash identically natively and in wasm.
   wasm-hash:
     name: native vs wasm Journal hashes
-    if: github.event_name != 'pull_request' || inputs.strict
     runs-on: ubuntu-latest
     needs: wasm
     steps:
@@ -198,7 +147,7 @@ jobs:
 
   windows:
     name: windows
-    if: github.event_name != 'pull_request' || inputs.strict
+    if: github.event_name == 'schedule' || inputs.deep || inputs.strict
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -280,8 +229,8 @@ jobs:
           name: dist
           path: packages/app/dist
 
-  # The built app in a real Chromium (ADR 0014): the CPU path on every event; the service-worker
-  # isolation path without server headers and WebGPU on SwiftShader on the full set.
+  # The built app in a real Chromium (ADR 0014): the CPU path, the service-worker isolation path
+  # without server headers, and WebGPU on SwiftShader (advisory unless `strict`).
   smoke:
     name: browser smoke (cpu, sw, gpu)
     runs-on: ubuntu-latest
@@ -334,11 +283,9 @@ jobs:
         run: xvfb-run -a npx playwright test --project=cpu
         working-directory: packages/app
       - name: chromium, service-worker isolation
-        if: github.event_name != 'pull_request' || inputs.strict
         run: xvfb-run -a npx playwright test --project=sw --grep-invert "cold Pages bootstrap"
         working-directory: packages/app
       - name: webgpu on swiftshader
-        if: github.event_name != 'pull_request' || inputs.strict
         continue-on-error: ${{ !inputs.strict }}
         run: xvfb-run -a npx playwright test --project=gpu
         working-directory: packages/app

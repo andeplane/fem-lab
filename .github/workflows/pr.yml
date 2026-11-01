@@ -1,0 +1,177 @@
+name: pr
+on:
+  pull_request:
+
+# The pull-request gate (issue #820, ADR 0047): Linux only, about two minutes when Rust is
+# untouched. It proves the change type-checks, its unit tests pass and the app still builds within
+# its bundle budget. Rust tests run only when Rust changed. Browser smoke, Linux CLI replays, the
+# native-vs-wasm hashes and coverage run on merge (`ci.yml`); macOS, Windows and the GPU matrix run
+# on the 1st and 15th of each month. Branch protection requires the single `pr gate` check, so jobs can move between tiers
+# without touching repository settings.
+
+concurrency:
+  group: pr-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+    steps:
+      # Lists the PR's files through the API; no checkout.
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            rust:
+              - 'crates/**'
+              - 'vendor/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - 'rustfmt.toml'
+              - '.github/workflows/pr.yml'
+
+  rust-lint:
+    name: rust lint
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94"
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace
+          save-if: false
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo check -p femlab-engine -p femlab-geometry -p femlab-engine-wasm --target wasm32-unknown-unknown
+
+  # The CLI crate's tests replay and solve every bundled example through the binary (~90 s on
+  # their own); they run on merge with the rest of the workspace.
+  rust-test:
+    name: rust tests
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace
+          save-if: false
+      - run: cargo test --workspace --exclude femlab
+
+  # A cache hit (any PR that does not touch Rust) takes seconds; a miss builds the same optimized
+  # bundle main builds.
+  wasm:
+    name: wasm bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: ./.github/actions/wasm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasm
+          retention-days: 3
+          path: |
+            packages/app/src/generated/wasm
+            packages/app/src/generated/wasm-threads
+            tools/wasm-node
+            tools/project-io
+
+  # Four parallel slices of what `web` runs on main, each about a minute of work.
+  web:
+    name: web (${{ matrix.slice }})
+    needs: wasm
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - slice: checks
+            run: |
+              python3 -m unittest discover -s infra/stripe -p 'test_*.py'
+              python3 -m unittest discover -s tools -p 'test_release_artifacts.py'
+              python3 -B -m unittest discover -s tools/abaqus-interoperability -p 'test_*.py'
+              python3 -m unittest discover -s infra/google -p 'test_*.py'
+              npm run codegen:check
+              node --test tools/test-step-assets.mjs
+              node --test tools/test-size-runtime.mjs
+              node --test tools/test-static-serve.mjs
+              npm run typecheck
+          - slice: packages
+            db: postgres:17
+            run: |
+              npm run test -w packages/registry
+              npm run test -w packages/ai
+              npm run test -w packages/evals
+              npm run test -w packages/service
+              npm run build -w packages/service
+              node tools/test-service-build.mjs
+              npm run test -w packages/mcp
+              npm run build -w packages/mcp
+          - slice: app tests
+            run: npm run test -w packages/app
+          - slice: app build
+            run: |
+              npm run build -w packages/app
+              node tools/test-built-linkage.mjs
+              npm run size
+    # An empty image skips the service: only the service package's tests need Postgres.
+    services:
+      postgres:
+        image: ${{ matrix.db || '' }}
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: femlab_test
+        ports: [5432:5432]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/femlab_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/download-artifact@v4
+        with:
+          name: wasm
+      - run: chmod +x tools/project-io/*/femlab-project-io
+      - run: npm ci
+      - run: ${{ matrix.run }}
+
+  # The one required check. Skipped Rust jobs (no Rust change) pass; failed or cancelled ones fail.
+  gate:
+    name: pr gate
+    if: always()
+    needs: [changes, rust-lint, rust-test, wasm, web]
+    runs-on: ubuntu-latest
+    steps:
+      - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
+      - run: echo "pull-request gate passed"

@@ -2,7 +2,7 @@
 
 The designed FEM Lab shell (plan B §7): Preact panels, a three.js viewer, the wasm engine in a
 Worker, and the Assistant drawer. It is a static site — no server, no build step at run time —
-published to GitHub Pages by `.github/workflows/deploy.yml`.
+published to GitHub Pages by `.github/workflows/deploy.yml` from the build main's CI tested.
 
 ## Run it
 
