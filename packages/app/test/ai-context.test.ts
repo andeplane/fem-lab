@@ -47,7 +47,10 @@ describe('the system prompt', () => {
   it('carries the units, sourced-material and verification rules, in that fixed order', () => {
     const system = buildSystem({ registry: registryWith(), skills: SKILLS, project: null });
     expect(system).toContain('as a unit string');
-    expect(system).toContain('call query.materialLibrary before material.add');
+    expect(system).toContain('call query.materialLibrary before material.addFromLibrary');
+    expect(system).toContain('Preserve every non-null catalogue property');
+    expect(system).toContain('even when the current Step does not use them');
+    expect(system).toContain('For genuinely custom materials use material.add');
     expect(system).toContain('for dimensionless nu, pass the inner numeric');
     expect(system).toContain('Never fill a null property');
     expect(system).toContain('check the reaction sum against the applied load');

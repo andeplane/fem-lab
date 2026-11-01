@@ -65,6 +65,7 @@ describe('the tool list', () => {
     expect(names).toContain(toolNameFor('solve.run'));
     expect(names).toContain('export_file');
     expect(names).toContain(toolNameFor('file.importAbaqus'));
+    expect(names).toContain(toolNameFor('material.addFromLibrary'));
     expect(names).toContain(RUN_SCRIPT);
     // no view, no selection, no panels: this host has no screen to move
     expect(names.filter((n) => n.startsWith('view_') || n.startsWith('selection_'))).toEqual([]);
@@ -84,6 +85,23 @@ describe('the tool list', () => {
     expect(diff.inputSchema.properties).toHaveProperty('base');
     expect(JSON.stringify(diff.inputSchema)).toContain('"cmd"');
   });
+});
+
+it('applies a catalogue Material through the same registered Command in tools and validated scripts', async () => {
+  const engine = fakeEngine();
+  const property = (value: number, unit: string) => ({ value: { value, unit } });
+  engine.query = async query => {
+    engine.seen.push(query);
+    return { entries: [{ materialAddSource: 'Exact catalogue source', E: property(210, 'GPa'), nu: property(0.3, '1'), rho: property(7850, 'kg/m^3'), alpha: property(12e-6, '1/K'), k: null, cp: null, yield: property(355, 'MPa') }], sources: [] };
+  };
+  const registry = createRegistry({ engine });
+  const expected = { cmd: 'material.add', name: 'steel', source: 'Exact catalogue source', E: '210 GPa', nu: 0.3, rho: '7850 kg/m^3', alpha: '0.000012 1/K', yield: '355 MPa' };
+  await callTool(registry, 'material_addFromLibrary', { entry: 's355j2', name: 'steel' });
+  expect(engine.seen).toEqual([{ query: 'query.materialLibrary', name: 's355j2' }, expected]);
+  engine.seen.length = 0;
+  const script = await callTool(registry, RUN_SCRIPT, { code: "await fem.material.addFromLibrary({ entry: 's355j2', name: 'steel' });" });
+  expect(script).not.toHaveProperty('error');
+  expect(engine.seen).toEqual([{ query: 'query.materialLibrary', name: 's355j2' }, expected]);
 });
 
 it('offers one scoped Abaqus import tool and the same inline script Command; picker and database rejection never reach conversion', async () => {

@@ -111,6 +111,23 @@ GPU job's promotion status are described in [ADR 0007](docs/adr/0007-three-test-
 Registry vitest thresholds are also 100%; thin hosts use unit and smoke tests. Browser checks
 run against Chromium, including CPU, service-worker and software-GPU lanes.
 
+The browser app has a separate measured coverage baseline in
+[its Vitest configuration](packages/app/vitest.config.ts): 82.5% lines, 79.76% statements,
+74.7% functions and 76.43% branches. This is a minimum for the whole app, including pure UI
+modules, workers and browser entry points; it is not a 100% app-coverage requirement. Raise
+the committed thresholds as meaningful tests improve coverage; never lower them to pass a
+change. The decision in [#474](https://github.com/andeplane/fem-lab/issues/474) retains this
+baseline and behavioral checks (option 3), following the host policy in
+[ADR 0007](docs/adr/0007-three-test-tiers-and-gpu-in-ci.md). It does not add an automatic
+threshold ratchet or a separate 100% pure-UI gate.
+
+`npm run test -w packages/app` collects coverage and runs
+[the source-inclusion check](packages/app/scripts/check-coverage.mjs), which fails if any
+authored `.ts` or `.tsx` module is absent from the report. Only type declarations are
+excluded. Coverage thresholds do not prove that an assertion detects incorrect behavior:
+UI tests must exercise the action and its outcome, rather than only checking a control's
+label. The app baseline supplements those unit and Chromium checks.
+
 Every numerical capability needs independent analytical or published oracles and the relevant
 [Benchmarks](docs/BENCHMARKS.md), including a convergence study where a rate is known. Update
 BENCHMARKS.md in the same change. Use property tests for invariants such as replay determinism,

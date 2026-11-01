@@ -19,6 +19,7 @@ const schemaQueries = engineSchema.queries.oneOf.map((v) => v.properties['query'
 
 /** One valid input per host Command; a Command without a sample fails the exhaustive test below. */
 const SAMPLES: Record<string, Record<string, unknown>> = {
+  'material.addFromLibrary': { entry: 'sample', name: 'sample' },
   'view.compareResults': { mode: 'single' },
   'view.playComparison': { mode: 'independent', pane: 'left', resultId: 'result-1', playing: false, sample: { kind: 'frame', index: 0 } },
   'view.setComparisonLegend': { pane: 'left', resultId: 'r1', range: [{ value: 0, unit: 'MPa' }, { value: 10, unit: 'MPa' }] },
@@ -186,16 +187,15 @@ describe('Registry', () => {
     expect(union.toJSON()).toMatchObject({ code: 'schema', where: null });
   });
 
-  it('dispatches every host Command to the HostContext and none to the transport', async () => {
+  it('dispatches every host Command through its injected HostContext', async () => {
     const { registry, transport, host } = make();
     host.files.completed = { capture: () => unretainedFile, info: () => null, download: () => ({ name: 'sample', to: 'download', bytes: 0, mime: 'text/plain' }), clear: () => undefined, dispose: () => undefined };
     for (const h of HOST_COMMANDS) {
       expect(SAMPLES, `missing sample for ${h.name}`).toHaveProperty(h.name);
       await registry.dispatch({ cmd: h.name, ...SAMPLES[h.name] });
     }
-    // `geometry.importFile` is the one host Command that composes an engine Command: it reads
-    // the file the host owns and hands it to `geometry.import`, which the engine journals.
-    expect(vi.mocked(transport.dispatch).mock.calls.map((c) => (c[0] as { cmd: string }).cmd)).toEqual(['geometry.import']);
+    // Catalogue application and file import compose ordinary journaled engine Commands.
+    expect(vi.mocked(transport.dispatch).mock.calls.map((c) => (c[0] as { cmd: string }).cmd)).toEqual(['material.add', 'geometry.import']);
     vi.mocked(transport.dispatch).mockClear();
     for (const h of HOST_QUERIES) await registry.query({ query: h.name, ...SAMPLES[h.name] });
     expect(transport.dispatch).not.toHaveBeenCalled();
