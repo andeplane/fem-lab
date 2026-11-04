@@ -24,6 +24,26 @@ import {monthlyFreeAllowance} from './free-allowance';
 import type {PublicCreditUnit} from '@femlab/registry';
 import {cloudProjects} from './cloud-projects';
 import {projectObjects} from './project-objects';
+import {operationalSnapshot} from './operations';
+
+// Operator-only, before Firebase, provider, payment, migration or recovery initialization.
+// A SELECT-only database role is sufficient; this branch never starts an HTTP listener.
+if (process.argv.includes('--operations')) {
+  if (process.argv.includes('--recover') || process.argv.includes('--migrate')) {
+    process.stdout.write(JSON.stringify({event:'service-operations',severity:'ERROR',code:'operations-invalid-mode',cause:'Operational checks cannot be combined with mutations.',where:'service.operations',suggestion:'node dist/main.mjs --operations'})+'\n');
+    process.exitCode=2;
+  } else {
+    const pool = new pg.Pool({max:1,connectionTimeoutMillis:5000,idleTimeoutMillis:1000,statement_timeout:5000});
+    try {
+      const snapshot=await operationalSnapshot(pool,()=>new Date());
+      process.stdout.write(JSON.stringify(snapshot)+'\n');
+      process.exitCode=snapshot.alarms.length?1:0;
+    } catch {
+      process.stdout.write(JSON.stringify({event:'service-operations',severity:'ERROR',code:'operations-unavailable',cause:'The operational snapshot could not be read.',where:'service.operations',suggestion:'Check read-only database access and migrations, then rerun node dist/main.mjs --operations.'})+'\n');
+      process.exitCode=2;
+    } finally { await pool.end(); }
+  }
+} else {
 
 const port = Number(process.env.PORT ?? 8080);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT must be an integer from 1 to 65535');
@@ -94,4 +114,5 @@ if (process.argv.includes('--migrate')) {
   server.listen(port, '0.0.0.0');
   server.requestTimeout=120000; server.headersTimeout=30000;
   process.once('SIGTERM', () => { server.close(() => { void pool?.end(); }); });
+}
 }
