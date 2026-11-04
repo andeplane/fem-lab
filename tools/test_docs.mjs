@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
+import {fileURLToPath} from 'node:url';
 import {compileDocsSite,loadReference,normalizeBase,headingSlug,isDocsInput,APP_REFERENCE_INPUTS} from './docs.mjs';
 import {validateGuideExamples} from './docs-examples.mjs';
 
@@ -78,7 +79,7 @@ test('authored TypeScript examples use actual browser API types without executin
 });
 
 test('dev invalidates every app metadata source and guide additions without watching generated validator outputs',()=>{
- const root=new URL('../',import.meta.url).pathname;
+ const root=fileURLToPath(new URL('../',import.meta.url));
  for(const filename of [...APP_REFERENCE_INPUTS,'docs/guide/new-topic.md','packages/registry/src/generated/engine.schema.json','packages/app/src/docs/client.ts'])assert.equal(isDocsInput(root+filename),true,filename);
  for(const filename of ['packages/registry/src/generated/script-declarations-browser.json','packages/registry/src/generated/script-declarations-mcp.json.123.tmp','packages/app/dist/index.html'])assert.equal(isDocsInput(root+filename),false,filename);
 });
