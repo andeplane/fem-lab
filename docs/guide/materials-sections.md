@@ -34,6 +34,39 @@ A shell Section supplies thickness for the `surface` mesher's midsurface. Direct
 
 Check local/reference directions and ply order before interpreting top/bottom or per-ply stress. Shell stresses and moments have special element-node locations and sign conventions, described in [Results](./results-verification.md). The laminate formulation is not a prediction of delamination or a universal composite failure criterion.
 
+For a shell layup, use `section.add` with `shape.kind: "laminate"` and the ply
+Materials, thicknesses and angles in `plies`. Assign it to the surface Body with
+`section.assign`. The assignment's optional `orientation` chooses a global
+reference axis projected onto the midsurface; ply angles are measured from that
+direction. An axis normal to the midsurface is rejected; choose a tangent
+reference. Without it, the first parametric direction is the reference. Material
+orientation is composed in each ply frame. Reversing an unsymmetric stack can
+reverse its extension–bending coupling, while a mirrored stack has zero coupling.
+
+### Model plies as separate solids
+
+Use a separate 3D Body and assigned Material for every solid ply. If plies share
+engineering constants but have different fibre directions, define correspondingly
+oriented Materials; a solid Body does not read the laminate Section's ply angles.
+This route uses ordinary solid elements and does not require a shell Section.
+
+Coincident faces of separate lattice Bodies do **not** weld automatically. Add a
+`contact.add` connection with `kind: "bonded"` between each adjacent face pair,
+using their named face Sets, and include every connection name in the mechanical
+Step's `constraints`. Check that the chosen tolerance pairs the intended interface
+without joining another ply. Quadratic hexahedra are preferable for thin bending;
+supply suitable per-direction lattice counts and `order: 2`, and refine until the
+response is stable.
+
+An explicit bond enforces compatible displacement across the interface; ply
+stresses can jump because the Materials differ. The stacked-solid benchmark checks
+two cross plies, their reversed order and a symmetric four-ply stack against
+classical extension–bending coupling on three meshes. Its zero Poisson ratios make
+the analytical plane-stress field an exact 3D reference; that special oracle is
+not a general claim that an arbitrary solid laminate follows thin-plate theory.
+Both solid bonds and the laminate shell Section assume perfect bonding: neither
+predicts interface separation or delamination.
+
 ## Apply a catalogue Material
 
 In the browser or MCP host, inspect `query.materialLibrary` first. Confirm the grade, condition, product form, temperature basis and limitations match the actual part. The following example runs in an existing Model containing a Body named `beam`. Use `material.addFromLibrary` with the entry's canonical id and your new Material name:

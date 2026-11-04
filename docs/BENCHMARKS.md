@@ -1577,6 +1577,7 @@ which reviews the original MITC4 formulation before introducing MITC4+.
 | G6 | NAFEMS FV12 free thin square plate, modal | 1.622, 2.360, 2.922, 4.233, 4.233, 7.416, 7.416 Hz | 1 % |
 | G7 | Pinched cylinder / full hemisphere (Belytschko et al.; Ko–Lee–Bathe verification above) | 1.8248e-5 / 0.0924 | 2 % |
 | G8 | Bonded cross-ply and symmetric laminate patches, including thermal mismatch and eccentric density | Classical A/B/D energy; bimetal curvature and interface stress; mass and gravity moment | 1e-10 relative energy; 1e-8 absolute force/stress |
+| G8b | Separate bonded Hex20 solid plies (#347): 0°/90°, reversed and symmetric 0°/90°/90°/0°; two thicknesses and 1/2/4 axial divisions | N=0, M=1; classical A/B/D gives exact 3D plane-stress displacement when all Poisson ratios vanish | 1e-7 of characteristic displacement; bit-identical at 1/2 workers |
 
 G8 follows the laminate force/moment integrals and symmetry argument in
 [NASA RP-1351, sections III–IV](https://ntrs.nasa.gov/citations/19950009349).
@@ -1616,6 +1617,35 @@ interface and remain unchanged after section edits. Native/WASM replay checks
 cover all four ply faces as well as the outer-face fields and moment. The cross-ply
 strip also keeps these final fields and rotations when solved over a retained
 temperature history with zero thermal expansion.
+
+**G8b (#347)** separately verifies the stacked-solid path. Every ply is a distinct
+Body, with duplicate interface nodes; explicit bonded MPCs connect adjacent faces.
+Only the bottom ply's root is clamped. The other root faces receive the exact
+balancing axial traction; the bonds must remove their relative rigid-body modes.
+Without bonds those upper plies are floating, so this patch cannot pass by
+independently clamping and loading every layer.
+A 1 m × 1 m patch has total thickness 40 or 20 mm, and each ply uses Hex20 with
+1/2/4 axial divisions. The same orthotropic constants as G8, with zero Poisson
+ratios, give only `sigma_xx = Ex (epsilon + kappa z)`, so the plane-stress CLT
+field is also an exact three-dimensional equilibrium. There is no plane-strain
+substitution, shear strain or Hex8 bending-locking approximation in this oracle.
+
+For two cross plies, `A=60e9 t`, `B=−10e9 t²`, `D=5e9 t³`; reversing them
+reverses B. For the symmetric four-ply stack, B=0 and D=7.5e9 t³. Under zero axial
+resultant and unit bending moment per width, `epsilon=−B/(AD−B²)` and
+`kappa=A/(AD−B²)`. At t=20 mm the cross-ply values are epsilon=1.25e-7 and
+kappa=3.75e-5/m; the symmetric stack has epsilon=0 and kappa=1.666666667e-5/m.
+
+Independent exact Q8 face integrals apply the linear end stress: nodal constant
+weights are −1/12 at corners and 1/3 at midsides; the first natural-coordinate
+moment is sign/36 at corners, sign/9 at thickness-edge midsides and zero at the
+other midsides. Applied nodal forces are checked for zero resultant and 1 N m
+moment. The actual full assembled/bonded static solve must reproduce
+`ux=(epsilon+kappa z)x`, `uy=0`, `uz=−kappa x²/2` at every node within 1e-7 of the
+characteristic displacement. All three mesh sizes represent this quadratic patch
+exactly, so a convergence rate is not claimed. Retained displacement bits must
+agree at one and two workers. The shell and stacked-solid routes remain perfectly
+bonded models, with no delamination prediction.
 
 ## H. Plugins (phase P)
 

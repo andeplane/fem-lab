@@ -11303,6 +11303,132 @@ fn orthotropic_material(props: &[f64; 9], axes: Option<[[f64; 3]; 3]>) -> Materi
     }
 }
 
+/// G8b (#347): distinct solid ply Bodies, explicitly bonded, reproduce CLT's
+/// extension–bending coupling. Zero Poisson ratios make the analytical plane-stress
+/// field an exact 3D equilibrium too: only sigma_xx = Ex (epsilon + kappa z) is nonzero.
+#[test]
+fn bonded_stacked_solid_plies_reproduce_classical_laminate_coupling() {
+    let lamina = [100e9, 20e9, 10e9, 10e9, 5e9, 3e9, 0.0, 0.0, 0.0];
+    let layouts: [(&[usize], f64, f64); 3] = [(&[0, 1], -10e9, 5e9), (&[1, 0], 10e9, 5e9), (&[0, 1, 1, 0], 0.0, 7.5e9)];
+    for thickness in [0.04f64, 0.02] {
+        for (layout, b_scale, d_scale) in layouts {
+            // A = integral Ex dz, B = integral Ex z dz, D = integral Ex z^2 dz.
+            // Apply N=0, M=1 N per unit width: solve the independent 2x2 CLT system.
+            let (a, b, d) = (60e9 * thickness, b_scale * thickness.powi(2), d_scale * thickness.powi(3));
+            let det = a * d - b * b;
+            let (epsilon, kappa) = (-b / det, a / det);
+            let ply_t = thickness / layout.len() as f64;
+            for nx in [1, 2, 4] {
+                let part = Structured { kind: ElementKind::Hex20, n: [nx, 1, 1] }.box_([1.0, 1.0, ply_t]);
+                let names: Vec<String> = (0..layout.len()).map(|i| format!("ply{i}")).collect();
+                let parts: Vec<_> = names
+                    .iter()
+                    .enumerate()
+                    .map(|(i, name)| (name.as_str(), &part, [0.0, 0.0, -0.5 * thickness + i as f64 * ply_t]))
+                    .collect();
+                let mesh = join_named(&parts);
+                // Adjacent plies have duplicate interface nodes; coincidence is not a weld.
+                assert_eq!(mesh.n_nodes(), layout.len() * part.n_nodes());
+                let mut sets = sets_of(&mesh);
+                let mut loads = Vec::new();
+                let (mut force, mut moment) = (0.0, 0.0);
+                for (i, &material) in layout.iter().enumerate() {
+                    let middle = -0.5 * thickness + (i as f64 + 0.5) * ply_t;
+                    let ex = lamina[material];
+                    // Hold only the bottom ply root. Other plies receive their
+                    // exact balancing root traction; without bonds they retain
+                    // independent rigid modes, so the MPCs are indispensable.
+                    for (at_tip, direction) in [(true, 1.0), (false, -1.0)] {
+                        if !at_tip && i == 0 {
+                            continue;
+                        }
+                        let side = if at_tip { "xmax" } else { "xmin" };
+                        let end = sets[&format!("ply{i}.{side}")].nodes.clone();
+                        assert_eq!(end.len(), 8, "one Q8 end face per ply");
+                        for node in end {
+                            let xyz = mesh.node(node);
+                            let edge_z = (xyz[2] - middle).abs() > 0.25 * ply_t;
+                            let corner = edge_z && (xyz[1] < 0.25 || xyz[1] > 0.75);
+                            // Independent exact Q8-face integrals: integral Ni / area is
+                            // -1/12 at corners and 1/3 at midsides. The first zeta moment
+                            // is sign/36 at corners, sign/9 at z-edge midsides, else zero.
+                            let constant = if corner { -1.0 / 12.0 } else { 1.0 / 3.0 };
+                            let first = if corner {
+                                (xyz[2] - middle).signum() / 36.0
+                            } else if edge_z {
+                                (xyz[2] - middle).signum() / 9.0
+                            } else {
+                                0.0
+                            };
+                            let f = ply_t * ex * ((epsilon + kappa * middle) * constant + kappa * ply_t * 0.5 * first);
+                            let name = format!("end{node}");
+                            sets.insert(
+                                name.clone(),
+                                ResolvedSet { kind: SetKind::Node, nodes: vec![node], faces: vec![], elems: vec![] },
+                            );
+                            loads.push(Load::NodalForce { nodes: name, f: [direction * f, 0.0, 0.0] });
+                            if at_tip {
+                                force += f;
+                                moment += xyz[2] * f;
+                            }
+                        }
+                    }
+                }
+                assert!(force.abs() < 1e-9 / thickness, "zero axial resultant: {force}");
+                assert!((moment - 1.0).abs() < 1e-10, "unit bending resultant: {moment}");
+                let held = vec![fix("root", "ply0.xmin", [true; 3], 0.0)];
+                let mut p = problem(&mesh, &sets, &names, Idealisation::Solid3d, Formulation::Full, held);
+                p.materials = vec![
+                    orthotropic_material(&lamina, None),
+                    orthotropic_material(&lamina, Some(axis_angle_rotation([0.0, 0.0, 1.0], PI / 2.0))),
+                ];
+                p.material_of_block = layout.iter().copied().map(Some).collect();
+                p.loads = loads;
+                p.couplings = (1..layout.len())
+                    .map(|i| tie(&format!("bond{i}"), &format!("ply{}.zmax", i - 1), &format!("ply{i}.zmin"), 1e-10))
+                    .collect();
+                let mpc = mpc::build(&p).expect("explicit bonded interfaces");
+                assert!(!mpc.rows.is_empty(), "the patch must exercise inter-Body MPCs");
+                let scale = epsilon.abs() + kappa.abs();
+                let mut previous = None;
+                for workers in [1, 2] {
+                    let result = pollster::block_on(procedure::run(
+                        &p,
+                        &static_step(SolveOptions::default()),
+                        &Pool::new(workers),
+                        None,
+                        None,
+                        &mut nop,
+                    ))
+                    .expect("bonded solid laminate");
+                    let u = &result.fields[&Field::Displacement].data;
+                    let mut error = 0.0f64;
+                    for node in 0..mesh.n_nodes() {
+                        let [x, _, z] = mesh.node(node as u32);
+                        let exact = [(epsilon + kappa * z) * x, 0.0, -0.5 * kappa * x * x];
+                        for c in 0..3 {
+                            error = error.max((u[3 * node + c] - exact[c]).abs());
+                        }
+                    }
+                    assert!(
+                        error < 1e-7 * scale,
+                        "t={thickness} layout={layout:?} nx={nx} workers={workers}: {error} / {scale}"
+                    );
+                    let bits: Vec<_> = u.iter().map(|x| x.to_bits()).collect();
+                    if let Some(old) = previous {
+                        assert_eq!(bits, old, "worker-count-independent retained displacement");
+                    }
+                    previous = Some(bits);
+                    println!(
+                        "G8b t={thickness} layout={layout:?} nx={nx} workers={workers} relative_max_error={:.3e}",
+                        error / scale
+                    );
+                }
+            }
+        }
+    }
+}
+
 /// Exact integral of a trilinear field over this test's axis-aligned Hex8 cells: each corner
 /// owns one eighth of its cell volume. This does not call capacity or any FE quadrature.
 fn box_temperature_integral(mesh: &Mesh, values: &[f64]) -> f64 {
