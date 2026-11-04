@@ -12871,6 +12871,86 @@ fn implicit_free_decay_matches_the_logarithmic_decrement() {
     );
 }
 
+/// Benchmark F5a (#823): average-acceleration Newmark has tan(ω̃Δt/2) = ωΔt/2.
+/// Thus T̃/T = x/(2 atan(x/2)) = 1 + x²/12 - x⁴/180 + O(x⁶).
+/// Measure displacement crossings, independently of the update equations.
+#[test]
+fn average_acceleration_lengthens_the_period_by_omega_dt_squared_over_12() {
+    let side = 0.1;
+    let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([side; 3]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let p = axial_sdof(&mesh, &sets, &bodies, 0.0);
+    let (k, m) = (p_wave_modulus() * side, DENSITY * side.powi(3) / 3.0);
+    let omega = (k / m).sqrt();
+    let period = 2.0 * PI / omega;
+    // Unit common face displacement: qᵀKq = MA/L and qᵀMq = ρAL/3,
+    // integrating the squared linear axial shape x/L, not a lumped nodal mass.
+    let tip: Vec<usize> = (0..mesh.n_nodes()).filter(|&n| mesh.node(n as u32)[0] > 0.5 * side).collect();
+    assert_eq!(tip.len(), 4);
+    let mut q = vec![0.0; p.n_dofs()];
+    for &n in &tip {
+        q[3 * n] = 1.0;
+    }
+    let (pat, assembled) = assemble(&p);
+    let mass = assemble_mass(&p, &pat, false).expect("consistent mass");
+    for (matrix, exact) in [(&assembled.k, k), (&mass, m)] {
+        let mut product = vec![0.0; q.len()];
+        matrix.spmv(&q, &mut product);
+        let got: f64 = q.iter().zip(product).map(|(a, b)| a * b).sum();
+        assert!((got - exact).abs() <= 1e-12 * exact, "assembled {got} vs analytical {exact}");
+    }
+    let (mut xx, mut yy, mut errors) = (Vec::new(), Vec::new(), Vec::new());
+    for nominal_x in [0.5, 0.25, 0.125] {
+        let res = run_step(&p, &implicit_step(nominal_x / omega, 100.0 * period, 0.0, (0.0, 0.0), Some(q.clone()), 1))
+            .expect("undamped free vibration");
+        // The endpoint may shorten the requested increment.
+        let dt = res.scalars["dt"];
+        let x = omega * dt;
+        let h = res.history.expect("every displacement frame retained");
+        assert_eq!(h.field, Field::Displacement);
+        assert_eq!(h.times.len(), res.scalars["steps"] as usize + 1);
+        let u: Vec<f64> = h
+            .values
+            .iter()
+            .map(|frame| {
+                let mean = tip.iter().map(|&n| frame[3 * n]).sum::<f64>() / 4.0;
+                // The analytical mode has a uniform free face and amplitude v0/omega = 1/omega.
+                for &n in &tip {
+                    assert!(
+                        (frame[3 * n] - mean).abs() <= 1e-11 / omega,
+                        "the free face must remain in its uniform axial mode"
+                    );
+                }
+                mean
+            })
+            .collect();
+        let measured = zero_crossing_period(&h.times, &u);
+        let dispersion = PI * dt / libm::atan(x / 2.0);
+        // Crossing placement is O(x³) and divided by ~100 cycles: at x ≤ 0.5,
+        // two endpoint errors bounded by x²Δt/16 give < 2.6e-5 relative.
+        assert!((measured / dispersion - 1.0).abs() <= 3e-5, "x={x}: T={measured}, theory={dispersion}");
+        let error = measured / period - 1.0;
+        assert!(error > 0.0, "Newmark must elongate the period: {error}");
+        println!("F5a x={x:.12} T={measured:.12e} dispersion={dispersion:.12e} relative_error={error:.12e}");
+        xx.push(x * x);
+        yy.push(error / (x * x));
+        errors.push(error);
+    }
+    // Extrapolate error/x² to x=0, removing the leading x⁴ period correction.
+    // Residual O(x⁴) in this fit and crossing interpolation permit 1%, far
+    // smaller than the difference to 1/24 or either negative coefficient.
+    let (_, coefficient) = line_fit(&xx, &yy);
+    let want = 1.0 / 12.0;
+    assert!((coefficient / want - 1.0).abs() <= 0.01, "coefficient {coefficient} vs {want}");
+    println!("F5a extrapolated coefficient={coefficient:.12}, theory={want:.12}");
+    for i in 0..2 {
+        let rate = libm::log(errors[i] / errors[i + 1]) / libm::log(libm::sqrt(xx[i] / xx[i + 1]));
+        assert!((1.9..2.1).contains(&rate), "second-order period error: rate={rate}");
+        println!("F5a refinement rate={rate:.12}");
+    }
+}
+
 /// Benchmark F3, energy: `½vᵀMv + ½uᵀKu` is conserved by average acceleration to round-off,
 /// `E − fᵀu` under a step load likewise, and HHT at α = −0.05 dissipates it. The velocity at
 /// each retained frame is the one Newmark's own relations imply for the retained displacements.

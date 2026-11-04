@@ -1098,6 +1098,7 @@ hydration replies cannot overwrite a newer selection; modal phase controls remai
 | F4k | Hertz: sphere on a rigid flat, axisymmetric — a half-space ten radii square with a spherical cap of radius R at its pole, pressed by a prescribed approach δ, graded quad8 with the first element at a/20 and a/10 | `a = √(Rδ)`, `P = (4/3) E* √R δ^{3/2}`, `p₀ = 3P/(2πa²)`, `E* = E/(1 − ν²)` | 2 % on δ (from the measured P), 5 % on `p₀` and `a`; every error smaller on the finer mesh | measured: P −0.12 %, p₀ +0.16 %, a +2.7 % (coarse: −0.46 %, +1.6 %, +10 %) — the set settles in 3–4 passes | engine test |
 | F4l | The same half-space as a cylinder in plane strain, approach 4e-7 R (strains of 3e-4), through `static` and `static-nonlinear` | equivalence: the two procedures agree on the displacement field, the load, the pole pressure and the held set | 1e-3 | the active set moves inside the Newton loop and settles in a bounded number of changes (one here) | engine test |
 | F5 | The integrator's own period error, predicted exactly: SDOF free vibration over 100 cycles at ωΔt = 0.25, 0.5, 1 | period = `2π / ((2/Δt) asin(ωΔt/2))` at each step; the coefficient of `(ωΔt)²` in ΔT/T fitted from the three is **−1/24** (central differences *shorten* the period; the trapezoidal rule lengthens it by 1/12) | 1e-4 on each period, 1 % on the coefficient | a start-up kick of the wrong half-step, a lagging velocity update or a wrongly scaled mass all keep a clean sinusoid and fail this | engine test |
+| F5a | Average-acceleration Newmark free vibration (#823), F3 axial hex8 with analytical consistent mass, 100 cycles at nominal ωΔt = 0.5, 0.25, 0.125 | T̃ = πΔt/atan(ωΔt/2); extrapolated leading relative period-error coefficient +1/12 | 3e-5 relative period; 1 % coefficient; refinement rate 1.9–2.1; assembled k*, m* within 1e-12 relative | independent Newmark dispersion and second-order period elongation | engine test |
 | F6 | Discrete energy `½ v_{n+½}ᵀ M v_{n+½} + ½ u_nᵀ K u_{n+1}`, SDOF at ωΔt = 1 for 100 cycles and the F2 cantilever with a random initial velocity for 500 steps | exactly constant: `½ m v₀²` for the SDOF, its own initial value for the beam | 1e-12 (SDOF), 1e-10 (beam) relative wander | central differences conserve a modified energy exactly for linear systems; the `½vᵀMv + ½uᵀKu` monitor only bounds it | engine test |
 | F7 | The stability boundary is sharp: SDOF at ωΔt = 1.96 and 2.04 for 1000 steps | below: bounded, sampled amplitude = `v₀ / (ω √(1 − (ωΔt/2)²))`; above: `explicit.unstable` | 1 % on the amplitude, the error code above | the boundary is at 2, not merely somewhere near it | engine test |
 | F8 | Second-order convergence in Δt: SDOF against `(v₀/ω) sin ωt` at t = 5⅛ T for ωΔt = 0.2, 0.1, 0.05 | observed rate 2 | rate ≥ 1.9 | a first-order start-up shows as a rate near one | engine test |
@@ -1325,7 +1326,7 @@ Gauss, and its HRZ mass is `ρa³/8`; the test asserts both against the assembly
 them. Central differences on `ü = −ω²u` have the exact discrete frequency
 `sin(ω̃Δt/2) = ωΔt/2`, so the period is *shorter* than `2π/ω` by `(ωΔt)²/24 + 0.00295 (ωΔt)⁴`
 — the issue's magnitude 1/24 with the sign the dispersion relation gives (the trapezoidal rule
-*lengthens* it by `(ωΔt)²/12`, which is the gate #72 adds). F5 measures the period by linear
+*lengthens* it by `(ωΔt)²/12`, gated separately by F5a). F5 measures the period by linear
 interpolation of the upward zero crossings over 100 cycles, which is third-order accurate
 because a sinusoid has no curvature at its zeros, checks each against the dispersion relation
 and fits `ΔT/T ÷ (ωΔt)² = c + d(ωΔt)²` through three steps for the coefficient. F6's invariant
@@ -1342,12 +1343,31 @@ and the explicit Step (lumped mass, then the F5 shortening) therefore disagree b
 the test derives, and F11 gates their difference against that number rather than against a
 tolerance loose enough to hide a bug.
 
-**Waiting on #72 (implicit dynamics):** the Newmark period elongation against 1/12, HHT
-amplitude decay against its spectral radius, harmonic forcing against the closed-form
-magnification, explicit-versus-implicit agreement at small Δt, a damped implicit run converging
-to the static solution, free fall with initial velocity through both procedures, and the
-direct/iterative/GPU linear solvers agreeing under the implicit integrator. Explicit dynamics
-has no linear solve, so the last row has nothing to compare today.
+**F5a (#823, bounded child of #396)** uses F3's axial hex8: a unit common tip
+displacement has strain 1/L, so `k* = MA/L`, with constrained axial modulus
+`M = E(1−ν)/((1+ν)(1−2ν))`; its linear velocity shape x/L gives
+`m* = ∫ρ(x/L)² dV = ρAL/3`. Both quadratic forms are checked against the assembled
+stiffness and consistent (not lumped) mass within 1e-12 relative. Initial axial tip velocity,
+zero displacement, zero damping and zero traction produce free vibration at `ω = √(k*/m*)`.
+Average acceleration gives `tan(ω̃Δt/2) = ωΔt/2`, hence
+`T̃/T = x/(2 atan(x/2)) = 1 + x²/12 − x⁴/180 + O(x⁶)`, with `x = ωΔt`.
+Every retained free-face component must remain uniform within 1e-11 of the analytical
+displacement amplitude `1/ω`, before averaging. Retained-displacement upward crossings over
+100 cycles use F5's interpolation helper. Three halved nominal increments (x = 0.5, 0.25, 0.125) use the actual endpoint-adjusted
+increment from the result. Each period agrees with the exact dispersion within 3e-5
+relative: the two crossing errors bounded by x²Δt/16, amortised over about 100 cycles,
+are below 2.6e-5 at the coarsest step. A line fit of relative period error/x² against x²
+extrapolates +1/12 within 1 %, allowing higher-order and interpolation errors while rejecting
+a wrong sign or the 1/24 coefficient. Successive error rates must lie between 1.9 and 2.1;
+the finest error is still about 1.3e-3, well above roundoff.
+
+**Remaining #396 scope after #72:** HHT amplitude decay against its spectral radius,
+harmonic forcing against the closed-form magnification, explicit-versus-implicit agreement
+at small Δt, a damped implicit run converging to the static solution, and the
+direct/iterative/GPU linear solvers agreeing under the implicit integrator. Free fall with
+initial velocity through both procedures already shipped in #348 (F2c); Newmark period
+elongation is now F5a. Explicit dynamics has no linear solve, so the last comparison applies
+only to implicit dynamics.
 
 F2b's endpoint regression adds `u(t) = v₀t + gt²/2` on two mesh sizes at end times of 0.25,
 1.6 and 2.25 nominal stable steps. The final history time is exactly the requested endpoint,
