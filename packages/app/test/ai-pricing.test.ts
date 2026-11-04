@@ -7,6 +7,8 @@ describe('OpenAI Standard request pricing', () => {
     ['gpt-6.1-sol', 0.3],
     ['gpt-6-astra', 1.5],
     ['gpt-5.6-sol', 0.6],
+    ['gpt-5.6-terra', 0.32],
+    ['gpt-5.6-luna', 0.032],
     ['gpt-5.5', 0.8],
     ['gpt-5.4-mini', 0.12],
   ])('prices uncached input and all output tokens for %s', (model, expected) => {
@@ -21,6 +23,8 @@ describe('OpenAI Standard request pricing', () => {
     expect(costOf('gpt-6-astra', { input: 100_000, cacheWrite: 30_000, cacheRead: 20_000, output: 10_000 })).toBeCloseTo(1.595, 12);
     expect(costOf('gpt-6.1-sol', { input: 100_000, cacheWrite: 30_000, cacheRead: 20_000, output: 10_000 })).toBeCloseTo(0.317, 12);
     expect(costOf('gpt-5.6-sol', { input: 100_000, cacheWrite: 30_000, cacheRead: 20_000, output: 10_000 })).toBeCloseTo(0.638, 12);
+    expect(costOf('gpt-5.6-terra', { input: 100_000, cacheWrite: 30_000, cacheRead: 20_000, output: 10_000 })).toBeCloseTo(0.339, 12);
+    expect(costOf('gpt-5.6-luna', { input: 100_000, cacheWrite: 30_000, cacheRead: 20_000, output: 10_000 })).toBeCloseTo(0.0339, 12);
     expect(costOf('gpt-5.5', { input: 1, cacheWrite: 1, cacheRead: 0, output: 0 })).toBeNull();
   });
   it('applies long-context rates to the entire request only above 272k including cached input', () => {
@@ -28,6 +32,12 @@ describe('OpenAI Standard request pricing', () => {
     expect(costOf('gpt-6.1-sol', { input: 72_001, cacheRead: 200_000, output: 10_000 })).toBeCloseTo(0.478004, 12);
     expect(costOf('gpt-6-astra', { input: 72_000, cacheRead: 200_000, output: 10_000 })).toBeCloseTo(1.42, 12);
     expect(costOf('gpt-6-astra', { input: 72_001, cacheRead: 200_000, output: 10_000 })).toBeCloseTo(2.59002, 12);
+    expect(costOf('gpt-5.6-terra', { input: 72_000, cacheRead: 200_000, output: 10_000 })).toBeCloseTo(0.304, 12);
+    expect(costOf('gpt-5.6-terra', { input: 72_001, cacheRead: 200_000, output: 10_000 })).toBeCloseTo(0.548004, 12);
+    expect(costOf('gpt-5.6-terra', { input: 72_001, cacheWrite: 30_000, cacheRead: 200_000, output: 10_000 })).toBeCloseTo(0.578004, 12);
+    expect(costOf('gpt-5.6-luna', { input: 72_000, cacheRead: 200_000, output: 10_000 })).toBeCloseTo(0.0304, 12);
+    expect(costOf('gpt-5.6-luna', { input: 72_001, cacheRead: 200_000, output: 10_000 })).toBeCloseTo(0.0548004, 12);
+    expect(costOf('gpt-5.6-luna', { input: 72_001, cacheWrite: 30_000, cacheRead: 200_000, output: 10_000 })).toBeCloseTo(0.0578004, 12);
     expect(costOf('gpt-5.4-mini', { input: 300_000, cacheRead: 0, output: 10_000 })).toBeCloseTo(0.27, 12);
   });
 });

@@ -1,6 +1,6 @@
 import type OpenAI from 'openai';
 import { describe, expect, it } from 'vitest';
-import { responsesProvider, toResponseInput, type ChatEvent, type ChatRequest, type Message, type OpenAILike } from '../src/index';
+import { OPENAI_DEFAULT, OPENAI_MODELS, responsesProvider, toResponseInput, type ChatEvent, type ChatRequest, type Message, type OpenAILike } from '../src/index';
 
 const request: ChatRequest = { model: 'gpt-5.4-mini', maxTokens: 4000, system: 'rules', tools: [
   { name: 'query_model', description: 'Read the model', input_schema: { type: 'object' } },
@@ -19,6 +19,16 @@ async function events(sdk: OpenAILike, req = request): Promise<ChatEvent[]> {
 }
 
 describe('one Responses adapter for both hosts', () => {
+  it.each(['gpt-5.6-terra', 'gpt-5.6-luna'])('offers %s in the direct catalogue and sends its exact ID', async (model) => {
+    const c = client([{ type: 'response.completed', response: { output: [] } }]);
+    expect(OPENAI_MODELS).toContain(model);
+    expect(OPENAI_DEFAULT).toBe('gpt-6-astra');
+    expect(responsesProvider(c.sdk).models).toContain(model);
+    await events(c.sdk, { ...request, model });
+    expect(c.requests[0]!.model).toBe(model);
+    // Hosts with an explicit entitlement list do not inherit the direct catalogue.
+    expect(responsesProvider(c.sdk, ['gpt-5.4-mini']).models).toEqual(['gpt-5.4-mini']);
+  });
   it('preserves neutral blocks and completed opaque state in order', () => {
     const opaque = [{ type: 'reasoning', encrypted_content: 'state' }];
     const messages: Message[] = [
