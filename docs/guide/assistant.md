@@ -34,7 +34,11 @@ Stopping a stream does not guarantee zero supplier usage. A request may already 
 
 ## Hosted versus direct/development mode
 
-The production hosted route uses account identity and service-owned providers. Direct/development hosts can expose provider-key settings and a different model catalogue. Direct keys are persisted in that browser's storage and are not production account credentials. Do not put keys into Scripts, Journals, Model names or shared links. A development-only control being present in source does not mean the public product exposes it.
+The production hosted route uses account identity and service-owned providers. Direct/development hosts can expose provider-key settings and a different model catalogue. Direct keys are persisted in that browser's storage and are not production account credentials.
+
+With your own OpenAI key in a direct/development build, the model menu includes `gpt-5.6-terra` and `gpt-5.6-luna`; select one before sending. Your provider account must have access, and a listed model does not guarantee that access. Their displayed USD estimates include cached reads/writes and the long-context uplift above 272,000 input tokens. Hosted choices still come from your account's plan and are unaffected by this direct catalogue.
+
+Do not put keys into Scripts, Journals, Model names or shared links. A development-only control being present in source does not mean the public product exposes it.
 
 Use [verification](./results-verification.md), mesh/time studies and independent references for numerical decisions. The Assistant does not replace those checks.
 
