@@ -817,19 +817,36 @@ open. Sanitized operator proofs are `789-final-ci-audit-a1999990.json`,
 `774-runtime/frontend-a1999990/published.json` and
 `789-deployed-browser-a1999990/proof.json`.
 
-## Remaining release gates
+## Release-gate reconciliation, 4 November 2026
 
-- Complete #775's production fresh-storage owned-account artifact recovery;
-  sign-out return in existing browser storage does not substitute for that check.
-- Complete required exact-head CI and review for the final three-file verification
-  source. Recorded deployed acceptance is separate from that source gate.
+The historical pending-gate notes above describe their dated checkpoints. Client
+sync #789 and launch verification #599 merged on 1 November as `95c50ce2` and
+`e6d82a53`. The owner [explicitly waived the real-owner fresh-storage restore
+comparison on 31 October](https://github.com/andeplane/fem-lab/pull/789#issuecomment-6549919390).
+That comparison remains unperformed; the waiver is not new complete-artifact proof.
+Cloud-storage #774 was closed with that boundary recorded. The source/CI gates for
+the former final verification PR are no longer an open draft-PR prerequisite.
+
+Custom-sender delivery was completed under #710/#719 as recorded above. Managed
+Payments owner classification/terms and activation completed under #661; the old
+locked-passkey notes are not current blockers. The authorized live Checkout expired
+unpaid and did not establish a live paid lifecycle.
+
+The deployment/operations umbrella #556 remains open for actual real-proxy load,
+operational alert delivery and financial-recovery/drain acceptance. Its
+[criterion-to-receipt map](824-operational-readiness.md#parent-acceptance-map-4-november-2026)
+distinguishes those gaps from the existing transport, auth, sender and billing-test
+receipts. The internal one-shot operational check in #824 supplies aggregate JSON
+and exit status; it does not establish notification delivery or a deployed drill.
 
 Staging AI stays disabled. Any future real supplier QA needs the explicit isolated,
 bounded procedure in #669; this smoke cannot open that window. Final-domain TLS, the
 227-second stream, cancellation, SQL restore and traffic rollback have dated evidence.
 The separate engineering-answer evaluation in #297 is now merged. Its frozen
 Sol 6.1 run completed twenty cases on both real hosts with 18/20 passing per host;
-the four catalogue-completeness failures remain scored and tracked in #793. See the
+the four catalogue-completeness failures remain scored in the frozen report.
+#793's material fix subsequently merged in #812; the paid real-provider N1/N2 checks
+were not rerun and are not inferred from that merge. See the
 [dated evaluation report](../evaluations/assistant-20-problems-results-2026-10-16.md).
 These account-flow checks do not extend that CPU/direct-provider result to every
 model or engineering task, and they do not establish a new physics Benchmark.
