@@ -8,7 +8,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { HOST_COMMANDS } from '@femlab/registry';
 import { TUTORIALS } from '../src/tutorial/tutorials';
 import type { Tutorial } from '../src/tutorial/types';
@@ -44,10 +44,22 @@ function engineCommands(tutorial: Tutorial) {
 async function replay(commands: ({ cmd: string } & Record<string, unknown>)[]): Promise<void> {
   const entries = commands.map((cmd, seq) => ({ seq, cmd, hashAfter: '' }));
   const engine = new wasm.Engine(1);
-  // verify=false: these are freshly-typed Commands, not a committed Journal to check hashes
-  // against — the CLI's own test (`every_bundled_journal_replays_green...`) owns that job.
-  await engine.replay_hashes(JSON.stringify(entries), false, false);
+  try {
+    // verify=false: these are freshly-typed Commands, not a committed Journal to check hashes
+    // against — the CLI's own test (`every_bundled_journal_replays_green...`) owns that job.
+    await engine.replay_hashes(JSON.stringify(entries), false, false);
+  } finally { engine.free(); }
 }
+
+it('releases the replay Engine after success and after a rejected Command', async () => {
+  const free = vi.spyOn(wasm.Engine.prototype, 'free');
+  try {
+    await replay([{ cmd: 'model.new', name: 'lifetime' }]);
+    expect(free).toHaveBeenCalledTimes(1);
+    await expect(replay([{ cmd: 'not-a-command' }])).rejects.toBeDefined();
+    expect(free).toHaveBeenCalledTimes(2);
+  } finally { free.mockRestore(); }
+});
 
 describe('tutorials/*.json', () => {
   const files = readdirSync(tutorialsDir).filter((f) => f.endsWith('.json'));
@@ -85,11 +97,17 @@ describe('tutorials/*.json', () => {
     }
   });
 
-  it.each(TUTORIALS.map((t): [string, Tutorial] => [t.id, t]))('%s: its doIt Commands replay through the wasm engine', async (_id, tutorial) => {
-    const commands = engineCommands(tutorial);
-    await replay(commands); // rejects (and fails the test) if the sequence does not run
-    // mesh-convergence solves three meshes in one Command, so 5 s is not enough for this one
-  }, 30_000);
+  // #822: CI web job 124784539763 timed modal out at 30,143 ms (fixture: 41,514 ms).
+  // Same-head rerun 124792380472: 14,785 ms; PR 124732625917: 17,787 ms;
+  // previous main 124741551600: 14,981 ms. Allow 45 s only for modal: ~50% above
+  // the observed timeout boundary and >2.5x the slowest successful replay. This is
+  // contention margin, not evidence that freeing Engines fixes the timing variance.
+  for (const tutorial of TUTORIALS) {
+    it(`${tutorial.id}: its doIt Commands replay through the wasm engine`, async () => {
+      const commands = engineCommands(tutorial);
+      await replay(commands); // rejects (and fails the test) if the sequence does not run
+    }, tutorial.id === 'modal-analysis' ? 45_000 : 30_000);
+  }
 });
 
 describe('thermal design tutorial: independent fin reference and the stated requirement', () => {
@@ -153,10 +171,12 @@ describe('benches/journals/*.json (the Examples gallery)', () => {
     const raw = readFileSync(path.join(journalsDir, file), 'utf8');
     const entries = JSON.parse(raw) as { seq: number; cmd: unknown; hashAfter: string }[];
     const engine = new wasm.Engine(1);
-    // skipSolves, like the CI hash lane: a solve entry's hash is the Model hash, so the
-    // comparison is unaffected by the Result, and the suite does not re-solve 22 models.
-    const hashes = JSON.parse(await engine.replay_hashes(raw, true, true)) as string[];
-    expect(hashes).toEqual(entries.map((e) => e.hashAfter));
+    try {
+      // skipSolves, like the CI hash lane: a solve entry's hash is the Model hash, so the
+      // comparison is unaffected by the Result, and the suite does not re-solve 22 models.
+      const hashes = JSON.parse(await engine.replay_hashes(raw, true, true)) as string[];
+      expect(hashes).toEqual(entries.map((e) => e.hashAfter));
+    } finally { engine.free(); }
   });
 
   it('every journal has a title, tag, sentence, theory, difficulty and expected value in its .meta.json sidecar', () => {
