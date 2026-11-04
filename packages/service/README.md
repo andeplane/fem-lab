@@ -13,6 +13,8 @@ the DDL. Auth uses workload credentials in deployment; no service-account key fi
 For real database tests set `TEST_DATABASE_URL` to a disposable Postgres 17 database.
 The tests create isolated schemas and remove only those schemas; CI runs them against
 its own Postgres service. Without that variable these integration tests are skipped.
+The operational CLI integration check additionally needs `CREATEROLE` to create and
+drop its generated SELECT-only `NOLOGIN` role in the disposable test cluster.
 
 Account reads report balance, plan, model allowlist, output ceiling and monthly free
 eligibility without creating grants. Verified signup starts at zero. An operator
@@ -124,7 +126,8 @@ deliberately paused pool and do not raise a ceiling alarm. Positive exposure at 
 above a cap remains visible and raises an alarm even while admissions are disabled.
 
 Fixed alarm codes identify `metering-unknown`, `settlement-overdue`, today's
-`metering-company-loss`, and `webhook-overdue` after twenty minutes (two scheduled
+`metering-company-loss` for positive confirmed overages or uncertain-usage costs,
+and `webhook-overdue` after twenty minutes (two scheduled
 recovery intervals). `ceiling-daily`, `ceiling-monthly`, `ceiling-freeDaily`,
 `ceiling-freeMonthly`, `ceiling-uncertain` and `ceiling-concurrent` identify occupied
 admission ceilings. Each alarm supplies a cause, location and operator action.

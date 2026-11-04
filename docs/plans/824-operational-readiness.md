@@ -53,7 +53,7 @@ bounded procedure and must preserve the existing staging supplier-spend pause.
 ## Verification
 
 On 4 November 2026, the isolated external-drive home-mini checkout passed service
-and test typechecking, all eleven real-Postgres operational tests, the production
+and test typechecking, all twelve real-Postgres operational tests, the production
 service build, and documentation checks for both `/` and `/fem-lab/` (23 pages,
 194 authoritative API definitions and 21 typed examples per route). The test host
 used a separately owned Postgres 17 cluster on loopback port 55824, disposable
@@ -63,5 +63,5 @@ provider account, payment, email, grant, deployment or notification was touched.
 The first fixture run exposed a UUID/text bind mismatch in test setup. A subsequent
 slow query outlived Vitest's deadline and conflicted with the next fixture reset;
 fixture SQL now has a two-second statement deadline before the unchanged test
-deadline. The final run passed all eleven cases, with no retries or
+deadline. The final run passed all twelve cases, with no retries or
 timeout-threshold increase.

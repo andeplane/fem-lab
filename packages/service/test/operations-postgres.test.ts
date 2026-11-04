@@ -6,6 +6,9 @@ import pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { migrate } from '../src/migrations';
 import { operationalSnapshot } from '../src/operations';
+import { creditLedger } from '../src/ledger';
+import { reservations } from '../src/reservations';
+import { grantFreeFixture } from './free-fixture';
 
 describe.skipIf(!process.env.TEST_DATABASE_URL)('operator alarms on real Postgres', () => {
   const suffix = randomUUID().replaceAll('-', '');
@@ -99,6 +102,20 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('operator alarms on real Postgre
     const snapshot = await operationalSnapshot(reader,now);
     expect(snapshot.exposure).toMatchObject({daily:{value:'26'},monthly:{value:'66'},freeDaily:{value:'10'},freeMonthly:{value:'27'},uncertain:{value:'8'},concurrent:{value:'2'}});
     expect(snapshot.alarms).toEqual([]);
+  });
+  it('counts a positive confirmed overage as one company loss and does not invent a loss for zero-cost unknown usage',async () => {
+    await grantFreeFixture(creditLedger(db,now,randomUUID),account,clock);
+    const usage = reservations(db,now,randomUUID);
+    const prepared = await usage.prepare({accountId:account,key:'confirmed-overage',digest:'a'.repeat(64),turnId:'private-turn-needle',round:0,model:'gpt-5.4-mini',maxOutput:1});
+    await usage.reserve(account,prepared.id,0);await usage.dispatch(account,prepared.id);
+    await usage.settle(account,prepared.id,{input:0,cacheRead:0,output:10});
+    expect((await db.query('SELECT outcome,supplier_micros,company_loss_micros FROM usage_receipts WHERE request_id=$1',[prepared.id])).rows[0]).toEqual({outcome:'confirmed',supplier_micros:'45',company_loss_micros:'41'});
+    await receipt('0',clock,true,'unknown');
+    const snapshot = await operationalSnapshot(reader,now);
+    expect(snapshot.requests.companyLossesToday).toBe('1');
+    // supplier_micros already includes the loss: do not add company_loss_micros again.
+    expect(snapshot.exposure).toMatchObject({daily:{value:'45'},monthly:{value:'45'},freeDaily:{value:'45'},freeMonthly:{value:'45'}});
+    expect(snapshot.alarms.map(alarm=>alarm.code)).toEqual(['metering-company-loss']);
   });
   it.each([
     ['daily_micros','daily'],['monthly_micros','monthly'],['free_daily_micros','freeDaily'],['free_monthly_micros','freeMonthly'],['uncertain_micros','uncertain'],

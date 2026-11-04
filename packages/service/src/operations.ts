@@ -30,7 +30,7 @@ export async function operationalSnapshot(sql: Sql, now: () => Date): Promise<Op
       COALESCE(sum(supplier_micros) FILTER (WHERE created_at >= $3),0) AS month,
       COALESCE(sum(supplier_micros) FILTER (WHERE created_at >= $2 AND free_pool),0) AS free_day,
       COALESCE(sum(supplier_micros) FILTER (WHERE created_at >= $3 AND free_pool),0) AS free_month,
-      count(*) FILTER (WHERE created_at >= $2 AND outcome='unknown') AS losses
+      count(*) FILTER (WHERE created_at >= $2 AND company_loss_micros > 0) AS losses
     FROM usage_receipts WHERE created_at >= $3
   ), webhooks AS (
     SELECT count(*) AS queued, min(received_at) AS oldest,
@@ -60,7 +60,7 @@ export async function operationalSnapshot(sql: Sql, now: () => Date): Promise<Op
   const alarm = (code: string, cause: string, suggestion: string) => alarms.push({ code, cause, where: 'service.operations', suggestion });
   if (count('pending') > 0n) alarm('metering-unknown', 'Dispatched usage is awaiting confirmation.', 'Inspect usage recovery; never release an uncertain hold manually.');
   if (count('overdue') > 0n) alarm('settlement-overdue', 'An active request has reached its recovery deadline.', 'Inspect the scheduled recovery execution and rerun node dist/main.mjs --recover if safe.');
-  if (count('losses') > 0n) alarm('metering-company-loss', 'Unknown usage became a conservative company loss today.', 'Review usage recovery before admitting further supplier exposure.');
+  if (count('losses') > 0n) alarm('metering-company-loss', 'Confirmed overage or uncertain usage created a positive company loss today.', 'Review usage settlement and recovery before admitting further supplier exposure.');
   if (count('webhook_overdue') > 0n) alarm('webhook-overdue', 'A billing event has waited at least twenty minutes.', 'Inspect billing recovery and canonical Stripe state; a browser return grants nothing.');
   for (const [name, boundary] of Object.entries(exposure)) {
     // Zero caps deliberately pause staging/free admissions. No exposure means no incident;
