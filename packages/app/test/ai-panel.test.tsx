@@ -5,6 +5,8 @@ import { HOST_COMMANDS, Registry, type EngineSchema } from '@femlab/registry';
 import { render } from 'preact';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as anthropic from '../src/ai/anthropic';
+import * as openai from '../src/ai/openai';
+import { KEY_SLOT } from '../src/ai/keys';
 import * as context from '../src/ai/context';
 import schema from '../../registry/src/generated/engine.schema.json';
 import { fakeTransport } from '../../registry/test/fakes';
@@ -915,6 +917,26 @@ describe('Assistant queue and model controls', () => {
       expect(seen[2]).toContain('third');
       expect(root.querySelector<HTMLTextAreaElement>('textarea')!.value).toBe('unsent draft');
     } finally { release(); provider.mockRestore(); }
+  });
+
+  it.each(['gpt-5.6-terra', 'gpt-5.6-luna'])('selects %s from the model menu for the next direct request', async (model) => {
+    localStorage.setItem(KEY_SLOT.openai, 'fixture-key');
+    const seen: string[] = [];
+    const provider = vi.spyOn(openai, 'openaiProvider').mockReturnValue({
+      id: 'openai', models: openai.OPENAI_MODELS,
+      async *chat(req) { seen.push(req.model); yield { type: 'done', stopReason: 'end_turn' }; },
+    });
+    try {
+      const { root } = await mount();
+      const select = root.querySelector<HTMLSelectElement>('[data-cmd="ai.setModel"]')!;
+      expect([...select.options].map(option => option.value)).toContain(model);
+      select.value = model;
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+      await paint(); await tick();
+      expect(localStorage.getItem('femlab.ai.model')).toBe(model);
+      press(await type(root, 'Inspect this model'), 'Enter');
+      await vi.waitFor(() => expect(seen).toEqual([model]));
+    } finally { provider.mockRestore(); }
   });
 
   it('shows the model selector without Settings and routes UI and registry changes to the next request', async () => {

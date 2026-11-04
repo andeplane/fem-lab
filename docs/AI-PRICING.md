@@ -1,6 +1,8 @@
 # Assistant model pricing
 
-Issue: #25; evaluation target #297. GPT-6.1 Sol checked on 2026-10-15; other rates checked on 2026-09-06. The OpenAI Responses adapter is introduced
+Issue: #25; evaluation target #297; Terra/Luna picker #486. GPT-5.6 Terra/Luna checked
+on 2026-11-04; GPT-6.1 Sol checked on 2026-10-15; other rates checked on 2026-09-06.
+The OpenAI Responses adapter is introduced
 by #156 / PR #160; this change uses that adapter and its opaque reasoning continuation.
 
 The displayed cost is an estimate in USD for Standard text/image-token requests,
@@ -14,12 +16,14 @@ closed `ChatModel` union; that checks spelling, not account access.
 | [gpt-6.1-sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol) | $2 | $0.10 | $2.50 | $10 |
 | [gpt-6-astra](https://developers.openai.com/api/docs/models/gpt-6-astra) | $10 | $1 | $12.50 | $50 |
 | [gpt-5.6-sol](https://developers.openai.com/api/docs/models/gpt-5.6-sol) | $4 | $0.40 | $5 | $20 |
+| [gpt-5.6-terra](https://developers.openai.com/api/docs/models/gpt-5.6-terra) | $2 | $0.20 | $2.50 | $12 |
+| [gpt-5.6-luna](https://developers.openai.com/api/docs/models/gpt-5.6-luna) | $0.20 | $0.02 | $0.25 | $1.20 |
 | [gpt-5.5](https://developers.openai.com/api/docs/models/gpt-5.5) | $5 | $0.50 | unknown | $30 |
 | [gpt-5.4-mini](https://developers.openai.com/api/docs/models/gpt-5.4-mini) | $0.75 | $0.075 | unknown | $4.50 |
 
 GPT-6.1 Sol is the requested #297 evaluation target; this tariff addition does not alter the model picker.
 
-For Astra, Sol and 5.5, requests with more than 272,000 input tokens, including
+For Astra, Sol, GPT-5.6 Terra/Luna and 5.5, requests with more than 272,000 input tokens, including
 cache reads, charge twice the input/cache rates and 1.5 times the output rate
 for the whole request. The published mini rates have no corresponding uplift.
 The agent prices each request separately before adding costs across tool rounds;
@@ -37,4 +41,7 @@ When updating the SDK or model list, check the official model pages and
 `PRICES` and this date/table together, and run the pricing, provider and agent
 regressions. Include threshold, cached-token and multiple-tool-round cases.
 The adapter's mocked Responses tests validate request shapes and usage mapping;
-they do not establish live account availability.
+they do not establish live account availability. GPT-5.6 Terra and Luna are offered in
+the direct/development picker with these estimates; the provider can still reject a
+request if that API account lacks access. Hosted plan entitlements and their versioned
+credit tariff are separate and are not expanded by adding a direct model.
