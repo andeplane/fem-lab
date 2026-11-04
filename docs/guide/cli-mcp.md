@@ -48,3 +48,34 @@ The MCP sandbox has no ambient network/filesystem or Node globals. Timeouts stop
 The hosted AI service exposes `POST /v1/ai/completions`, with `/chat/completions` as an alias. It accepts FEM Lab's strict normalized completion protocol, a Firebase bearer ID token and an `Idempotency-Key`; it is not a drop-in OpenAI Chat Completions payload. Streaming uses request, receipt and chat SSE envelopes. The request-status endpoint reconciles authoritative usage rather than replaying generated text. `/v1/ai/models` reports the authenticated account's available models.
 
 Public credit quantities are negotiated using `X-Femlab-Credit-Unit: usd-milli-v1`; omitting it retains the legacy numeric contract. Do not infer an account balance from token counts or treat a disconnected stream as a canceled debit. Start with the browser/MCP registry for Model operations and read the [service protocol documentation](https://github.com/andeplane/fem-lab/blob/main/packages/service/README.md) before building an HTTP client. Provider secrets belong on the service, not in a browser integration. See [credits and billing](./accounts-billing.md).
+
+## Hosted-service operational check
+
+Operators with read-only access to an installed service database can inspect recovery
+and spending exposure without contacting the AI or payment provider:
+
+```sh
+npm run build -w packages/service
+# Use the operator's configured standard Postgres connection environment.
+node packages/service/dist/main.mjs --operations
+```
+
+The database needs migrations through `010-free-monthly-allowance.sql`, schema usage
+and SELECT access to `ai_limits`, `ai_requests`, `usage_receipts` and `billing_inbox`.
+Provider credentials and a Firebase project are unnecessary. This is an internal
+service operation, separate from engineering Commands and browser account tools.
+
+One JSON record reports aggregate pending/overdue usage, billing-webhook lag and
+supplier exposure against the shared admission ceilings. It contains no account,
+request or vendor identifiers. Exact counts and USD microdollars are decimal strings;
+webhook age is seconds. Exit 0 means ready or deliberately paused, exit 1 means an
+actionable alarm, and exit 2 means the check itself was unavailable. A five-second
+query deadline bounds the read. Empty intentionally zero-capped pools do not alarm;
+existing positive exposure remains visible when new admissions are disabled.
+
+Inspect the fixed alarm cause and suggested action before changing anything. The
+check performs no recovery, mutation, notification or inference, and must not be
+combined with `--recover` or `--migrate`. It does not prove deployed alert delivery,
+production load capacity or paid disaster recovery. Detailed thresholds and those
+operational acceptance boundaries are in the
+[service operator documentation](https://github.com/andeplane/fem-lab/blob/main/packages/service/README.md#read-only-operational-check).

@@ -13,6 +13,8 @@ the DDL. Auth uses workload credentials in deployment; no service-account key fi
 For real database tests set `TEST_DATABASE_URL` to a disposable Postgres 17 database.
 The tests create isolated schemas and remove only those schemas; CI runs them against
 its own Postgres service. Without that variable these integration tests are skipped.
+The operational CLI integration check additionally needs `CREATEROLE` to create and
+drop its generated SELECT-only `NOLOGIN` role in the disposable test cluster.
 
 Account reads report balance, plan, model allowlist, output ceiling and monthly free
 eligibility without creating grants. Verified signup starts at zero. An operator
@@ -97,6 +99,47 @@ bounded at 16 MiB. At most two PNG/JPEG/WebP images are accepted, each at most
 Deploy long SSE directly to Cloud Run/the API load balancer. Firebase Hosting
 rewrites time out at 60 seconds. Run `node dist/main.mjs --recover` as a scheduled,
 authenticated Cloud Run Job, not as post-response work in the HTTP process.
+
+### Read-only operational check
+
+After building, run `node dist/main.mjs --operations` from this package with standard
+Postgres connection settings. A SELECT-only role on `ai_limits`, `ai_requests`,
+`usage_receipts` and `billing_inbox`, schema usage and migrations through
+`010-free-monthly-allowance.sql` are sufficient. No Firebase project, provider key,
+payment key or HTTP port is required. Do not combine it with `--recover` or `--migrate`.
+
+The one-shot command emits one structured `service-operations` JSON record, suitable
+for Cloud Logging. Exit 0 means `ready` or intentionally `paused`; exit 1 means
+`action-required`; exit 2 is a fixed, redacted configuration/read failure. `severity`
+is `INFO` or `ERROR`. It never modifies an account, hold, receipt or billing event,
+starts a listener, contacts a provider, sends a notification, or changes admission.
+The SQL statement has a five-second deadline and observes one database snapshot.
+
+The report exposes aggregate counts, oldest queued-webhook age in seconds, and
+current/limit exposure pairs. Counts and supplier USD microdollars are exact decimal
+strings, including values above JavaScript's safe integer range. `admissionEnabled`
+is the stored global switch; `paused` also accounts for a zero global supplier
+ceiling. This is not an account-specific entitlement check. All pending holds
+are included across processes and date boundaries; UTC day/month receipt costs
+include conservative company losses once. Zero caps with zero exposure describe a
+deliberately paused pool and do not raise a ceiling alarm. Positive exposure at or
+above a cap remains visible and raises an alarm even while admissions are disabled.
+
+Fixed alarm codes identify `metering-unknown`, `settlement-overdue`, today's
+`metering-company-loss` for positive confirmed overages or uncertain-usage costs,
+and `webhook-overdue` after twenty minutes (two scheduled
+recovery intervals). `ceiling-daily`, `ceiling-monthly`, `ceiling-freeDaily`,
+`ceiling-freeMonthly`, `ceiling-uncertain` and `ceiling-concurrent` identify occupied
+admission ceilings. Each alarm supplies a cause, location and operator action.
+Inspect scheduled recovery and canonical billing state; never silently release an
+uncertain hold, issue a grant, or raise a limit because this check alarms.
+
+This command supplies a signal, not a deployed notification policy or proof of
+alert delivery. Scheduling, notification delivery, real-proxy load acceptance and
+paid disaster-recovery reconciliation remain separate criteria under
+[#556](https://github.com/andeplane/fem-lab/issues/556). Running recovery against a
+restored paid database still requires canonical Stripe-state reconciliation before
+reopening admissions. See the [operator workflow](../../docs/guide/cli-mcp.md#hosted-service-operational-check).
 
 The optional browser account build accepts public configuration through
 `FEMLAB_FIREBASE_CONFIG` (Firebase web app JSON), `FEMLAB_AI_API_ORIGIN` (HTTPS API origin)
