@@ -53,6 +53,10 @@ No threshold moved; only where and how often checks run.
   (or in release validation) as an issue. As before, whoever merged fixes forward before anything else lands.
 - A PR that changes Rust takes longer than two minutes: it compiles and tests the workspace and,
   on its first push, builds the wasm bundle it then caches for its later pushes.
+  The cache key also includes the generated registry schema embedded by `engine-wasm/build.rs`;
+  schema-only changes must rebuild that metadata. Each restored or built Node WASM schema and
+  native schema document is checked against this committed input before the bundle is cached
+  or used ([#844](https://github.com/andeplane/fem-lab/issues/844)).
 - The site deploys only from a green main run, so a red main also holds the deployment until it
   is fixed. `deploy.yml`'s dispatch republishes the newest green main build.
   Pages uploads use an attempt-specific name, also passed to the deploy action, so retrying a

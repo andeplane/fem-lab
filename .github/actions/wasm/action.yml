@@ -1,7 +1,7 @@
 name: wasm build
 description: >-
   Restore the wasm modules, the Node wasm build, the project-I/O helper, the schema document and
-  the release CLI for exactly these Rust sources from the Actions cache, or build and cache them.
+  the release CLI for exactly these engine build inputs from the Actions cache, or build and cache them.
   Most pull requests and merges do not touch Rust, so they reuse the bundle main last built
   instead of spending ten minutes rebuilding identical bytes (issue #820).
 
@@ -12,7 +12,7 @@ runs:
     # every pull request; a pull request's own cache is visible only to that pull request.
     - id: key
       shell: bash
-      run: echo "key=wasm-v1-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml', 'crates/**', 'vendor/**', 'package-lock.json', 'tools/build-wasm.mjs', 'tools/build-wasm-threads.mjs', 'tools/build-project-io.mjs', 'tools/wasm-wait-smoke.rs', 'tools/test-wasm-wait.mjs', 'tools/test-stl-wasm.mjs', 'packages/app/public/third-party/browser-threads/**') }}" >> "$GITHUB_OUTPUT"
+      run: echo "key=wasm-v1-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml', 'crates/**', 'vendor/**', 'packages/registry/src/generated/engine.schema.json', 'package-lock.json', 'tools/build-wasm.mjs', 'tools/build-wasm-threads.mjs', 'tools/build-project-io.mjs', 'tools/wasm-wait-smoke.rs', 'tools/test-wasm-wait.mjs', 'tools/test-stl-wasm.mjs', 'packages/app/public/third-party/browser-threads/**') }}" >> "$GITHUB_OUTPUT"
     - id: cache
       uses: actions/cache/restore@v4
       with:
@@ -75,6 +75,9 @@ runs:
     - if: steps.cache.outputs.cache-hit != 'true'
       shell: bash
       run: ./target/release/femlab schema --out engine.schema.json
+    - name: verify the restored or built schema matches the checkout
+      shell: bash
+      run: node tools/test-wasm-schema.mjs
     - if: steps.cache.outputs.cache-hit != 'true'
       uses: actions/cache/save@v4
       with:
