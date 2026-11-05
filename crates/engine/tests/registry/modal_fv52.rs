@@ -144,6 +144,7 @@ fn quarter_turn_closes_modal_subspaces(raw: &[Value], frequencies: &[f64]) -> f6
                 }
             }
             let error = (dot(&residual, &residual) / dot(&rotated, &rotated)).sqrt();
+            largest_error = largest_error.max(error);
             assert!(error < 1e-6, "quarter turn must stay in cluster {cluster:?}, mode {}, error={error:e}", i + 1);
         }
     }
