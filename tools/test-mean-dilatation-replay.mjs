@@ -46,6 +46,7 @@ try {
           assert.deepEqual(execFileSync(native, [...args, '--hashes'], { encoding: 'utf8' }).trim().split(/\r?\n/), hashes);
           const queries = input.checks.flatMap(check => ['--query', JSON.stringify(check.query)]);
           const actual = JSON.parse(execFileSync(native, [...args, ...queries], { encoding: 'utf8' }));
+          assert.equal(actual.length, input.checks.length, 'every requested native probe must be returned');
           actual.forEach((answer, index) => {
             const value = picked(answer, input.checks[index].path);
             assert.equal(passes(value, input.checks[index]), checks[index], `${name}/${mode}: same independent native acceptance`);
