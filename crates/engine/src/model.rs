@@ -526,8 +526,6 @@ pub struct InitialVelocity {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Step {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub formulation: Option<Formulation>,
     pub name: String,
     pub procedure: Procedure,
     pub constraints: Vec<String>,
@@ -535,6 +533,8 @@ pub struct Step {
     pub output: Vec<Field>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub formulation: Option<Formulation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub n_modes: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -14899,11 +14899,8 @@ fn structural_step_formulation_overrides_mesh_and_survives_definition_open_and_r
         assert_eq!(replayed.field(Some("explicit-full"), Field::Displacement).unwrap(), &full);
     }
     for procedure in ["heat-steady", "heat-transient"] {
-        let before = e.export_file();
-        let command = serde_json::json!({"cmd":"step.add","name":"bad-heat","procedure":procedure,"constraints":[],"loads":[],"formulation":"mean-dilatation"});
-        let error = err(&mut e, &command.to_string());
-        assert_eq!(error.code, ErrorCode::Schema);
-        assert_eq!(error.where_.as_deref(), Some("formulation"));
-        assert_eq!(e.export_file(), before);
+        let command = serde_json::json!({"cmd":"step.add","name":"heat-choice","procedure":procedure,"constraints":[],"loads":[],"formulation":"mean-dilatation"});
+        ok(&mut e, &command.to_string());
+        assert_eq!(e.model().step("heat-choice").unwrap().formulation, Some(Formulation::MeanDilatation));
     }
 }

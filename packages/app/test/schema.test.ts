@@ -16,16 +16,16 @@ const flat = (fields: Field[]): Field[] => fields.flatMap((f) => (f.kind === 'ob
 describe('procedure contracts', () => {
   const common = ['name', 'procedure', 'constraints', 'loads', 'output', 'after'];
   const owned: Record<string, string[]> = {
-    static: ['dt', 'tEnd', 'outputEvery', 'amplitude'],
-    'static-nonlinear': ['tEnd', 'amplitude', 'increments', 'maxCutbacks', 'nonlinearTolerance', 'nonlinearMaxIterations'],
-    modal: ['nModes', 'shift'],
-    buckling: ['nModes'],
+    static: ['formulation', 'dt', 'tEnd', 'outputEvery', 'amplitude'],
+    'static-nonlinear': ['formulation', 'tEnd', 'amplitude', 'increments', 'maxCutbacks', 'nonlinearTolerance', 'nonlinearMaxIterations'],
+    modal: ['formulation', 'nModes', 'shift'],
+    buckling: ['formulation', 'nModes'],
     'heat-steady': ['nonlinearTolerance', 'nonlinearMaxIterations'],
     'heat-transient': ['dt', 'tEnd', 'theta', 'outputEvery', 'amplitude', 'initial', 'nonlinearTolerance', 'nonlinearMaxIterations'],
-    explicit: ['tEnd', 'outputEvery', 'dtFactor', 'initialVelocity'],
-    implicit: ['dt', 'tEnd', 'outputEvery', 'amplitude', 'alpha', 'rayleighAlpha', 'rayleighBeta', 'initialVelocity'],
-    harmonic: ['outputEvery', 'rayleighAlpha', 'rayleighBeta', 'fStart', 'fStop', 'points', 'sweep', 'dampingRatio', 'dampingRatios'],
-    randomVibration: ['rayleighAlpha', 'rayleighBeta', 'dampingRatio', 'dampingRatios', 'psd'],
+    explicit: ['formulation', 'tEnd', 'outputEvery', 'dtFactor', 'initialVelocity'],
+    implicit: ['formulation', 'dt', 'tEnd', 'outputEvery', 'amplitude', 'alpha', 'rayleighAlpha', 'rayleighBeta', 'initialVelocity'],
+    harmonic: ['formulation', 'outputEvery', 'rayleighAlpha', 'rayleighBeta', 'fStart', 'fStop', 'points', 'sweep', 'dampingRatio', 'dampingRatios'],
+    randomVibration: ['formulation', 'rayleighAlpha', 'rayleighBeta', 'dampingRatio', 'dampingRatios', 'psd'],
   };
 
   it('tags every Step field and covers the full field union without unknown procedures', () => {

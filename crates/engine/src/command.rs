@@ -2316,12 +2316,6 @@ pub enum Command {
     #[serde(rename = "step.add", rename_all = "camelCase")]
     #[schemars(extend("x-execution" = "modelWrite"))]
     StepAdd {
-        /// Structural element formulation for this Step; omitted inherits mesh.set. Mean-dilatation
-        /// uses small-strain Hex8/Quad4 B-bar in solid3d, planeStrain and axisymmetric; plane-stress
-        /// Quad4 and other kinds retain full integration. Finite-deformation B-bar is unsupported.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[schemars(extend("x-procedures" = ["static", "static-nonlinear", "modal", "buckling", "explicit", "implicit", "harmonic", "randomVibration"]))]
-        formulation: Option<Formulation>,
         /// Analysis Step name; reusing it replaces the Step definition.
         #[schemars(extend("x-procedures" = ["*"]))]
         name: String,
@@ -2345,6 +2339,13 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[schemars(extend("x-procedures" = ["*"]))]
         after: Option<String>,
+        /// Structural element formulation for this Step; omitted inherits mesh.set. Mean-dilatation
+        /// uses small-strain Hex8/Quad4 B-bar in solid3d, planeStrain and axisymmetric; plane-stress
+        /// Quad4 and other kinds retain full integration. Finite-deformation B-bar is unsupported.
+        /// This structural setting has no effect on heat Steps.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["static", "static-nonlinear", "modal", "buckling", "explicit", "implicit", "harmonic", "randomVibration"]))]
+        formulation: Option<Formulation>,
         /// Number of requested modes or buckling factors; omitted means six for modal or one for buckling.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[schemars(extend("x-procedures" = ["modal", "buckling"]))]
