@@ -1,7 +1,7 @@
 # Original guided-workflow acceptance
 
 Issues: [#86](https://github.com/andeplane/fem-lab/issues/86) and its original-rotor
-child [#848](https://github.com/andeplane/fem-lab/issues/848).
+child [#848](https://github.com/andeplane/fem-lab/issues/848), with browser-budget fix-forward [#856](https://github.com/andeplane/fem-lab/issues/856).
 
 The useful workflows in PR #840 are shipped, but its ESRD LE10 and thermoelastic cube
 are explicitly different physical problems from original line-supported LE10 and the
@@ -52,8 +52,11 @@ freedom; upper/lower outer edges move −9.77/−8.65 μm while midline uz is ro
 The final relative force balance is 8.90e−15 and vertical reaction is 5.448646543 MN.
 Source hashes, generator, exact membership and analytical load checks are committed with
 the actual guided fixture. These discrete point-stress refinements do not claim a formal
-global asymptotic rate for the singular line support. Source-bound Linux gates and visible
-Chromium acceptance must complete before delivery is claimed.
+global asymptotic rate for the singular line support. The visible guide now uses the middle 4×4×4 mesh (425 nodes / 64 cells, 9 mid-plane nodes
+and 56 other outer-face nodes), with −5.40449 MPa / 0.4553% error against the same
+reference. #856 keeps the 216-cell case in the independent refinement study while bounding
+interactive certification under the unchanged 180-second browser budget. Source-bound
+Linux gates and visible Chromium acceptance remain separate evidence layers.
 
 ## Original rotor recipe and closure
 

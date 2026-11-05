@@ -888,6 +888,17 @@ within 1e−4 relative with the analytic quarter-annulus area times pressure,
 `1e6 π/4 (3.25×2.75−2×1) N`, and the midline vertical reaction balances it within 1e−9.
 Measured fine resultant is 5.448646543 MN; relative force balance is 8.90e−15.
 
+The visible guide uses the middle **4 × 4 × 4** mesh (425 nodes / 64 Hex20), not the
+finest refinement. It gives −5.404492888 MPa, **0.4553%** from the same −5.38 MPa
+reference and within the unchanged 2% stress gate. Its 9 mid-plane support nodes are
+among 65 outer-face nodes; the other 56 retain z freedom. Upper/lower outer displacements
+are −8.7801/−7.6541 μm, and vertical reaction is 5.448431040 MN. The actual visible
+Command payload is the middle member of the same three-mesh test; the 216-cell source
+is retained separately in `packages/app/test/fixtures/le10-original/6x6x6.mesh.json`.
+This bounds repeated interactive imported-geometry certification without changing
+supports, the independent reference, equilibrium checks or the 180-second browser deadline
+(#856). All three INP decks, hashes and refinement requirements remain unchanged.
+
 These are discrete recovered point-stress refinements against the published benchmark;
 no formal global asymptotic rate is claimed for its singular line restraint. ESRD explicitly
 notes that line support's elasticity limitation and uses D1's different whole-face support.
