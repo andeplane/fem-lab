@@ -300,3 +300,6 @@ async function heldPair(engine, magnitude) {
     console.log('WASM: finite far-end force with overflowing 100 m lever arm rejects before publishing and preserves the prior Result.');
   } finally { engine.free(); }
 }
+
+// C3 formulation and Step override contracts use the same native/WASM static replay hosts.
+await import('./test-mean-dilatation-replay.mjs');
