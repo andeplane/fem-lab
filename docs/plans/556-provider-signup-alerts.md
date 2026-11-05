@@ -46,7 +46,7 @@ Provider and signup classes have separate log-match policies and separate fiftee
 notification rate limits. They use the existing durable seven-day Pub/Sub operator
 subscription in each environment. A provider event matches the actual API service;
 signup alarms match the scheduled operations job. Explicitly synthetic source events
-from owned disposable `femlab-qa556-*` fixture services also match, so delivery can be
+from owned disposable `femlab-qa556-*` fixture services or jobs also match, so delivery can be
 verified without real supplier calls or creating customer/Auth identities.
 
 The queue is a machine delivery channel. An operator must pull and acknowledge it, or

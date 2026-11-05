@@ -35,6 +35,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('authenticated completion HTTP p
       if(mode==='error-event'){yield {type:'error',message:'private provider account/key/prompt details'};return;}
       if(mode==='missing-usage'){yield {type:'done',stopReason:'end_turn'};return;}
       const usage={input:1000,cacheRead:0,output:100};await observations.usage(usage);
+      if(mode==='usage-then-error'){yield {type:'error',message:'private provider failure after known usage'};return;}
       yield {type:'tool_use',id:'call-one',name:'query_nodes',input:{set:'all'}};
       yield {type:'usage',usage};yield {type:'continuation',continuation:{provider:'openai',value:[]}};yield {type:'done',stopReason:'tool_use'};
     },
@@ -189,6 +190,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('authenticated completion HTTP p
     ['missing-usage',200,'provider-metering-missing','pending_reconciliation'],
     ['silent-end',200,'provider-metering-missing','pending_reconciliation'],
     ['error-event',200,'provider-stream-unavailable','pending_reconciliation'],
+    ['usage-then-error',200,'provider-stream-unavailable','settled'],
   ])('reports fixed redacted provider metadata for %s even when HTTP status is200',async(scenario,status,code,state)=>{
     mode=scenario as string;
     const response=await send('private-idempotency-needle',{...body,system:'private-prompt-needle'},'Bearer private-owner-needle');

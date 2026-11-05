@@ -68,7 +68,7 @@ export function completionService(deps:{account(authorization:string|undefined):
           rejected:async()=>{final=await observed(deps.reservations.rejected(account.id,prepared.id));report('provider-rejected');},
         })) {
           inProvider=false;
-          if(event.type==='error'&&!final)report('provider-stream-unavailable');
+          if(event.type==='error')report('provider-stream-unavailable');
           if(event.type==='done'&&!final) {
             report('provider-metering-missing');
             await output.send({type:'chat',event:{type:'error',message:'The provider did not report usage. Your request is pending confirmation.'}}); inProvider=true;continue;

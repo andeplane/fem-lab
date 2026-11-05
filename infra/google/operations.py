@@ -55,9 +55,9 @@ def policy(project, channel, log_filter):
 
 
 def category_policies(project, channel):
-    # Fixture jobs have no public ingress, real identities or provider credentials.
+    # Fixture jobs have no public ingress; fixture services require a private capability. Neither has real identities or provider credentials.
     # Their explicit source events exercise the same policies as the live API/check.
-    qa = '(resource.type="cloud_run_revision" AND resource.labels.service_name=~"^femlab-qa556-[a-f0-9]+$" AND jsonPayload.synthetic=true)'
+    qa = '(jsonPayload.synthetic=true AND ((resource.type="cloud_run_revision" AND resource.labels.service_name=~"^femlab-qa556-[a-f0-9]+$") OR (resource.type="cloud_run_job" AND resource.labels.job_name=~"^femlab-qa556-[a-f0-9]+$")))'
     provider_filter = ('severity>=ERROR AND jsonPayload.event="service-provider-error" AND '
         '((resource.type="cloud_run_revision" AND resource.labels.service_name="femlab-api") OR '+qa+')')
     signup_filter = ('severity>=ERROR AND jsonPayload.event="service-operations" AND jsonPayload.alarms.code="signup-surge" AND '

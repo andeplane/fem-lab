@@ -46,6 +46,8 @@ class OperationalDeployment(unittest.TestCase):
         self.assertIn('jsonPayload.event="service-provider-error"',provider)
         self.assertIn('resource.labels.service_name="femlab-api"',provider)
         self.assertNotIn('httpRequest.status',provider)
+        self.assertIn('jsonPayload.synthetic=true',provider)
+        self.assertIn('resource.labels.job_name=~',provider)
         signup=policies['signup']['conditions'][0]['conditionMatchedLog']['filter']
         self.assertIn('jsonPayload.alarms.code="signup-surge"',signup)
         for desired in policies.values():
