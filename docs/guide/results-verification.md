@@ -50,7 +50,9 @@ returns to retained temperature frames; an earlier frame's time never labels an 
 vector. Difference Queries currently accept nodal fields, so these
 element-node vectors cannot be used in that comparison operation. Cost estimates include
 both endpoint fields and intermediate Gauss arrays in `recoveryBytes`; element-local scratch
-and host/allocator overhead remain additional. See [physics](./physics.md) and
+and host/allocator overhead remain additional. Heat `solve.run` rejects a counted estimate
+above the planning budget before allocating endpoint output; coarsen the mesh and query the cost
+again. See [physics](./physics.md) and
 [units](./units.md) for model and display conventions.
 
 ```ts

@@ -967,7 +967,8 @@ impl Engine {
             } else {
                 if matches!(
                     &proc_step,
-                    procedure::Step::HeatTransient { .. }
+                    procedure::Step::HeatSteady { .. }
+                        | procedure::Step::HeatTransient { .. }
                         | procedure::Step::Explicit { .. }
                         | procedure::Step::Implicit { .. }
                         | procedure::Step::Harmonic { .. }
