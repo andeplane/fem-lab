@@ -17,6 +17,6 @@ export async function suspendAccount(sql:Sql,identity:SuspensionIdentity,account
   if(!row)throw new ServiceFailure(404,'suspension-account-unavailable','The target account is unavailable.','operator.suspension');
   let disabled=false;
   try {await identity.updateUser(String(row.firebase_uid),{disabled:true});disabled=true;await identity.revokeRefreshTokens(String(row.firebase_uid));}
-  catch {throw new ServiceFailure(503,'suspension-incomplete','Identity suspension did not fully complete. Retry the same target.','operator.suspension',null,{disabled});}
+  catch {throw new ServiceFailure(503,'suspension-incomplete','Identity suspension did not fully complete. Retry the same target.','operator.suspension',null,disabled?{disabled:true}:{disableConfirmed:false});}
   return {accountId:accountId.toLowerCase(),disabled:true,sessionsRevoked:true};
 }

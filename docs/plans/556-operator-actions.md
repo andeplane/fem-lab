@@ -68,7 +68,9 @@ requests. Account lifecycle fields retain their existing meaning; suspension doe
 not pretend the account is deleting. Already admitted generation retains normal
 cancellation/metering/settlement behavior.
 
-If revocation fails after disable, the error receipt records `disabled: true` and
+A lost disable response leaves the remote state unconfirmed; the error records
+`disableConfirmed: false` without claiming that the identity remains enabled.
+If revocation fails after an acknowledged disable, the error receipt records `disabled: true` and
 never re-enables the identity. Repeating the action safely finishes revocation.
 SDK diagnostics, UID, tokens and credentials are suppressed from output. The
 operator receipt and Google's identity-administration audit trail establish the

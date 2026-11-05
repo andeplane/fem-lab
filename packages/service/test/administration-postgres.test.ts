@@ -120,7 +120,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('operator actions on real Postgr
  });
  it('does not revoke after failed disable or touch identity for invalid/inactive targets',async()=>{
   const {owner}=await fixture();let revoked=0;const identity:SuspensionIdentity={async updateUser(){throw new Error('private SDK value');},async revokeRefreshTokens(){revoked++;}};
-  await expect(suspendAccount(db,identity,owner.id)).rejects.toMatchObject({code:'suspension-incomplete',details:{disabled:false}});expect(revoked).toBe(0);
+  await expect(suspendAccount(db,identity,owner.id)).rejects.toMatchObject({code:'suspension-incomplete',details:{disableConfirmed:false}});expect(revoked).toBe(0);
   await expect(suspendAccount(db,identity,'invalid')).rejects.toMatchObject({code:'invalid-account'});
   await db.query("UPDATE accounts SET status='deleted' WHERE id=$1",[owner.id]);await expect(suspendAccount(db,identity,owner.id)).rejects.toMatchObject({code:'suspension-account-unavailable'});
  });
