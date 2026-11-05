@@ -14894,7 +14894,7 @@ fn structural_step_formulation_overrides_mesh_and_survives_definition_open_and_r
     assert_eq!(reopened.model.steps, saved.model.steps);
     for threads in [1, 4] {
         let mut replayed = Engine::new(None, Box::new(NoClock), threads);
-        pollster::block_on(replayed.replay(&reopened.journal.entries, true, true)).unwrap();
+        pollster::block_on(replayed.replay(&reopened.journal.entries, false, true)).unwrap();
         assert_eq!(replayed.model(), e.model());
         assert_eq!(replayed.field(Some("explicit-full"), Field::Displacement).unwrap(), &full);
     }
