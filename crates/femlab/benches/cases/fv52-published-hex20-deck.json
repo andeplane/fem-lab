@@ -1,0 +1,311 @@
+{
+  "name": "fv52-published-hex20-deck",
+  "reference": "D3: independent Abaqus 2025 FV52 computed C3D20 row, https://docs.software.vt.edu/abaqusv2025/English/SIMACAEBMKRefMap/simabmk-c-fv52.htm and linked nfv52fkc.inp. Exactly 10x10x1 m, E=200 GPa, nu=0.3, rho=8000 kg/m^3, 4x4x1 full Hex20, consistent mass, UZ-only on the four lower edges. Frequencies 44.796,110.54,110.54,169.10,193.92,206.64,206.64 Hz are computed-deck comparisons at the unchanged 3% allowance; neither conflicting published NAFEMS table is selected as continuum truth. The singular-edge refinement/subspace study is documented separately.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "FV52 fixed published C3D20 deck"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "m",
+        "stress": "Pa",
+        "force": "N"
+      }
+    },
+    {
+      "cmd": "geometry.addBox",
+      "name": "plate",
+      "size": [
+        "10 m",
+        "10 m",
+        "1 m"
+      ],
+      "at": [
+        "0 m",
+        "0 m",
+        "-0.5 m"
+      ]
+    },
+    {
+      "cmd": "material.add",
+      "name": "mat",
+      "E": "200 GPa",
+      "nu": 0.3,
+      "rho": "8000 kg/m^3",
+      "source": "Abaqus 2025 FV52 published C3D20 input/result; fixed 4x4x1 full Hex20 deck, not a continuum NAFEMS reference"
+    },
+    {
+      "cmd": "material.assign",
+      "material": "mat",
+      "bodies": [
+        "plate"
+      ]
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": {
+          "nx": 4,
+          "ny": 4,
+          "nz": 1
+        }
+      },
+      "order": 2,
+      "formulation": "full"
+    },
+    {
+      "cmd": "geometry.nameRegion",
+      "name": "x0",
+      "where": {
+        "kind": "bbox",
+        "min": [
+          "-1e-09 m",
+          "-1e-09 m",
+          "-0.500000001 m"
+        ],
+        "max": [
+          "1e-09 m",
+          "10.000000001 m",
+          "-0.499999999 m"
+        ]
+      }
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "uz-x0",
+      "on": "x0",
+      "dofs": [
+        "uz"
+      ]
+    },
+    {
+      "cmd": "geometry.nameRegion",
+      "name": "x10",
+      "where": {
+        "kind": "bbox",
+        "min": [
+          "9.999999999 m",
+          "-1e-09 m",
+          "-0.500000001 m"
+        ],
+        "max": [
+          "10.000000001 m",
+          "10.000000001 m",
+          "-0.499999999 m"
+        ]
+      }
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "uz-x10",
+      "on": "x10",
+      "dofs": [
+        "uz"
+      ]
+    },
+    {
+      "cmd": "geometry.nameRegion",
+      "name": "y0",
+      "where": {
+        "kind": "bbox",
+        "min": [
+          "-1e-09 m",
+          "-1e-09 m",
+          "-0.500000001 m"
+        ],
+        "max": [
+          "10.000000001 m",
+          "1e-09 m",
+          "-0.499999999 m"
+        ]
+      }
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "uz-y0",
+      "on": "y0",
+      "dofs": [
+        "uz"
+      ]
+    },
+    {
+      "cmd": "geometry.nameRegion",
+      "name": "y10",
+      "where": {
+        "kind": "bbox",
+        "min": [
+          "-1e-09 m",
+          "9.999999999 m",
+          "-0.500000001 m"
+        ],
+        "max": [
+          "10.000000001 m",
+          "10.000000001 m",
+          "-0.499999999 m"
+        ]
+      }
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "uz-y10",
+      "on": "y10",
+      "dofs": [
+        "uz"
+      ]
+    },
+    {
+      "cmd": "step.add",
+      "name": "modes",
+      "procedure": "modal",
+      "constraints": [
+        "uz-x0",
+        "uz-x10",
+        "uz-y0",
+        "uz-y10"
+      ],
+      "loads": [],
+      "nModes": 10
+    },
+    {
+      "cmd": "solve.run",
+      "step": "modes",
+      "solver": "cpu-direct",
+      "tolerance": 1e-10,
+      "maxIterations": 5000
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.result",
+        "step": "modes"
+      },
+      "path": "/frequencies/3/value",
+      "expect": 44.796,
+      "tol": 0.03,
+      "rel": true,
+      "note": "Published computed C3D20 mode 4, fixed 4x4x1 deck; not the disputed NAFEMS continuum target"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "modes"
+      },
+      "path": "/frequencies/4/value",
+      "expect": 110.54,
+      "tol": 0.03,
+      "rel": true,
+      "note": "Published computed C3D20 mode 5, fixed 4x4x1 deck; not the disputed NAFEMS continuum target"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "modes"
+      },
+      "path": "/frequencies/5/value",
+      "expect": 110.54,
+      "tol": 0.03,
+      "rel": true,
+      "note": "Published computed C3D20 mode 6, fixed 4x4x1 deck; not the disputed NAFEMS continuum target"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "modes"
+      },
+      "path": "/frequencies/6/value",
+      "expect": 169.1,
+      "tol": 0.03,
+      "rel": true,
+      "note": "Published computed C3D20 mode 7, fixed 4x4x1 deck; not the disputed NAFEMS continuum target"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "modes"
+      },
+      "path": "/frequencies/7/value",
+      "expect": 193.92,
+      "tol": 0.03,
+      "rel": true,
+      "note": "Published computed C3D20 mode 8, fixed 4x4x1 deck; not the disputed NAFEMS continuum target"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "modes"
+      },
+      "path": "/frequencies/8/value",
+      "expect": 206.64,
+      "tol": 0.03,
+      "rel": true,
+      "note": "Published computed C3D20 mode 9, fixed 4x4x1 deck; not the disputed NAFEMS continuum target"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "modes"
+      },
+      "path": "/frequencies/9/value",
+      "expect": 206.64,
+      "tol": 0.03,
+      "rel": true,
+      "note": "Published computed C3D20 mode 10, fixed 4x4x1 deck; not the disputed NAFEMS continuum target"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "modes"
+      },
+      "path": "/frequencies/0/value",
+      "expect": 0,
+      "tol": 0.001,
+      "note": "Allowed rigid Tx, Ty, Rz span; absolute Hz bound"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "modes"
+      },
+      "path": "/frequencies/1/value",
+      "expect": 0,
+      "tol": 0.001,
+      "note": "Allowed rigid Tx, Ty, Rz span; absolute Hz bound"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "modes"
+      },
+      "path": "/frequencies/2/value",
+      "expect": 0,
+      "tol": 0.001,
+      "note": "Allowed rigid Tx, Ty, Rz span; absolute Hz bound"
+    },
+    {
+      "query": {
+        "query": "query.mesh"
+      },
+      "path": "/nodes",
+      "expect": 155
+    },
+    {
+      "query": {
+        "query": "query.mesh"
+      },
+      "path": "/elements",
+      "expect": 16
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "modes"
+      },
+      "path": "/stale",
+      "expect": false
+    }
+  ]
+}

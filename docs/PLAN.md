@@ -196,8 +196,11 @@ Goal: geometry that is not a box, and the classic benchmarks that need it.
 | MacNeal–Harder straight cantilever, in-plane shear, skewed meshes | quad4, quad4-incompatible, quad8 | 0.108 in | quad8 ≤ 1 %; quad4 error recorded, not gated |
 | Manufactured solution, Poisson and elasticity | hex/tet p=1,2 | L2 rate p+1, H1 rate p | rate ± 0.1 |
 
-Open items before hard-coding, all in note 04: FV52 reference set (Ansys vs Abaqus rows
-disagree), Cook's converged plane-stress value, MacNeal–Harder values beyond 0.108.
+FV52's fixed-deck versus continuum reference contract is settled by
+[ADR0051](adr/0051-fv52-fixed-deck-is-not-a-continuum-reference.md): its published
+computed C3D20 deck is independently gated, while the conflicting NAFEMS-attributed
+columns remain diagnostics. Open items before hard-coding from note 04 include
+Cook's converged plane-stress value and MacNeal–Harder values beyond 0.108.
 Scordelis–Lo (0.3024), LE3 (0.185 m) and the SS plate (0.00406 qa⁴/D) are covered by the MITC4 shell benchmarks in 8.1 (#64).
 
 ## 6. Phase 4: the AI

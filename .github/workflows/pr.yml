@@ -26,6 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
+      fv52: ${{ steps.filter.outputs.fv52 }}
     steps:
       # Lists the PR's files through the API; no checkout.
       - uses: dorny/paths-filter@v3
@@ -39,6 +40,14 @@ jobs:
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
               - 'rustfmt.toml'
+              - '.github/workflows/pr.yml'
+              - 'tools/verify-fv52-deck.py'
+              - 'tools/investigate-fv52.py'
+            fv52:
+              - 'crates/femlab/benches/cases/fv52-published-hex20-deck.json'
+              - 'crates/engine/tests/registry/modal_fv52.rs'
+              - 'tools/verify-fv52-deck.py'
+              - 'tools/investigate-fv52.py'
               - '.github/workflows/pr.yml'
 
   rust-lint:
@@ -78,6 +87,10 @@ jobs:
           shared-key: workspace
           save-if: false
       - run: cargo test --workspace --exclude femlab
+      # D3's independently published fixed deck also has to pass actual CLI dispatch.
+      # One 16-element case, not the broad CLI replay suite; unrelated PRs skip it.
+      - if: needs.changes.outputs.fv52 == 'true'
+        run: cargo run -p femlab -- bench --filter fv52-published-hex20-deck --cpu --threads 1 --json
 
   # A cache hit (any PR that does not touch Rust) takes seconds; a miss builds the same optimized
   # bundle main builds.

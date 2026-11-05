@@ -14842,3 +14842,6 @@ mod portable;
 
 #[path = "registry/portable_optional.rs"]
 mod portable_optional;
+
+#[path = "registry/modal_fv52.rs"]
+mod modal_fv52;

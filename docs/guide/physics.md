@@ -34,3 +34,19 @@ In finite-deformation continuum analysis, the elastic law uses a St Venant–Kir
 ## Establish suitability
 
 Examples, analytical Benchmarks and convergence tests establish specific known-answer cases. They do not certify every model assembled from those capabilities. Check geometry approximation, boundary assumptions, property provenance, mesh/time convergence, equilibrium and relevant failure mechanisms. See [Results and verification](./results-verification.md). Remote FEM solving, Python bindings and arbitrary user plugin loading are not current product capabilities; see [architecture](./architecture-extensions.md).
+
+## Modal reference models
+
+A small measured eigenpair residual establishes algebraic accuracy for the specified
+mesh; it does not establish accuracy against the continuous structure. Refine the
+mesh and compare complete repeated-mode subspaces before drawing that conclusion.
+Frequency ordering can change when bending and in-plane mode branches cross.
+
+The CLI case `fv52-published-hex20-deck` reproduces the independent published Abaqus
+C3D20 model at its exact 4×4×1 full Hex20 mesh, with consistent mass and UZ-only
+supports on the lower perimeter. It checks that **discrete model** at 3%; it does
+not certify a NAFEMS continuum frequency. Its eccentric edge constraints introduce
+a singularity, and the two published NAFEMS-attributed tables disagree. The separate
+24-mode study checks symmetry and nested-mesh behavior without fitting a new target.
+See the [benchmark reference decision](https://github.com/andeplane/fem-lab/blob/main/docs/adr/0051-fv52-fixed-deck-is-not-a-continuum-reference.md)
+for sources and supported limits.
