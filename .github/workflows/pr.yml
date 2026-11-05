@@ -43,12 +43,32 @@ jobs:
               - '.github/workflows/pr.yml'
               - 'tools/verify-fv52-deck.py'
               - 'tools/investigate-fv52.py'
+              - '.github/workflows/ci.yml'
             fv52:
               - 'crates/femlab/benches/cases/fv52-published-hex20-deck.json'
               - 'crates/engine/tests/registry/modal_fv52.rs'
+              - 'crates/engine/tests/registry.rs'
               - 'tools/verify-fv52-deck.py'
               - 'tools/investigate-fv52.py'
               - '.github/workflows/pr.yml'
+              - '.github/workflows/ci.yml'
+              - 'crates/engine/src/procedure/modal.rs'
+              - 'crates/engine/src/fem/assembly.rs'
+              - 'crates/engine/src/fem/element.rs'
+              - 'crates/engine/src/fem/material.rs'
+              - 'crates/engine/src/fem/problem.rs'
+              - 'crates/engine/src/fem/mpc.rs'
+              - 'crates/engine/src/fem/quadrature.rs'
+              - 'crates/engine/src/fem/shape.rs'
+              - 'crates/engine/src/solve/**'
+              - 'crates/engine/src/mesh.rs'
+              - 'crates/geometry/src/**'
+              - 'crates/engine/Cargo.toml'
+              - 'crates/geometry/Cargo.toml'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - 'vendor/**'
 
   rust-lint:
     name: rust lint
@@ -87,10 +107,28 @@ jobs:
           shared-key: workspace
           save-if: false
       - run: cargo test --workspace --exclude femlab
+      # This multi-minute physics study belongs to main; relevant operator/oracle PRs
+      # also run it explicitly. The cheap fixed-deck/rigid replay test always runs above.
+      - if: needs.changes.outputs.fv52 == 'true'
+        run: |
+          cargo test -p femlab-engine --test registry modal_fv52::fv52_enlarged_spectra_obey_square_symmetry_and_nested_space_min_max -- --ignored --exact --nocapture | tee fv52-study.log
+          python3 -c "from pathlib import Path; assert 'test result: ok. 1 passed; 0 failed; 0 ignored;' in Path('fv52-study.log').read_text()"
       # D3's independently published fixed deck also has to pass actual CLI dispatch.
       # One 16-element case, not the broad CLI replay suite; unrelated PRs skip it.
       - if: needs.changes.outputs.fv52 == 'true'
-        run: cargo run -p femlab -- bench --filter fv52-published-hex20-deck --cpu --threads 1 --json
+        run: |
+          cargo run -p femlab -- bench --filter fv52-published-hex20-deck --cpu --threads 1 --json > fv52-benchmark.json
+          cat fv52-benchmark.json
+          python3 -c "import json; r=json.load(open('fv52-benchmark.json')); assert len(r)==1 and r[0]['name']=='fv52-published-hex20-deck' and r[0]['pass'] and len(r[0]['checks'])==13 and all(c['pass'] for c in r[0]['checks'])"
+      - if: always() && needs.changes.outputs.fv52 == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: fv52-benchmark
+          retention-days: 3
+          if-no-files-found: error
+          path: |
+            fv52-benchmark.json
+            fv52-study.log
 
   # A cache hit (any PR that does not touch Rust) takes seconds; a miss builds the same optimized
   # bundle main builds.

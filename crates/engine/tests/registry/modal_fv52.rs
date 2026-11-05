@@ -152,6 +152,7 @@ fn quarter_turn_closes_modal_subspaces(raw: &[Value], frequencies: &[f64]) -> f6
 }
 
 #[test]
+#[ignore = "bounded FV52 study runs explicitly on main and relevant PRs (ADR0047/0051)"]
 fn fv52_enlarged_spectra_obey_square_symmetry_and_nested_space_min_max() {
     let mut previous_spectrum: Option<Vec<f64>> = None;
     for [nx, ny, nz] in [[4, 4, 1], [8, 8, 2], [16, 16, 4]] {

@@ -23,6 +23,9 @@ explicitly identifies the few-element reference approximation, its artificial
 anisotropy, the eccentric lower-edge supports and their 3D stress singularity.
 Its dense independent solid result differs from the historical reference. Thus
 refining this solid cannot be required to approach either historical indexed table.
+VM06 lists a different density (8300 kg/m³); its numerical frequencies are not
+adopted or rescaled into this 8000 kg/m³ Benchmark. Its reference/support analysis
+is the relevant evidence.
 
 D3 therefore has two separate obligations. Its installed CLI Benchmark reproduces
 **the exact published Abaqus C3D20 discrete model** against that publisher's computed
@@ -32,6 +35,8 @@ numerical reference, not a selected NAFEMS continuum answer. The model fixes the
 consistent mass and UZ-only constraints on the four lower edges. The first three
 modes must span Tx, Ty and Rz; seven nonzero frequencies are compared individually.
 
+Under ADR0047, the expensive study runs explicitly on Linux main and relevant PRs;
+the cheap fixed-deck/rigid-span test remains in every ordinary registry run.
 A separate enlarged-spectrum study retains 24 modes on 4×4×1, 8×8×2 and 16×16×4
 nested meshes. It checks quarter-turn invariance of complete modal subspaces through
 the first twenty modes, exact 1/4-worker payloads, measured backward residuals,

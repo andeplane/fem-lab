@@ -199,7 +199,8 @@ native factorization and triangular solution now use a fixed logical arithmetic 
 of 64, scheduled by the existing pool; Windows factorization remains sequential and
 wasm is unchanged ([ADR0031](adr/0031-fixed-sparse-direct-arithmetic-partition.md)).
 This is an exact reproducibility oracle, not a new frequency reference or convergence
-study: both FV52 tables remain unresolved under #7, and the existing physical and
+study. ADR0051 separately defines the accepted fixed published FV52 deck; the two
+historical NAFEMS attributions remain inconsistent. The existing physical and
 original-operator residual gates above remain unchanged.
 
 The Result-validity integration check also holds probe/path values and independently parsed
@@ -753,8 +754,9 @@ limits 3080.013, 3064.170 and 3060.147 psi. These fits are discretization
 diagnostics, **not independent oracles or proofs that true error decreases**.
 The sequence crosses the published target, and the cause of the offset remains
 unsettled. No universal recovered-point-stress rate is asserted from the
-quadratic element order. Tracking #7 retains the separate FV52 reference and D4
-norm questions; this case addresses only the finite VM142 criterion (#626).
+quadratic element order. This case addresses only the finite VM142 criterion (#626).
+D4's full-gradient norm verification shipped separately through #630; ADR0051
+settles FV52's fixed-deck versus continuum reference convention.
 
 **C2's displacement depends on the idealisation, its stresses do not.** BENCHMARKS.md's single
 5.90e-5 m is the free-ended (σ_z = 0) value; every row here holds ε_z = 0 and so lands on

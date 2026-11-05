@@ -56,3 +56,35 @@ The historical ten-mode #639 outputs and their original producer/hash record rem
 unchanged in [the original report](639-fv52-solid-investigation.md). Their original
 one/four-thread counterexample was repaired separately by #640. The new run supplies
 new evidence instead of rewriting those old observations.
+
+## CI scope and first native receipt
+
+The cheap fixed-deck/rigid-span regression runs in the ordinary registry suite.
+The multi-minute study is named and ignored by default solely to implement the
+three-tier policy in ADR0047. Linux main CI executes it explicitly on every push;
+the required PR job also executes it for modal/operator, geometry, FV52 oracle,
+dependency and validation-workflow changes. It is a required physics gate in
+those scopes, with no permanently skipped acceptance. Run it directly with:
+
+```sh
+cargo test -p femlab-engine --test registry modal_fv52::fv52_enlarged_spectra_obey_square_symmetry_and_nested_space_min_max -- --ignored --exact --nocapture
+```
+
+At source `110bc9e5f5f821d64703797bf732d89228c9debe`, normal Linux PR
+[run41992466002 / Rust job127127766526](https://github.com/andeplane/fem-lab/actions/runs/41992466002/job/127127766526)
+passed the entire workspace excluding the CLI crate, both new FV52 tests and the
+actual built CLI case. The registry suite passed 543 tests. The six-solve
+24-mode study passed its rigid-span, subspace, min-max and exact-worker gates;
+its printed individual spectra were captured by the default test harness and
+are not presented as measured values here. Explicit CI invocation now retains
+those diagnostics without running the study twice.
+
+The actual CLI returned 13/13 successful checks and these seven nonzero values:
+44.79627208784115, 110.54268081057248, 110.54268081057369,
+169.09546149855223, 193.9246570593514, 206.6378091854367,
+206.63780918543685 Hz. Its maximum relative difference from the independently
+published computed C3D20 row is 2.683916e−5 (0.002684%), below the unchanged 3%.
+These are fixed-deck results, not a continuum reference or a software-adapter timing.
+The job log SHA256 is `4b5a8b8a6405bf438bf4cc32705d3e3e4846c9885f305aab5dd43c106cf0da05`.
+The path-conditional CLI step also asserts one exact named case and 13 successful
+checks, so a deleted/renamed case cannot pass by selecting an empty benchmark set.
