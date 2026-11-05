@@ -89,7 +89,7 @@ adapters were deliberately absent. The entire generated `dist` directory,
 including runtime chunks and migrations, was present; no development source was
 mounted. All temporary container-mode resources were removed afterward.
 
-The package passed all **299** real-Postgres/unit/HTTP tests with coverage,
+Before the operator additions, the package passed all **299** real-Postgres/unit/HTTP tests with coverage,
 including a CLI loader that throws if Auth/storage/provider/payment SDKs load in
 read-only mode. Both documentation route bases and seven documentation tests passed.
 Host coverage is distinct from the unchanged engine/geometry coverage gates.
@@ -153,3 +153,26 @@ and immutable audit/idempotency checks, typed fake-Auth disable/revoke behavior,
 and authenticated staging/production dry runs with zero mutations. The recovery
 path uses the actual queued canonical billing processor; a read-only snapshot is
 not presented as an administration interface.
+
+## Criterion-to-receipt map, 5 November 2026
+
+| Required acceptance | Evidence and supported boundary |
+|---|---|
+| Separate EU infrastructure, identity and private storage | [Infrastructure baseline](563-google-infrastructure.md), [private project storage](774-cloud-project-storage.md) and [launch history](557-hosted-launch-verification.md); no new provider account or ownership change in this follow-up. |
+| Final TLS proxy, long streams, concurrency and cancellation | The fresh protected same-LB drill above admitted sixteen streams, rejected the seventeenth, measured streams over seventy seconds and conserved all sixteen receipts/holds. Upstream continuation after reader abort is explicitly recorded. It proves transport with synthetic providers, not paid supplier throughput. |
+| Global/free ceilings across service processes | Real-Postgres independent-pool races in `reservations-postgres.test.ts`, read-only aggregate equality/rollover tests and the fresh SQL exposure observer above; no production admission/cap change. |
+| Unknown usage, lag, spend, provider errors and signup surge | [Scheduled operational delivery](556-operations-delivery.md) and [category-specific actual incidents](556-provider-signup-alerts.md); existing authenticated Pub/Sub pull/ack is the operator destination, with seven-day retention. No human page is claimed. |
+| Reconciled durable paid-state restore | [Fresh actual Stripe TEST read-only SDK recovery](556-stripe-recovery.md), real Cloud SQL restore and immutable ledger hashes; operator backfill references existing TEST objects, not fresh signed webhooks or LIVE payments. |
+| Drain, durable recovery and rollback | Actual quiet-stream SIGTERM, separately built container entrypoint checks, and the two-image in-flight promotion/rollback above; no arbitrary older-image compatibility guarantee. |
+| Google/email-link CSP and isolation compatibility | [Published and native authentication history](557-hosted-launch-verification.md) and [activation receipts](661-stripe-activation.md); final release preserves each environment's existing Google-sign-in flag, auth domain and API origin. |
+| Actual email delivery | [Applied sender and actual Inbox delivery, 17 October](557-hosted-launch-verification.md#applied-sender-and-actual-inbox-delivery-17-october-2026): the authorized single message arrived in Inbox with SPF/DKIM passing. No new email is sent or implied. |
+| Key rotation | [Dated real TEST credential replacement and fresh QA Secret Manager pin exercise](556-key-rotation.md); no production provider key rotation. |
+| Authenticated suspend, inbox replay and ledger adjustment | [Operator actions](556-operator-actions.md): verified Google principal/IAM, service-backed whole canonical recovery pass, disable/revoke adapter and immutable debit-only correction. Positive funding remains unsupported; inherited Auth-emulator routing fails closed. |
+| Final production bundle secret scan and publication | Final hosted variants require a prepublication scan and exact source/artifact/WAN-byte receipts. These release receipts belong in #556's final deployment comment; source tests and a green PR alone do not establish publication. Public Firebase browser configuration is intended public metadata. |
+
+Exact-head Linux verification for source `76be6817` passed
+[PR run 42010066093](https://github.com/andeplane/fem-lab/actions/runs/42010066093):
+**313/313** service tests with the real PostgreSQL 17 service, including twelve
+operator/Postgres cases and the actual compiled child-process emulator guard.
+All required checks passed; no test deadline or coverage threshold was increased.
+Later canonical rebases require their own exact-head checks before merge.
