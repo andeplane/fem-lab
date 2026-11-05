@@ -65,3 +65,16 @@ slow query outlived Vitest's deadline and conflicted with the next fixture reset
 fixture SQL now has a two-second statement deadline before the unchanged test
 deadline. The final run passed all twelve cases, with no retries or
 timeout-threshold increase.
+
+
+## Follow-up acceptance, 5 November 2026
+
+The remaining boundaries in the dated 4 November map are reconciled in
+[deployment acceptance](556-operational-acceptance.md),
+[fresh canonical Stripe TEST recovery](556-stripe-recovery.md),
+[provider and signup category delivery](556-provider-signup-alerts.md), and
+[key rotation evidence](556-key-rotation.md). The original child #824 remains a
+read-only source signal; the follow-up supplies separate runtime/provider and
+machine notification receipts. Final merged API/recovery publication is recorded
+with its exact source and configuration readback rather than inferred from these
+dated tests.

@@ -55,7 +55,7 @@ The full availability check took **17.156 seconds**, including the replacement
 instance's startup. That is not reported as a seventeen-second shutdown handler.
 
 Five seconds bounds socket grace. A hung dependency can outlast that grace and
-Cloud Run's ten-second termination budget; the already durable dispatch/hold is
+[Cloud Run's ten-second termination budget](https://docs.cloud.google.com/run/docs/container-contract); the already durable dispatch/hold is
 then recovered by the scheduled worker. The test delivered SIGTERM to a real
 Cloud Run container; it did not claim to observe a platform-issued SIGKILL.
 
@@ -89,7 +89,7 @@ adapters were deliberately absent. The entire generated `dist` directory,
 including runtime chunks and migrations, was present; no development source was
 mounted. All temporary container-mode resources were removed afterward.
 
-The package passed all **287** real-Postgres/unit/HTTP tests with coverage,
+The package passed all **299** real-Postgres/unit/HTTP tests with coverage,
 including a CLI loader that throws if Auth/storage/provider/payment SDKs load in
 read-only mode. Both documentation route bases and seven documentation tests passed.
 Host coverage is distinct from the unchanged engine/geometry coverage gates.
@@ -112,3 +112,44 @@ role, secret and identity. Every transport attempt, including preparation failur
 used this cleanup. Production account records and the staging supplier-spend pause
 were preserved. Transport/runtime fixture images do not establish production API
 promotion; final release source/image and rollout receipts are recorded separately.
+
+
+## Actual revision traffic rollover and rollback
+
+The pinned prior fixture image `sha256:5cf5b2df7f743a8d240bbe9adb0ed38fa0662dd2345e786b57d3d6c7f2273786`
+and source-`f8d7cc1d` image
+`sha256:b58b143279fae8108040d9b8d87703d4b0ff358e28c4120be0e8fa0c7d1398a7`
+ran against the same disposable ledger. The old revision was
+`femlab-qa556-3eb922f2-00002-xew`; the candidate was
+`femlab-qa556-3eb922f2-00004-wuz`.
+
+Candidate traffic promotion began **18.813 seconds** after an old-revision stream's
+headers, while that stream was still active. It completed after **70.082 seconds**
+with one confirmed 4,800-subcredit receipt. The candidate replayed that same
+request key and receipt. Traffic then rolled back to the old revision, whose
+negotiated `usd-milli-v1` replay returned the same 4,800 subcredits as 0.12 public
+credits. Restoring candidate traffic left exactly one request, one receipt and
+one debit. This proves these two source versions and the retained schema/credit
+protocol; it does not assert compatibility with arbitrary older images.
+
+Both provider-error and signup-surge source executions and machine-delivered
+incidents in both environments are recorded in
+[the category alert evidence](556-provider-signup-alerts.md). Pub/Sub is the
+operator destination with documented retention and authenticated pull/ack use;
+a human inbox or page was not part of these checks.
+
+
+## Rotation and authenticated operator paths
+
+[Key rotation evidence](556-key-rotation.md) distinguishes the historical actual
+Stripe TEST credential replacement from the fresh QA-only Secret Manager numbered
+pin/disable exercise. The latter used the existing authenticated operator and
+added zero IAM grants.
+
+[Authenticated operator actions](556-operator-actions.md) use the existing Google
+principal and service logic for account suspension, debit-only audited correction
+and a whole durable recovery pass. Their evidence includes real PostgreSQL races
+and immutable audit/idempotency checks, typed fake-Auth disable/revoke behavior,
+and authenticated staging/production dry runs with zero mutations. The recovery
+path uses the actual queued canonical billing processor; a read-only snapshot is
+not presented as an administration interface.
