@@ -1142,8 +1142,8 @@ hydration replies cannot overwrite a newer selection; modal phase controls remai
 | F20 | HHT free-vibration amplitude, nine α/ωΔt pairs | characteristic cubic and its conjugate spectral radius; filtered displacement envelope | 2e-9 absolute radius, 2e-8 relative envelope | exact numerical damping, not merely decreasing energy | engine test |
 | F21 | Sine-loaded SDOF at frequency ratios 0.5, 1, 1.5 and damping ratios 0.05/0.2, three time refinements | complex compliance `(F/k)/(1−r²+2iζr)`; independent modal harmonic solve | <2 % complex response; refinement rate >1.8; harmonic coefficient 1e-8 | amplitude, phase and time/frequency-domain agreement | engine test |
 | F22 | Damped implicit SDOF, α=0 and −0.2, ζωt=30 | analytical `F/k` and independently solved static displacement/stress/reaction | 1e-9 relative fields, 1e-10 tip | damping leaves the correct equilibrium | engine test |
-| F23 | First rod mode through modal, implicit and explicit, 10/20/40 elements | consistent/lumped-chain spectra and atan/asin time dispersion; amplitude + phase history bound | 1e-6 modal frequency, 1e-4 history frequency; bound refinement rate >1.9 | quantitative cross-integrator agreement with different mass matrices | engine test |
-| F24 | Actual direct/CPU-PCG/GPU-PCG implicit paths: initial kick, damped HHT load, sine forcing, free fall | direct history and independent numerical/physical gates F2c/F20–F23; backend identity | 2e-8 history, 2e-7 stress/reaction | selected backend reaches both a₀ and every increment; unavailable/exhausted backends fail | engine test + required gpu-tests |
+| F23 | First three rod modes through modal, implicit and explicit, 10/20/40 elements | consistent/lumped-chain spectra and atan/asin time dispersion; amplitude + phase history bound | 1e-6 modal frequency, 1e-4 history frequency; bound refinement rate >1.9 | quantitative cross-integrator agreement with different mass matrices | engine test |
+| F24 | Actual direct/CPU-PCG/GPU-PCG implicit paths: initial kick, damped HHT load, sine forcing, free fall | direct history and independent numerical/physical gates F2c/F20–F23; backend identity | 2e-8 history, 2e-7 stress/reaction; rigid zero-stress <1 Pa | selected backend reaches both a₀ and every increment; unavailable/exhausted backends fail | engine test + required gpu-tests |
 
 | F20 | #73, one-sided white-noise SDOF response, unit mass, f_n = 7 Hz, ζ = 0.2/0.02/1e-5 | stationary energy balance: variance = S p²/(8 ζ ω_n³); integrate to 10,000 f_n | 1e-8 relative | Hz normalization and resonance resolution; exact cancellation of equal modes with opposite participation and invariance to subdividing a linear PSD table | engine unit test |
 | F21 | #602, finite logarithmic frequency grids, including 1e-300–1e100 Hz and binary 2^-1074–2^974 | geometric midpoint 1e-100 Hz; independently encoded binary powers at 3/5/9/17 points; exact endpoints and identical shared quantiles under refinement | 4e-13 relative on closed quantiles; exact endpoint bits; finite nondecreasing values within bounds | positive finite endpoints do not require a representable endpoint ratio or exponential scale factor; subnormal/adjacent/MAX intervals and generated finite-bit patterns retain the range contract | engine unit + public registry |
@@ -1409,7 +1409,7 @@ modal response. Three time refinements must converge at second order; gain alone
 cannot hide the wrong phase. F22 compares the fully damped final displacement,
 stress and reaction with a separate static solve and its analytical `F/k` tip value.
 
-F23 gives the first axial mode to both integrators on 10/20/40-element rods. The
+F23 gives the first three axial modes to both integrators on 10/20/40-element rods. The
 consistent and lumped chain frequencies are known independently (F11); each method's
 closed-form dispersion supplies its observed frequency. Their maximum history difference
 is bounded by amplitude mismatch plus the accumulated phase mismatch, including the
@@ -1420,7 +1420,10 @@ through both procedures; F5a verifies the Newmark coefficient.
 F24 selects `cpu-direct`, `cpu-pcg` and the host's actual `gpu-pcg` for initial
 acceleration and increment equations in initial-kick, loaded/damped HHT, sinusoidal
 forcing and free-fall cases. It compares every retained displacement and the final
-stress/reaction, and checks the reported backend. The GPU half is mandatory under
+stress/reaction, checks free fall against `v₀t+gt²/2`, and checks the reported backend
+and backend-solve count (initial acceleration plus every increment). The rigid-body
+zero-stress case uses an absolute 1 Pa gate, derived from `E·δu/L` rather than a
+relative norm of roundoff. The GPU half is mandatory under
 `gpu-tests` (lavapipe in CI); no adapter is a failure. CPU tests also prove explicit
 GPU requests without a device and exhausted iterative budgets fail rather than
 silently using direct solves. Explicit dynamics itself has no linear solve.

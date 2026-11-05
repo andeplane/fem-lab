@@ -2110,7 +2110,7 @@ const commands = {
           "type": "string"
         },
         "solver": {
-          "description": "Linear solver implementation; omitted means auto, which selects an available compatible backend.",
+          "description": "Linear solver implementation; omitted means auto, which selects an available compatible backend.\nImplicit dynamics applies this backend to its initial acceleration and every increment;\ncpu-direct reuses its effective-matrix factorization, while cpu-pcg/gpu-pcg refine in f64.",
           "anyOf": [
             {
               "$ref": "#/$defs/Solver"

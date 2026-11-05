@@ -994,7 +994,7 @@ assembly and triangular solves retain the engine thread count.
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
 | step | yes | <code>{"type":"string"}</code> | Existing Step to solve; its procedure, active Constraints and Loads define the problem. |
-| solver | no | <code>{"anyOf":[{"$ref":"#/$defs/Solver"},{"type":"null"}]}</code> | Linear solver implementation; omitted means auto, which selects an available compatible backend. |
+| solver | no | <code>{"anyOf":[{"$ref":"#/$defs/Solver"},{"type":"null"}]}</code> | Linear solver implementation; omitted means auto, which selects an available compatible backend. Implicit dynamics applies this backend to its initial acceleration and every increment; cpu-direct reuses its effective-matrix factorization, while cpu-pcg/gpu-pcg refine in f64. |
 | tolerance | no | <code>{"type":["number","null"],"format":"double"}</code> | Positive finite residual tolerance; omitted means 1e-10. For modal, the maximum normwise generalized-eigenpair backward residual. Separate Step settings control nonlinear convergence. |
 | maxIterations | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> | Linear iterative solver iteration budget, or modal subspace-sweep budget; omitted means 5000. A modal budget must be greater than zero. |
 | cmd | yes | <code>{"type":"string","const":"solve.run"}</code> | Registered Command identifier; use &#96;solve.run&#96; to select this operation. |
@@ -7306,7 +7306,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
           "type": "string"
         },
         "solver": {
-          "description": "Linear solver implementation; omitted means auto, which selects an available compatible backend.",
+          "description": "Linear solver implementation; omitted means auto, which selects an available compatible backend.\nImplicit dynamics applies this backend to its initial acceleration and every increment;\ncpu-direct reuses its effective-matrix factorization, while cpu-pcg/gpu-pcg refine in f64.",
           "anyOf": [
             {
               "$ref": "#/$defs/Solver"

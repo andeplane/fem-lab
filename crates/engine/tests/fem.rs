@@ -17809,7 +17809,7 @@ fn hht_amplitude_decay_matches_its_characteristic_spectral_radius() {
                 let want = q[0] * rho2.powi(n as i32);
                 assert!((value / want - 1.0).abs() < 2e-8, "α={alpha}, x={x}, n={n}: Q ratio {}", value / want);
             }
-            let measured = (q[q.len() - 1] / q[0]).powf(0.5 / (q.len() - 1) as f64);
+            let measured = libm::pow(q[q.len() - 1] / q[0], 0.5 / (q.len() - 1) as f64);
             assert!((measured - rho2.sqrt()).abs() < 2e-9, "α={alpha},x={x}:ρ={measured} vs {}", rho2.sqrt());
             assert!(measured < 1.0);
             println!("F20 alpha={alpha} x={x}: rho={measured:.12}, characteristic={:.12}", rho2.sqrt());
@@ -17892,7 +17892,7 @@ fn implicit_harmonic_forcing_converges_to_the_closed_form_and_frequency_domain_r
 }
 
 /// F22: damping removes the transient without shifting the equilibrium. The slowest envelope
-/// exp(-ζωt) is below 6e-14 after 100 rad at ζ=.3; this also checks all retained final fields.
+/// exp(-ζωt) is below 1e-13 after 100 rad at ζ=.3; this also checks all retained final fields.
 #[test]
 fn a_damped_implicit_step_reaches_the_independent_static_equilibrium() {
     let side = 0.1;
@@ -17922,65 +17922,69 @@ fn a_damped_implicit_step_reaches_the_independent_static_equilibrium() {
 fn implicit_and_explicit_histories_agree_with_their_modal_dispersion_bound() {
     let length = 1.0;
     let c = (ROD_E / ROD_RHO).sqrt();
-    let mut bounds = Vec::new();
+    let mut bounds = [Vec::new(), Vec::new(), Vec::new()];
     for n in [10usize, 20, 40] {
         let (mesh, sets) = rod_mesh(n, length);
         let bodies = one_body();
         let p = rod_problem(&mesh, &sets, &bodies);
-        let wave = PI / (2.0 * length);
-        let h = length / n as f64;
-        let ck = libm::cos(wave * h);
-        let wi = c / h * (6.0 * (1.0 - ck) / (2.0 + ck)).sqrt();
-        let we = 2.0 * c / h * libm::sin(0.5 * wave * h);
         let modal =
-            run_step(&p, &Step::Modal { n_modes: 1, shift: None, solver: SolveOptions::default(), prestress: None })
+            run_step(&p, &Step::Modal { n_modes: 3, shift: None, solver: SolveOptions::default(), prestress: None })
                 .unwrap();
-        assert!((2.0 * PI * modal.frequencies[0] / wi - 1.0).abs() < 1e-6);
-        let mut kick = vec![0.0; mesh.n_nodes() * 3];
-        for node in 0..mesh.n_nodes() {
-            kick[node * 3] = libm::sin(wave * mesh.node(node as u32)[0]);
+        for (j, bounds) in bounds.iter_mut().enumerate() {
+            let wave = (2 * j + 1) as f64 * PI / (2.0 * length);
+            let h = length / n as f64;
+            let ck = libm::cos(wave * h);
+            let wi = c / h * (6.0 * (1.0 - ck) / (2.0 + ck)).sqrt();
+            let we = 2.0 * c / h * libm::sin(0.5 * wave * h);
+            assert!((2.0 * PI * modal.frequencies[j] / wi - 1.0).abs() < 1e-6);
+            let mut kick = vec![0.0; mesh.n_nodes() * 3];
+            for node in 0..mesh.n_nodes() {
+                kick[node * 3] = libm::sin(wave * mesh.node(node as u32)[0]) / libm::sin(wave * length);
+            }
+            let end = 5.0 * 2.0 * PI / (c * wave);
+            let ex = run_step(
+                &p,
+                &Step::Explicit { t_end: end, dt_factor: 0.1, initial_velocity: Some(kick.clone()), output_every: 1 },
+            )
+            .unwrap();
+            let dt = ex.scalars["dt"];
+            let im = run_step(&p, &implicit_step(dt, end, 0.0, (0.0, 0.0), Some(kick), 1)).unwrap();
+            let actual_dt = im.scalars["dt"];
+            let wti = 2.0 / actual_dt * libm::atan(wi * actual_dt / 2.0);
+            let wte = 2.0 / dt * libm::asin(we * dt / 2.0);
+            let ai = 1.0 / wi;
+            let ae = 1.0 / (we * (1.0 - (we * dt / 2.0).powi(2)).sqrt());
+            let bound = (ai - ae).abs() + ai.max(ae) * (wti - wte).abs() * end;
+            let tip = node_at(&mesh, [length, 0.0, 0.0]) as usize * 3;
+            let ih = im.history.unwrap();
+            let eh = ex.history.unwrap();
+            let period = zero_crossing_period(&ih.times, &ih.values.iter().map(|f| f[tip]).collect::<Vec<_>>());
+            assert!((2.0 * PI / period / wti - 1.0).abs() < 1e-4);
+            let mut max_difference = 0.0f64;
+            for (idx, (&time, frame)) in ih.times.iter().zip(&ih.values).enumerate() {
+                let want = ai * libm::sin(wti * time);
+                assert!((frame[tip] - want).abs() < 1e-8 * ai);
+                // time_grid only ever adds at most a rounding increment; interpolation bounds
+                // the explicit comparison if the two adjusted grids differ by one step.
+                let i = eh.times.partition_point(|t| *t < time).clamp(1, eh.times.len() - 1);
+                let fraction = (time - eh.times[i - 1]) / (eh.times[i] - eh.times[i - 1]);
+                let explicit = eh.values[i - 1][tip] * (1.0 - fraction) + eh.values[i][tip] * fraction;
+                let interpolation = ae * (wte * dt).powi(2) / 8.0;
+                let difference = (frame[tip] - explicit).abs();
+                assert!(
+                    difference <= bound + interpolation + 1e-8 * ai,
+                    "n={n},frame={idx}:difference={difference},bound={bound}"
+                );
+                max_difference = max_difference.max(difference);
+            }
+            bounds.push(bound / ai);
+            println!("F23 mode={} n={n} relative bound={}, observed={}", j + 1, bound / ai, max_difference / ai);
         }
-        let end = 5.0 * 2.0 * PI / (c * wave);
-        let ex = run_step(
-            &p,
-            &Step::Explicit { t_end: end, dt_factor: 0.1, initial_velocity: Some(kick.clone()), output_every: 1 },
-        )
-        .unwrap();
-        let dt = ex.scalars["dt"];
-        let im = run_step(&p, &implicit_step(dt, end, 0.0, (0.0, 0.0), Some(kick), 1)).unwrap();
-        let actual_dt = im.scalars["dt"];
-        let wti = 2.0 / actual_dt * libm::atan(wi * actual_dt / 2.0);
-        let wte = 2.0 / dt * libm::asin(we * dt / 2.0);
-        let ai = 1.0 / wi;
-        let ae = 1.0 / (we * (1.0 - (we * dt / 2.0).powi(2)).sqrt());
-        let bound = (ai - ae).abs() + ai.max(ae) * (wti - wte).abs() * end;
-        let tip = node_at(&mesh, [length, 0.0, 0.0]) as usize * 3;
-        let ih = im.history.unwrap();
-        let eh = ex.history.unwrap();
-        let period = zero_crossing_period(&ih.times, &ih.values.iter().map(|f| f[tip]).collect::<Vec<_>>());
-        assert!((2.0 * PI / period / wti - 1.0).abs() < 1e-4);
-        let mut max_difference = 0.0f64;
-        for (idx, (&time, frame)) in ih.times.iter().zip(&ih.values).enumerate() {
-            let want = ai * libm::sin(wti * time);
-            assert!((frame[tip] - want).abs() < 1e-8 * ai);
-            // time_grid only ever adds at most a rounding increment; interpolation bounds
-            // the explicit comparison if the two adjusted grids differ by one step.
-            let i = eh.times.partition_point(|t| *t < time).clamp(1, eh.times.len() - 1);
-            let fraction = (time - eh.times[i - 1]) / (eh.times[i] - eh.times[i - 1]);
-            let explicit = eh.values[i - 1][tip] * (1.0 - fraction) + eh.values[i][tip] * fraction;
-            let interpolation = ae * (wte * dt).powi(2) / 8.0;
-            let difference = (frame[tip] - explicit).abs();
-            assert!(
-                difference <= bound + interpolation + 1e-8 * ai,
-                "n={n},frame={idx}:difference={difference},bound={bound}"
-            );
-            max_difference = max_difference.max(difference);
-        }
-        bounds.push(bound / ai);
-        println!("F23 n={n} relative bound={}, observed={}", bound / ai, max_difference / ai);
     }
-    for pair in bounds.windows(2) {
-        assert!(libm::log(pair[0] / pair[1]) / libm::log(2.0) > 1.9);
+    for sequence in bounds {
+        for pair in sequence.windows(2) {
+            assert!(libm::log(pair[0] / pair[1]) / libm::log(2.0) > 1.9);
+        }
     }
 }
 
@@ -18007,6 +18011,22 @@ fn implicit_cpu_backends_agree_and_refuse_unavailable_or_exhausted_solvers() {
     solver.solver = Solver::CpuPcg;
     solver.max_iterations = 0;
     assert_eq!(run_step(&p, &step).unwrap_err().code, ErrorCode::SolveStalled);
+    let mut loaded = rod_problem(&mesh, &sets, &bodies);
+    loaded.loads = vec![Load::Traction { faces: "xmax".into(), t: [1e6, 0.0, 0.0] }];
+    // Zero load at t=0 lets a₀ solve exactly; the first *increment* must still honor
+    // the exhausted iterative budget and fail before a partial Result is returned.
+    let mut driven = implicit_step(1e-5, 2e-5, 0.0, (0.0, 0.0), None, 1);
+    let Step::Implicit { solver, amplitude, .. } = &mut driven else { panic!() };
+    solver.solver = Solver::CpuPcg;
+    solver.max_iterations = 0;
+    *amplitude = Some(procedure::Amplitude::Sine { amplitude: 1.0, period: 8e-5 });
+    assert_eq!(run_step(&loaded, &driven).unwrap_err().code, ErrorCode::SolveStalled);
+    // The direct factor is already reused when the second increment receives invalid data.
+    let Step::Implicit { solver, amplitude, .. } = &mut driven else { panic!() };
+    solver.solver = Solver::CpuDirect;
+    solver.max_iterations = 5000;
+    *amplitude = Some(procedure::Amplitude::Table { t: vec![0.0, 1e-5, 2e-5], value: vec![0.0, 0.0, f64::NAN] });
+    assert_eq!(run_step(&loaded, &driven).unwrap_err().code, ErrorCode::SolveStalled);
 }
 
 /// F24 GPU half runs under the required software adapter lane as well as native Metal.
@@ -18015,8 +18035,12 @@ fn implicit_cpu_backends_agree_and_refuse_unavailable_or_exhausted_solvers() {
 #[cfg(feature = "gpu-tests")]
 #[test]
 fn implicit_gpu_backend_matches_direct_and_cpu_pcg_for_dynamic_cases() {
-    let gpu =
-        pollster::block_on(femlab_engine::gpu::Gpu::request(femlab_engine::gpu::Gpu::default_backends())).unwrap();
+    #[cfg(target_os = "linux")]
+    let backends = wgpu::Backends::VULKAN;
+    #[cfg(not(target_os = "linux"))]
+    let backends = femlab_engine::gpu::Gpu::default_backends();
+    let gpu = pollster::block_on(femlab_engine::gpu::Gpu::request(backends)).unwrap();
+    println!("F24 actual adapter: {}", gpu.adapter);
     let mesh = Structured { kind: ElementKind::Hex8, n: [2, 1, 1] }.box_([1.0, 0.1, 0.1]);
     let sets = sets_of(&mesh);
     let bodies = one_body();
@@ -18033,7 +18057,7 @@ fn implicit_gpu_backend_matches_direct_and_cpu_pcg_for_dynamic_cases() {
             1e-5,
             8e-5,
             if case == 1 { -0.2 } else { 0.0 },
-            (10.0, 1e-6),
+            if case == 3 { (0.0, 0.0) } else { (10.0, 1e-6) },
             Some([1.0, 0.0, 0.0].repeat(mesh.n_nodes())),
             1,
         );
@@ -18045,11 +18069,37 @@ fn implicit_gpu_backend_matches_direct_and_cpu_pcg_for_dynamic_cases() {
         for backend in [Solver::CpuPcg, Solver::GpuPcg] {
             let Step::Implicit { solver, .. } = &mut step else { panic!() };
             solver.solver = backend;
+            let prefix = format!("{} on ", solver_name(backend));
+            let mut backend_solves = 0;
+            let mut progress = |p: Progress| {
+                if p.message.starts_with(&prefix) {
+                    backend_solves += 1;
+                }
+                true
+            };
             let actual =
-                pollster::block_on(procedure::run(&p, &step, &Pool::new(2), Some(&gpu), None, &mut nop)).unwrap();
+                pollster::block_on(procedure::run(&p, &step, &Pool::new(2), Some(&gpu), None, &mut progress)).unwrap();
             assert_eq!(actual.solver.solver, solver_name(backend));
-            for (a, b) in actual.history.unwrap().values.iter().zip(&reference.history.as_ref().unwrap().values) {
+            assert_eq!(
+                backend_solves,
+                actual.scalars["steps"] as usize + 1,
+                "initial acceleration and every increment use the requested backend"
+            );
+            let history = actual.history.unwrap();
+            for ((&time, a), b) in
+                history.times.iter().zip(&history.values).zip(&reference.history.as_ref().unwrap().values)
+            {
                 gate("GPU/CPU dynamic history", a, b, 2e-8);
+                if case == 3 {
+                    let want = [time, 0.0, -0.5 * 9.81 * time * time];
+                    for (dof, &u) in a.iter().enumerate() {
+                        assert!(
+                            (u - want[dof % 3]).abs() < 2e-12,
+                            "actual backend free fall at {time}: {u} vs {}",
+                            want[dof % 3]
+                        );
+                    }
+                }
             }
             for field in [Field::Displacement, Field::Stress, Field::Reaction] {
                 if case == 3 && field == Field::Stress {
