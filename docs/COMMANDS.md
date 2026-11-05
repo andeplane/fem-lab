@@ -530,7 +530,6 @@ singular stresses near the node; prefer load.traction on a face unless you mean 
 Gravity (or any uniform acceleration) as a body force on every Body whose Material has
 a density; Bodies without one are skipped and listed in the warnings. Explicit Steps
 apply gravity with their lumped inertia (m_i g); static Steps use consistent body forces.
-Elastic corotational beam2 members in static-nonlinear explicitly reject this Load.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -578,19 +577,11 @@ joints of beam Bodies have: on any other node it has nothing to act on and the S
 fails with model.ill-posed naming the Load. Right-handed about each axis, in the
 Model's torque unit ("5 kN m").
 
-In elastic corotational `static-nonlinear` beams these are constant generalized
-coefficients conjugate to the total global rotation vector: virtual work is
-`total · delta(rotationVector)`. A fixed-axis planar end moment has the ordinary
-physical moment interpretation. Arbitrary three-dimensional physical global dead
-torques and follower torques are unsupported: their SO(3) rotation-Jacobian pullback
-is not implemented. Do not pass physical spatial torque components as though they
-were these generalized coefficients.
-
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
 | name | yes | <code>{"type":"string"}</code> | Load name to create or replace, for listing in a Step. |
 | on | yes | <code>{"type":"string"}</code> | Node Set of beam joints carrying rotational degrees of freedom. |
-| total | yes | <code>{"type":"array","items":{"$ref":"#/$defs/Q_torque"},"minItems":3,"maxItems":3}</code> | Total components, split equally over the Set, each with torque units. In linear procedures these are physical right-handed moments about global x/y/z. In corotational static-nonlinear beams they are generalized forces conjugate to total global rotation-vector coordinates; arbitrary physical 3D torque is unsupported. |
+| total | yes | <code>{"type":"array","items":{"$ref":"#/$defs/Q_torque"},"minItems":3,"maxItems":3}</code> | Total right-handed moment about global x/y/z, split equally over the Set, each component with torque units. |
 | cmd | yes | <code>{"type":"string","const":"load.moment"}</code> | Registered Command identifier; use &#96;load.moment&#96; to select this operation. |
 
 <a id="commands-load-pressure"></a>
@@ -2796,7 +2787,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
-      "description": "Static equilibrium with geometric nonlinearity: large displacement and large rotation,\nsolved by Newton–Raphson over `increments` load increments. The strain measure is\nGreen–Lagrange and the stress the material law returns is second Piola–Kirchhoff, so\nthe linear elastic material becomes St Venant–Kirchhoff. The Result reports **Cauchy**\nstress and Green–Lagrange strain, and probes and paths stay in *reference* coordinates.\nElastic beam2 members also support finite rotations with small section strains via\nan objective corotational kernel. Their rotations are total global rotation vectors;\nmoment components are generalized dead loads conjugate to those coordinates. Total\nrotation-vector magnitude must remain below pi radians at every beam node. Stateful\nbeam materials, gravity loads and singular relative-section rotation frames are rejected. Beam\nstrain is engineering axial section strain, not continuum Green–Lagrange strain.\nSolid and plane-strain idealisations only. Incompatible modes are switched off, so\nhex8 and quad4 lock in bending under this procedure — use `order: 2`. Loads do not\nfollow the deformation (a pressure keeps its reference direction and area) and a\ntemperature field is applied in full rather than ramped with the load factor.",
+      "description": "Static equilibrium with geometric nonlinearity: large displacement and large rotation,\nsolved by Newton–Raphson over `increments` load increments. The strain measure is\nGreen–Lagrange and the stress the material law returns is second Piola–Kirchhoff, so\nthe linear elastic material becomes St Venant–Kirchhoff. The Result reports **Cauchy**\nstress and Green–Lagrange strain, and probes and paths stay in *reference* coordinates.\nSolid and plane-strain idealisations only. Incompatible modes are switched off, so\nhex8 and quad4 lock in bending under this procedure — use `order: 2`. Loads do not\nfollow the deformation (a pressure keeps its reference direction and area) and a\ntemperature field is applied in full rather than ramped with the load factor.",
       "type": "string",
       "const": "static-nonlinear",
       "x-material-properties": [
@@ -6568,7 +6559,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "A concentrated moment, as a total vector about the global axes, split equally over the\nnodes of a node Set. It acts on the rotational degrees of freedom, which only the\njoints of beam Bodies have: on any other node it has nothing to act on and the Step\nfails with model.ill-posed naming the Load. Right-handed about each axis, in the\nModel's torque unit (\"5 kN m\").\n\nIn elastic corotational `static-nonlinear` beams these are constant generalized\ncoefficients conjugate to the total global rotation vector: virtual work is\n`total · delta(rotationVector)`. A fixed-axis planar end moment has the ordinary\nphysical moment interpretation. Arbitrary three-dimensional physical global dead\ntorques and follower torques are unsupported: their SO(3) rotation-Jacobian pullback\nis not implemented. Do not pass physical spatial torque components as though they\nwere these generalized coefficients.",
+      "description": "A concentrated moment, as a total vector about the global axes, split equally over the\nnodes of a node Set. It acts on the rotational degrees of freedom, which only the\njoints of beam Bodies have: on any other node it has nothing to act on and the Step\nfails with model.ill-posed naming the Load. Right-handed about each axis, in the\nModel's torque unit (\"5 kN m\").",
       "type": "object",
       "properties": {
         "name": {
@@ -6580,7 +6571,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
           "type": "string"
         },
         "total": {
-          "description": "Total components, split equally over the Set, each with torque units. In linear\nprocedures these are physical right-handed moments about global x/y/z. In\ncorotational static-nonlinear beams they are generalized forces conjugate to\ntotal global rotation-vector coordinates; arbitrary physical 3D torque is unsupported.",
+          "description": "Total right-handed moment about global x/y/z, split equally over the Set, each component with torque units.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/Q_torque"
@@ -6603,7 +6594,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Gravity (or any uniform acceleration) as a body force on every Body whose Material has\na density; Bodies without one are skipped and listed in the warnings. Explicit Steps\napply gravity with their lumped inertia (m_i g); static Steps use consistent body forces.\nElastic corotational beam2 members in static-nonlinear explicitly reject this Load.",
+      "description": "Gravity (or any uniform acceleration) as a body force on every Body whose Material has\na density; Bodies without one are skipped and listed in the warnings. Explicit Steps\napply gravity with their lumped inertia (m_i g); static Steps use consistent body forces.",
       "type": "object",
       "properties": {
         "name": {
@@ -9299,7 +9290,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
-      "description": "Static equilibrium with geometric nonlinearity: large displacement and large rotation,\nsolved by Newton–Raphson over `increments` load increments. The strain measure is\nGreen–Lagrange and the stress the material law returns is second Piola–Kirchhoff, so\nthe linear elastic material becomes St Venant–Kirchhoff. The Result reports **Cauchy**\nstress and Green–Lagrange strain, and probes and paths stay in *reference* coordinates.\nElastic beam2 members also support finite rotations with small section strains via\nan objective corotational kernel. Their rotations are total global rotation vectors;\nmoment components are generalized dead loads conjugate to those coordinates. Total\nrotation-vector magnitude must remain below pi radians at every beam node. Stateful\nbeam materials, gravity loads and singular relative-section rotation frames are rejected. Beam\nstrain is engineering axial section strain, not continuum Green–Lagrange strain.\nSolid and plane-strain idealisations only. Incompatible modes are switched off, so\nhex8 and quad4 lock in bending under this procedure — use `order: 2`. Loads do not\nfollow the deformation (a pressure keeps its reference direction and area) and a\ntemperature field is applied in full rather than ramped with the load factor.",
+      "description": "Static equilibrium with geometric nonlinearity: large displacement and large rotation,\nsolved by Newton–Raphson over `increments` load increments. The strain measure is\nGreen–Lagrange and the stress the material law returns is second Piola–Kirchhoff, so\nthe linear elastic material becomes St Venant–Kirchhoff. The Result reports **Cauchy**\nstress and Green–Lagrange strain, and probes and paths stay in *reference* coordinates.\nSolid and plane-strain idealisations only. Incompatible modes are switched off, so\nhex8 and quad4 lock in bending under this procedure — use `order: 2`. Loads do not\nfollow the deformation (a pressure keeps its reference direction and area) and a\ntemperature field is applied in full rather than ramped with the load factor.",
       "type": "string",
       "const": "static-nonlinear",
       "x-material-properties": [
