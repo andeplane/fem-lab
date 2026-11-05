@@ -688,7 +688,7 @@ pub struct ResolvedUnits {
 }
 
 impl UnitSet {
-    /// Fill defaults: m, N, W, Pa, kg, kg/m^3, s, K, m/s^2.
+    /// Fill defaults: m, N, W, Pa, kg, kg/m^3, s, K, K/m, W/m^2, m/s^2.
     pub fn resolve(&self) -> ResolvedUnits {
         let d = |o: &Option<String>, def: &str| o.clone().unwrap_or_else(|| def.to_string());
         ResolvedUnits {
