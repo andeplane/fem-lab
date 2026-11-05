@@ -1,0 +1,248 @@
+{
+  "id": "axisymmetric-transient-heat",
+  "title": "Axisymmetric transient heat",
+  "minutes": 13,
+  "summary": "Heat a finite cylinder from its rim and ends, inspect retained time frames and check the 190 s temperature against a published NAFEMS target and cylindrical diffusion.",
+  "steps": [
+    {
+      "title": "Start the cylinder section",
+      "explain": "Build the first, continuously heated scenario of the NAFEMS case used by COMSOL: a cylinder of radius 0.3 m and length 0.4 m, initially at 0 \u00b0C. Its curved wall and both ends jump to 1000 \u00b0C. We re-author the setup here; no vendor model or images are needed.",
+      "expect": {
+        "cmd": "model.new"
+      },
+      "highlight": "model.new",
+      "doIt": {
+        "cmd": "model.new",
+        "name": "axisymmetric-transient-heat"
+      }
+    },
+    {
+      "title": "Choose useful units",
+      "explain": "Use metres, seconds and degrees Celsius. Temperatures are absolute values; differences in kelvin and Celsius have the same numerical size.",
+      "expect": {
+        "cmd": "model.setUnits"
+      },
+      "highlight": "model.setUnits",
+      "doIt": {
+        "cmd": "model.setUnits",
+        "units": {
+          "length": "m",
+          "time": "s",
+          "temperature": "degC"
+        }
+      }
+    },
+    {
+      "title": "Revolve the physics, not the mesh",
+      "explain": "Choose axisymmetric: screen x is radius r and screen y is axial position z. A rectangular sheet represents the whole cylinder, with each quadrature point weighted by its circumference. It is not a flat plate.",
+      "expect": {
+        "cmd": "model.setIdealisation"
+      },
+      "highlight": "model.setIdealisation",
+      "doIt": {
+        "cmd": "model.setIdealisation",
+        "idealisation": {
+          "kind": "axisymmetric"
+        }
+      }
+    },
+    {
+      "title": "The meridian rectangle",
+      "explain": "The left edge r = 0 is the rotation axis. The lattice names its outside edges xmin, xmax, ymin and ymax; use xmax for the rim and ymin/ymax for the two ends. No artificial mechanical symmetry constraint belongs in this heat-only Step.",
+      "expect": {
+        "cmd": "geometry.add"
+      },
+      "highlight": "geometry.add",
+      "doIt": {
+        "cmd": "geometry.add",
+        "name": "cylinder",
+        "shape": {
+          "kind": "sheet",
+          "sketch": {
+            "outer": [
+              {
+                "kind": "line",
+                "to": [
+                  "0.3 m",
+                  "0 m"
+                ],
+                "tag": "ymin"
+              },
+              {
+                "kind": "line",
+                "to": [
+                  "0.3 m",
+                  "0.4 m"
+                ],
+                "tag": "xmax"
+              },
+              {
+                "kind": "line",
+                "to": [
+                  "0 m",
+                  "0.4 m"
+                ],
+                "tag": "ymax"
+              },
+              {
+                "kind": "line",
+                "to": [
+                  "0 m",
+                  "0 m"
+                ],
+                "tag": "xmin"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "Conductivity and heat storage",
+      "explain": "These are the published benchmark constants: conductivity 52 W/(m K), density 7850 kg/m\u00b3 and heat capacity 460 J/(kg K). No elastic modulus is needed for a heat-only Material.",
+      "expect": {
+        "cmd": "material.add"
+      },
+      "highlight": "material.add",
+      "doIt": {
+        "cmd": "material.add",
+        "name": "thermal",
+        "k": "52 W/(m K)",
+        "rho": "7850 kg/m^3",
+        "cp": "460 J/(kg K)",
+        "source": "NAFEMS thermal benchmark, COMSOL Axisymmetric Transient Heat Transfer"
+      }
+    },
+    {
+      "title": "Assign the Material",
+      "explain": "Assign the heat-only Material to the cylinder section.",
+      "expect": {
+        "cmd": "material.assign"
+      },
+      "highlight": "material.assign",
+      "doIt": {
+        "cmd": "material.assign",
+        "material": "thermal",
+        "bodies": [
+          "cylinder"
+        ]
+      }
+    },
+    {
+      "title": "Resolve radius and height",
+      "explain": "Use a 12 \u00d7 16 quadratic lattice. Radius and axial length each have 25 mm elements. Time and spatial refinement are separate checks; the closing reference is not a license to skip them.",
+      "expect": {
+        "cmd": "mesh.set"
+      },
+      "highlight": "mesh.set",
+      "doIt": {
+        "cmd": "mesh.set",
+        "mesher": {
+          "kind": "lattice",
+          "size": {
+            "nx": 12,
+            "ny": 16,
+            "nz": 1
+          }
+        },
+        "order": 2
+      }
+    },
+    {
+      "title": "Heat the curved wall",
+      "explain": "Prescribe the outer cylindrical wall at 1000 \u00b0C. The axis receives no condition: zero radial heat flow there follows from axisymmetry.",
+      "expect": {
+        "cmd": "constraint.temperature"
+      },
+      "highlight": "constraint.temperature",
+      "doIt": {
+        "cmd": "constraint.temperature",
+        "name": "rim-hot",
+        "on": "cylinder.xmax",
+        "value": "1000 degC"
+      }
+    },
+    {
+      "title": "Heat the first end",
+      "explain": "The bottom circular end is also held at 1000 \u00b0C. This is a finite cylinder: omitting end heating changes the benchmark.",
+      "expect": {
+        "cmd": "constraint.temperature"
+      },
+      "highlight": "constraint.temperature",
+      "doIt": {
+        "cmd": "constraint.temperature",
+        "name": "bottom-hot",
+        "on": "cylinder.ymin",
+        "value": "1000 degC"
+      }
+    },
+    {
+      "title": "Heat the second end",
+      "explain": "The top end has the same prescribed temperature. The probe is 0.1 m from this end and 0.1 m from the axis, not at the cylinder centre.",
+      "expect": {
+        "cmd": "constraint.temperature"
+      },
+      "highlight": "constraint.temperature",
+      "doIt": {
+        "cmd": "constraint.temperature",
+        "name": "top-hot",
+        "on": "cylinder.ymax",
+        "value": "1000 degC"
+      }
+    },
+    {
+      "title": "Start from cold, keep the history",
+      "explain": "Backward Euler with \u0394t = 2 s runs to 190 s from 0 \u00b0C. outputEvery = 19 retains a frame every 38 s and the final frame. This guide covers the maintained-temperature scenario only, not COMSOL\u2019s later switch to insulation.",
+      "expect": {
+        "cmd": "step.add"
+      },
+      "highlight": "step.add",
+      "doIt": {
+        "cmd": "step.add",
+        "name": "warm-up",
+        "procedure": "heat-transient",
+        "constraints": [
+          "rim-hot",
+          "bottom-hot",
+          "top-hot"
+        ],
+        "loads": [],
+        "output": [
+          "temperature"
+        ],
+        "dt": "2 s",
+        "tEnd": "190 s",
+        "theta": 1,
+        "initial": "0 degC",
+        "outputEvery": 19
+      }
+    },
+    {
+      "title": "Solve the warm-up",
+      "explain": "Run the transient Step. Probe temperature at [0.1 m, 0.3 m, 0 m] in the final frame. This mesh and \u0394t = 2 s give about 186.23 \u00b0C, against the published 190 s target 186.5 \u00b0C; inspect the recorded time before comparing, since a different frame answers a different question.",
+      "expect": {
+        "cmd": "solve.run"
+      },
+      "highlight": "solve.run",
+      "doIt": {
+        "cmd": "solve.run",
+        "step": "warm-up"
+      }
+    },
+    {
+      "title": "Fit the section",
+      "explain": "Fit changes only the camera. Inspect the warm ends and rim and the cooler interior, then press Next.",
+      "expect": null,
+      "highlight": "view.fit",
+      "doIt": {
+        "cmd": "view.fit"
+      }
+    },
+    {
+      "title": "Check an independent answer",
+      "explain": "A benchmark is tied to its geometry, heating faces, time and probe coordinates. Replacing the axisymmetric idealisation with plane strain solves a different heat equation.",
+      "expect": null,
+      "theory": "For constant properties, $\\alpha=k/(\\rho c_p)=1.4400\\times10^{-5}\\,\\mathrm{m^2/s}$. The separable cylindrical diffusion solution gives $T(r,z,t)=T_b[1-R(r,t)Z(z,t)]$, where $R$ is the zero-wall Bessel series and $Z$ the zero-end sine series. At $r=0.1\\,\\mathrm m$, $z=0.3\\,\\mathrm m$, $t=190\\,\\mathrm s$, it agrees with the published **186.5 \u00b0C** target. At \u0394t = 2, 1 and 0.5 s, backward Euler gives 186.2292, 186.3705 and 186.4417 \u00b0C. The automated check refines space and time independently and also catches a missing heated end.\n\n**Try it:** use `query.probe` with `field: \"temperature\"`, `step: \"warm-up\"`, `at: [\"0.1 m\", \"0.3 m\", \"0 m\"]`; use the frame selector to inspect retained times. Rebuild and solve after changing the time step or mesh. A smaller time step reduces temporal error; it does not correct the wrong geometry or boundary conditions.\n\n**Other solvers:** this is COMSOL\u2019s 2D Axisymmetric / Time Dependent heat-transfer workflow, Abaqus axisymmetric heat-transfer elements with a transient heat-transfer Step, Ansys transient thermal axisymmetry, or Nastran transient heat transfer with axisymmetric elements. Names differ; the radial weighting and thermal initial/boundary conditions must agree.\n\nSource: [COMSOL, Axisymmetric Transient Heat Transfer](https://doc.comsol.com/6.3/doc/com.comsol.help.models.mph.heat_transient_axi/heat_transient_axi.html), citing Cameron, Casey and Simpson, NAFEMS thermal benchmarks (1986)."
+    }
+  ]
+}

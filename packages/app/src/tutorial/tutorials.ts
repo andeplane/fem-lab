@@ -1,6 +1,9 @@
 // The built-in tutorials (PLAN.md 5.10). Each is data (`packages/app/tutorials/*.json`); adding
 // one is adding a file here, not writing a component. Vite bundles JSON imports directly, so
 // there is no fetch and no build step, unlike the Examples gallery's Journals.
+import axisymmetricTransientHeat from '../../tutorials/axisymmetric-transient-heat.json';
+import eighthThermalStress from '../../tutorials/eighth-thermal-stress.json';
+import le10FullFace from '../../tutorials/le10-full-face.json';
 import cantilever from '../../tutorials/cantilever.json';
 import columnBuckling from '../../tutorials/column-buckling.json';
 import freeFreeModal from '../../tutorials/free-free-modal.json';
@@ -34,6 +37,9 @@ export const TUTORIALS: Tutorial[] = [
   modalAnalysis,
   freeFreeModal,
   transientHeat,
+  axisymmetricTransientHeat,
+  eighthThermalStress,
+  le10FullFace,
   meshConvergence,
   symmetryAnd2d,
   journalAsProgram,

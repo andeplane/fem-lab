@@ -66,6 +66,39 @@ This passes the stated tip-only check under those assumptions, with about 2.59 K
 
 The closing step explains corresponding Abaqus steady-state heat-transfer, Ansys Steady-State Thermal and Nastran heat-transfer terminology. These describe comparable workflows; the tutorial does not establish equivalent solver implementations or certify a design.
 
+
+## Three verification walkthroughs
+
+These tutorials run locally without an account or hosted AI. Start each in a separate Model: **Do it for me** executes ordinary registered Commands, including the solve. The final **Fit** action only changes the camera; inspect the Result and then choose **Next**. The closing theory explains corresponding Abaqus, Ansys and Nastran terminology and links the original problem source.
+
+### Axisymmetric transient heat
+
+Choose **Tutorials → Axisymmetric transient heat**. A 0.3 m-radius, 0.4 m-long cylinder starts at 0 °C, with its curved wall and both ends held at 1000 °C. The displayed rectangle is the cylinder’s meridian: x means radius and y means axial position. The axis is naturally insulated, with the circumferential weighting supplied by the idealisation. The heat-only Material supplies conductivity, density and heat capacity; elastic stiffness is unnecessary.
+
+After the backward-Euler run to **190 s**, probe temperature at `[0.1 m, 0.3 m, 0 m]`. The independently published NAFEMS/COMSOL target is **186.5 °C**; the cylindrical diffusion series gives **186.4853 °C**. The tutorial’s Δt = 2 s result is **186.2292 °C**. Its finite time step introduces a small integration error, which the automated check verifies decreases on halving Δt. It also checks spatial refinement separately. Inspect the retained frame’s time before comparing: another frame is another physical answer. The guide covers maintained boundary temperatures, and does not implement the source tutorial’s later change to insulated boundaries.
+
+```ts
+const reading = await fem.query.probe({
+  step: 'warm-up', field: 'temperature',
+  at: ['0.1 m', '0.3 m', '0 m'],
+});
+console.log(reading.value); // degC; compare the final 190 s Result with 186.5
+```
+
+### Thermal stress with one-eighth symmetry
+
+Choose **Tutorials → Thermal stress with one-eighth symmetry**. The guide uses the positive octant of a 1 m cube centred at the origin to teach the reduction used in Fusion’s thermal-stress workflow. It does not recreate the vendor’s disk-brake rotor, CAD simplification or yielding assessment.
+
+Three true mirror planes restrain only their normal displacements, leaving thermal expansion free. A 100 K temperature rise combines with 10 MPa pressure on the physical xmax outside face. At `[0.5 m, 0.5 m, 0.5 m]`, expect displacement components **(0.475, 0.5075, 0.5075) mm**, stress σxx = **−10 MPa**, and von Mises = **10 MPa**. The x reaction is **2.5 MN**, the pressure resultant on the modeled quarter-area, rather than the full cube’s outside face.
+
+Removing the pressure from the Step leaves stress-free expansion, with 0.5 mm in every corner component. Clamping an entire mirror face instead of its normal displacement creates restraint stresses and changes that solution. An eighth is valid only when geometry, material directions, temperature and loads all reflect across all three planes.
+
+### LE10: the full-face support variant
+
+Choose **Tutorials → LE10: the full-face support variant**. Build the curved mapped base and sweep a 0.6 m thickness into quadratic solids. This is the independently verified **ESRD full-face-support variant**, with all three outer-face displacement components fixed. Its reference is **σyy(D) = −5.25 MPa**, at the upper inner corner `D = [2 m, 0 m, 0.6 m]`; the tutorial mesh gives about **−5.234 MPa**. Probe stress component **1**, rather than displacement, von Mises or a mid-plane point.
+
+The original NAFEMS LE10 holds vertical displacement only on the outer face’s mid-plane line, and has the different **−5.38 MPa** target. Neither this guide nor the existing full-face example proves that original result. The tutorial explicitly compares support definitions and the 6 × 6 × 2 versus 12 × 12 × 8 quadratic refinements. A coarse mesh accidentally approaching another problem’s reference is not verification.
+
 ## Keep a comparison record
 
 Before changing an example, save a portable Model file or keep it as a separate project. Change one assumption at a time, solve the named Step again, and write down the quantity and units being compared. A tutorial's reference value is tied to its stated geometry, boundary conditions and formulation; it is not a target to force a different model to match.
