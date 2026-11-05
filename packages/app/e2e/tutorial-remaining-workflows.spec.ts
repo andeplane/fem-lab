@@ -1,9 +1,12 @@
 import { expect, test } from './fixtures';
-import axisymmetricHeat from '../tutorials/axisymmetric-transient-heat.json';
-import eighthThermalStress from '../tutorials/eighth-thermal-stress.json';
-import le10 from '../tutorials/le10-full-face.json';
+import { readFileSync } from 'node:fs';
+import type { Tutorial } from '../src/tutorial/types';
 
-for (const tutorial of [axisymmetricHeat, eighthThermalStress, le10]) {
+const tutorials = ['axisymmetric-transient-heat', 'eighth-thermal-stress', 'le10-full-face'].map(id =>
+  JSON.parse(readFileSync(new URL(`../tutorials/${id}.json`, import.meta.url), 'utf8')) as Tutorial,
+);
+
+for (const tutorial of tutorials) {
   test(`@cpu completes ${tutorial.id} through the visible guided runner and checks its solved quantity`, async ({ page }, testInfo) => {
     test.setTimeout(180_000);
     await page.setViewportSize({ width: 1440, height: 1000 });
