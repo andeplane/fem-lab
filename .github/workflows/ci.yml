@@ -130,6 +130,7 @@ jobs:
       - run: npm ci
       - run: node tools/test-units-wasm.mjs
       - run: node tools/test-material-library-wasm.mjs
+      - run: node tools/test-mean-dilatation-replay.mjs
       - name: install and exercise the MCP npm tarball outside the checkout
         run: npm run test:package -w packages/mcp
       - run: node tools/test-transient-replay.mjs
