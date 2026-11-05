@@ -32,6 +32,25 @@ class OperationalDeployment(unittest.TestCase):
         self.assertEqual(policy['conditions'][0]['conditionMatchedLog']['filter'],'resource.type="cloud_run_job" AND resource.labels.job_name="femlab-operations" AND severity>=ERROR')
         self.assertEqual(policy['alertStrategy']['notificationRateLimit']['period'],'900s')
         self.assertTrue(policy['enabled'])
+    def test_signup_policy_is_positive_bounded_and_passed_only_to_operator_job(self):
+        image='europe-west3-docker.pkg.dev/femlab-app/femlab/service@sha256:'+'a'*64
+        for invalid in ['0','-1','1.5','','20private','1000001']:
+            with self.subTest(limit=invalid),self.assertRaises(ValueError):operations.configuration('femlab-app',image,'1',invalid)
+        config=operations.configuration('femlab-app',image,'1','25')
+        self.assertTrue(any('OPERATIONS_SIGNUP_LIMIT=25' in value for value in config['job']))
+    def test_provider_and_signup_have_distinct_machine_policies_and_fixed_source_filters(self):
+        policies=operations.category_policies('femlab-app','projects/femlab-app/notificationChannels/1')
+        self.assertEqual(set(policies),{'provider','signup'})
+        self.assertNotEqual(policies['provider']['displayName'],policies['signup']['displayName'])
+        provider=policies['provider']['conditions'][0]['conditionMatchedLog']['filter']
+        self.assertIn('jsonPayload.event="service-provider-error"',provider)
+        self.assertIn('resource.labels.service_name="femlab-api"',provider)
+        self.assertNotIn('httpRequest.status',provider)
+        signup=policies['signup']['conditions'][0]['conditionMatchedLog']['filter']
+        self.assertIn('jsonPayload.alarms.code="signup-surge"',signup)
+        for desired in policies.values():
+            self.assertEqual(desired['notificationChannels'],['projects/femlab-app/notificationChannels/1'])
+            self.assertEqual(desired['alertStrategy']['notificationRateLimit']['period'],'900s')
     def test_synthetic_drill_writes_logging_and_never_publishes_directly(self):
         class Fake:
             project='femlab-app-staging'

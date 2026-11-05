@@ -19,7 +19,10 @@ const continuation=z.array(z.discriminatedUnion('type',[
 ]));
 export interface CompletionOutput { start(): void; send(event: {type:'chat';event:ChatEvent}|{type:'receipt';receipt:Receipt}|{type:'request';request:RequestStatus}): Promise<void> }
 export interface CompletionCall { authorization?:string; key?:string; body:unknown; signal:AbortSignal }
-export function completionService(deps:{account(authorization:string|undefined):Promise<Account>;ledger:CreditLedger;reservations:Reservations;provider:ProviderGateway}) {
+export type ProviderFailureCode='provider-input-unavailable'|'provider-stream-unavailable'|'provider-rejected'|'provider-metering-missing';
+export interface ProviderFailureEvent {event:'service-provider-error';severity:'ERROR';code:ProviderFailureCode;where:'service.provider'}
+/** Fixed metadata only: the host supplies its logger/clock; financial state never depends on logging. */
+export function completionService(deps:{account(authorization:string|undefined):Promise<Account>;ledger:CreditLedger;reservations:Reservations;provider:ProviderGateway;observe?(event:ProviderFailureEvent):void}) {
   return {
     async run(call:CompletionCall,output:CompletionOutput):Promise<RequestStatus|undefined> {
       const account=await deps.account(call.authorization);
@@ -43,27 +46,42 @@ export function completionService(deps:{account(authorization:string|undefined):
       const prepared=await deps.reservations.prepare({accountId:account.id,key:call.key??'',digest:createHash('sha256').update(JSON.stringify(input)).digest('hex'),turnId:input.turnId,round:input.round,model:input.model,maxOutput:input.maxTokens});
       if(prepared.replay) return prepared;
       const request:ChatRequest={system:input.system,messages:input.messages,tools:input.tools,model:input.model,maxTokens:prepared.maxOutput,signal:call.signal};
-      let dispatched=false, final:Receipt|null=null, sentReceipt=false;
+      let dispatched=false, final:Receipt|null=null, sentReceipt=false, reported=false, inProvider=false, observationFailed=false;
+      const report=(code:ProviderFailureCode)=>{
+        if(reported||call.signal.aborted)return;
+        reported=true;
+        try {deps.observe?.({event:'service-provider-error',severity:'ERROR',code,where:'service.provider'});}catch { /* A logging outage cannot change an authoritative receipt or retained hold. */ }
+      };
+      const observed=async<T,>(work:Promise<T>):Promise<T>=>{try{return await work;}catch(error){observationFailed=true;throw error;}};
       try {
         if(call.signal.aborted) throw new ServiceFailure(499,'request-canceled','This AI request was canceled before generation.','request');
-        const tokens=await deps.provider.countInput(request);
+        let tokens:number;
+        try {tokens=await deps.provider.countInput(request);}catch(error){report('provider-input-unavailable');throw error;}
         await deps.reservations.reserve(account.id,prepared.id,tokens);
         if(call.signal.aborted) throw new ServiceFailure(499,'request-canceled','This AI request was canceled before generation.','request');
         await deps.reservations.dispatch(account.id,prepared.id); dispatched=true;
         output.start(); await output.send({type:'request',request:{...prepared,state:'dispatched'}});
+        inProvider=true;
         for await(const event of deps.provider.chat(request,{
-          providerId:id=>deps.reservations.providerId(account.id,prepared.id,id),
-          usage:async usage=>{ final=await deps.reservations.settle(account.id,prepared.id,usage); },
-          rejected:async()=>{final=await deps.reservations.rejected(account.id,prepared.id);},
+          providerId:id=>observed(deps.reservations.providerId(account.id,prepared.id,id)),
+          usage:async usage=>{ final=await observed(deps.reservations.settle(account.id,prepared.id,usage)); },
+          rejected:async()=>{final=await observed(deps.reservations.rejected(account.id,prepared.id));report('provider-rejected');},
         })) {
+          inProvider=false;
+          if(event.type==='error'&&!final)report('provider-stream-unavailable');
           if(event.type==='done'&&!final) {
-            await output.send({type:'chat',event:{type:'error',message:'The provider did not report usage. Your request is pending confirmation.'}}); continue;
+            report('provider-metering-missing');
+            await output.send({type:'chat',event:{type:'error',message:'The provider did not report usage. Your request is pending confirmation.'}}); inProvider=true;continue;
           }
           if(final&&!sentReceipt) { await output.send({type:'receipt',receipt:final}); sentReceipt=true; }
           await output.send({type:'chat',event});
+          inProvider=true;
         }
+        inProvider=false;
+        if(!final)report('provider-metering-missing');
         if(final&&!sentReceipt) await output.send({type:'receipt',receipt:final});
       } catch(error) {
+        if(inProvider&&!observationFailed)report('provider-stream-unavailable');
         if(!dispatched) throw error instanceof ServiceFailure ? error : new ServiceFailure(503,'provider-unavailable','AI input counting is unavailable. Try again later.','provider');
         if(!call.signal.aborted) await output.send({type:'chat',event:{type:'error',message:'This AI request was interrupted. Refresh your account to check its usage status.'}});
       } finally {

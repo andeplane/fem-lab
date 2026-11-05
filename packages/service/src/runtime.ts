@@ -81,7 +81,7 @@ if (process.argv.includes('--migrate')) {
   const holds=pool?reservations(pool,now,randomUUID,fingerprint):undefined;
   const freeAllowance=pool&&readAccount?monthlyFreeAllowance(pool,readAccount,now,randomUUID,fingerprint):undefined;
   const provider=process.env.OPENAI_API_KEY?openaiGateway(new OpenAI({apiKey:process.env.OPENAI_API_KEY,baseURL:'https://api.openai.com/v1',maxRetries:0,timeout:900000})):undefined;
-  const completions=readAccount&&ledger&&holds&&provider?completionService({account:readAccount,ledger,reservations:holds,provider}):undefined;
+  const completions=readAccount&&ledger&&holds&&provider?completionService({account:readAccount,ledger,reservations:holds,provider,observe:event=>console.log(JSON.stringify({...event,at:now().toISOString()}))}):undefined;
   const account = readAccount && ledger ? async (authorization: string | undefined,creditUnit?:PublicCreditUnit) => {
     const owner = await readAccount(authorization);
     const status=await payments?.status(owner.id);

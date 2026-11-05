@@ -5,6 +5,7 @@ export interface OperationalSnapshot {
   event: 'service-operations'; severity: 'INFO' | 'ERROR'; at: string;
   status: 'ready' | 'paused' | 'action-required'; admissionEnabled: boolean;
   requests: { active: string; pendingMetering: string; overdue: string; companyLossesToday: string };
+  signups: {recent:string;windowSeconds:1200;limit:string};
   webhooks: { queued: string; oldestSeconds: number | null; overdue: string };
   exposure: Record<'daily' | 'monthly' | 'freeDaily' | 'freeMonthly' | 'uncertain' | 'concurrent', { value: string; limit: string }>;
   alarms: OperationalAlarm[];
@@ -14,7 +15,8 @@ export interface OperationalSnapshot {
  * Counts and supplier microdollars remain exact decimal strings; no owner/vendor data leaves SQL.
  * Webhooks get two ten-minute recovery intervals before they become overdue.
  */
-export async function operationalSnapshot(sql: Sql, now: () => Date): Promise<OperationalSnapshot> {
+export async function operationalSnapshot(sql: Sql, now: () => Date, signupLimit=20n): Promise<OperationalSnapshot> {
+  if(signupLimit<1n)throw new Error('Signup alarm threshold must be positive.');
   const clock = now();
   const day = new Date(Date.UTC(clock.getUTCFullYear(), clock.getUTCMonth(), clock.getUTCDate()));
   const month = new Date(Date.UTC(clock.getUTCFullYear(), clock.getUTCMonth(), 1));
@@ -32,14 +34,16 @@ export async function operationalSnapshot(sql: Sql, now: () => Date): Promise<Op
       COALESCE(sum(supplier_micros) FILTER (WHERE created_at >= $3 AND free_pool),0) AS free_month,
       count(*) FILTER (WHERE created_at >= $2 AND company_loss_micros > 0) AS losses
     FROM usage_receipts WHERE created_at >= $3
+  ), signups AS (
+    SELECT count(*) AS recent FROM accounts WHERE created_at >= $4 AND created_at <= $1
   ), webhooks AS (
     SELECT count(*) AS queued, min(received_at) AS oldest,
       count(*) FILTER (WHERE received_at <= $4) AS overdue
     FROM billing_inbox WHERE state='queued'
   ) SELECT l.enabled,l.daily_micros,l.monthly_micros,l.free_daily_micros,l.free_monthly_micros,l.uncertain_micros,l.concurrent,
     r.active,r.pending,r.overdue,r.held,r.free_held,s.day,s.month,s.free_day,s.free_month,s.losses,
-    w.queued,w.oldest,w.overdue AS webhook_overdue
-    FROM ai_limits l CROSS JOIN requests r CROSS JOIN spent s CROSS JOIN webhooks w WHERE l.id=true`,
+    w.queued,w.oldest,w.overdue AS webhook_overdue, a.recent AS signups
+    FROM ai_limits l CROSS JOIN requests r CROSS JOIN spent s CROSS JOIN webhooks w CROSS JOIN signups a WHERE l.id=true`,
   [clock, day, month, new Date(clock.getTime() - 1_200_000)])).rows[0];
   if (!row || typeof row.enabled !== 'boolean') throw new Error('Operational configuration is unavailable.');
   const count = (name: string) => {
@@ -58,6 +62,7 @@ export async function operationalSnapshot(sql: Sql, now: () => Date): Promise<Op
   };
   const alarms: OperationalAlarm[] = [];
   const alarm = (code: string, cause: string, suggestion: string) => alarms.push({ code, cause, where: 'service.operations', suggestion });
+  if(count('signups')>=signupLimit)alarm('signup-surge','New accounts reached the configured twenty-minute review threshold.','Review signup traffic and identity controls; this alert never approves an allowance or changes admissions.');
   if (count('pending') > 0n) alarm('metering-unknown', 'Dispatched usage is awaiting confirmation.', 'Inspect usage recovery; never release an uncertain hold manually.');
   if (count('overdue') > 0n) alarm('settlement-overdue', 'An active request has reached its recovery deadline.', 'Inspect the scheduled recovery execution and rerun node dist/main.mjs --recover if safe.');
   if (count('losses') > 0n) alarm('metering-company-loss', 'Confirmed overage or uncertain usage created a positive company loss today.', 'Review usage settlement and recovery before admitting further supplier exposure.');
@@ -76,6 +81,7 @@ export async function operationalSnapshot(sql: Sql, now: () => Date): Promise<Op
     event: 'service-operations', severity: alarms.length ? 'ERROR' : 'INFO', at: clock.toISOString(),
     status: alarms.length ? 'action-required' : globallyPaused ? 'paused' : 'ready', admissionEnabled: row.enabled,
     requests: { active: count('active').toString(), pendingMetering: count('pending').toString(), overdue: count('overdue').toString(), companyLossesToday: count('losses').toString() },
+    signups:{recent:count('signups').toString(),windowSeconds:1200,limit:signupLimit.toString()},
     webhooks: { queued: count('queued').toString(), oldestSeconds: oldest === null ? null : Math.max(0, Math.floor((clock.getTime() - oldest.getTime()) / 1000)), overdue: count('webhook_overdue').toString() },
     exposure, alarms,
   };

@@ -10,7 +10,9 @@ if (process.argv.includes('--operations')) {
   } else {
     const pool = new pg.Pool({max:1,connectionTimeoutMillis:5000,idleTimeoutMillis:1000,statement_timeout:5000,options:(process.env.PGOPTIONS??'')+' -c statement_timeout=5000 -c default_transaction_read_only=on'});
     try {
-      const snapshot=await operationalSnapshot(pool,()=>new Date());
+      const limit=process.env.OPERATIONS_SIGNUP_LIMIT??'20';
+      if(!/^[1-9][0-9]*$/.test(limit)||BigInt(limit)>1_000_000n)throw new Error('Invalid signup policy.');
+      const snapshot=await operationalSnapshot(pool,()=>new Date(),BigInt(limit));
       process.stdout.write(JSON.stringify(snapshot)+'\n');
       process.exitCode=snapshot.alarms.length?1:0;
     } catch {

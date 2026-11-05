@@ -31,7 +31,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('operator alarms on real Postgre
     finally {connection.release();}
     await admin.query(`CREATE ROLE ${role} NOLOGIN`);
     await admin.query(`GRANT USAGE ON SCHEMA ${schema} TO ${role}`);
-    await admin.query(`GRANT SELECT ON ${schema}.ai_limits,${schema}.ai_requests,${schema}.usage_receipts,${schema}.billing_inbox TO ${role}`);
+    await admin.query(`GRANT SELECT ON ${schema}.accounts,${schema}.ai_limits,${schema}.ai_requests,${schema}.usage_receipts,${schema}.billing_inbox TO ${role}`);
     const build = spawnSync(process.execPath,['build.mjs'],{cwd:directory,encoding:'utf8',timeout:30000});
     expect(build.status,build.stderr).toBe(0);
   },45000);
@@ -79,6 +79,24 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('operator alarms on real Postgre
     expect(snapshot).toMatchObject({status:'paused',admissionEnabled:false,severity:'INFO',alarms:[],requests:{active:'0',overdue:'0'},webhooks:{queued:'0',oldestSeconds:null}});
     await expect(reader.query('UPDATE ai_limits SET enabled=true')).rejects.toThrow();
     const run = cli();expect(run.status,run.stderr).toBe(0);expect(run.json).toMatchObject({status:'paused',alarms:[]});
+  });
+  it('gates the exact signup threshold on a twenty-minute window without exposing identities',async()=>{
+    const add=async(id:string,created:Date)=>db.query('INSERT INTO accounts(id,firebase_uid,email,created_at,updated_at) VALUES($1,$2,$3,$4,$4)',[randomUUID(),id,`${id}@example.invalid`,created]);
+    for(let i=0;i<18;i++)await add(`private-signup-${i}`,new Date(clock.getTime()-1000));
+    await add('private-outside',new Date(clock.getTime()-1_200_001));await add('private-future',new Date(clock.getTime()+1));
+    const below=await operationalSnapshot(reader,now);expect(below.signups).toEqual({recent:'19',windowSeconds:1200,limit:'20'});expect(below.alarms).toEqual([]);
+    await add('private-boundary',new Date(clock.getTime()-1_200_000));
+    const at=await operationalSnapshot(reader,now);expect(at.signups).toEqual({recent:'20',windowSeconds:1200,limit:'20'});expect(at.alarms.map(a=>a.code)).toEqual(['signup-surge']);
+    expect(JSON.stringify(at)).not.toContain('private');
+    expect((await operationalSnapshot(otherProcess,now,21n)).alarms).toEqual([]);
+    await expect(operationalSnapshot(reader,now,0n)).rejects.toThrow('positive');
+  });
+  it('applies an explicit positive operator signup policy and rejects malformed policy without SDK startup',async()=>{
+    await db.query('UPDATE accounts SET created_at=clock_timestamp(),updated_at=clock_timestamp()');
+    const threshold=cli(['--operations'],{OPERATIONS_SIGNUP_LIMIT:'1'});expect(threshold.status).toBe(1);expect(threshold.json).toMatchObject({signups:{recent:'1',limit:'1'},alarms:[{code:'signup-surge'}]});
+    for(const limit of ['0','-1','1.5','20private','','1000001']){
+      const result=cli(['--operations'],{OPERATIONS_SIGNUP_LIMIT:limit});expect(result.status).toBe(2);expect(result.json).toMatchObject({code:'operations-unavailable'});expect(result.stdout).not.toContain('20private');
+    }
   });
   it('observes cross-process state, keeps held exposure across UTC rollover and counts company cost once',async () => {
     await request('reserved','3','free',new Date('2026-10-30T23:00:00Z'));
