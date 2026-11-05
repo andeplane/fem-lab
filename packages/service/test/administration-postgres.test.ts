@@ -61,11 +61,13 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('operator actions on real Postgr
  });
  it('preserves exact arithmetic above the JavaScript safe-integer boundary',async()=>{
   const {owner}=await fixture(),grantId=randomUUID();
-  await db.query(`INSERT INTO credit_grants(id,account_id,source,plan,tariff_version,amount,starts_at,expires_at,created_at) VALUES($1,$2,$3,'plus','2026-10-14.v1','9007199254740993',$4,$5,$4)`,[grantId,owner.id,randomUUID(),clock,new Date('2026-12-01T00:00:00Z')]);
-  const input={accountId:owner.id,grantId,idempotencyId:randomUUID(),actorRef,reasonRef:'exact-integer',subcredits:'9007199254740992'};
-  expect(await debitAdjustment(db,input,now)).toMatchObject({debitedSubcredits:'9007199254740992'});
-  expect((await db.query('SELECT amount::text FROM credit_entries WHERE id=$1',[input.idempotencyId])).rows[0].amount).toBe('-9007199254740992');
-  await expect(debitAdjustment(db,{...input,idempotencyId:randomUUID(),subcredits:'2'},now)).rejects.toMatchObject({code:'adjustment-exceeds-available'});
+  await db.query(`INSERT INTO credit_grants(id,account_id,source,plan,tariff_version,amount,starts_at,expires_at,created_at) VALUES($1,$2,$3,'plus','2026-10-14.v1','9007199254740995',$4,$5,$4)`,[grantId,owner.id,randomUUID(),clock,new Date('2026-12-01T00:00:00Z')]);
+  const input={accountId:owner.id,grantId,idempotencyId:randomUUID(),actorRef,reasonRef:'exact-integer',subcredits:'9007199254740993'};
+  expect(await debitAdjustment(db,input,now)).toMatchObject({debitedSubcredits:'9007199254740993'});
+  expect((await db.query('SELECT amount::text FROM credit_entries WHERE id=$1',[input.idempotencyId])).rows[0].amount).toBe('-9007199254740993');
+  await expect(debitAdjustment(db,{...input,idempotencyId:randomUUID(),subcredits:'3'},now)).rejects.toMatchObject({code:'adjustment-exceeds-available'});
+  expect(await debitAdjustment(db,{...input,idempotencyId:randomUUID(),subcredits:'2'},now)).toMatchObject({debitedSubcredits:'2'});
+  await expect(debitAdjustment(db,{...input,idempotencyId:randomUUID(),subcredits:'1'},now)).rejects.toMatchObject({code:'adjustment-exceeds-available'});
  });
  it('rejects unavailable accounts, foreign, expired and future grants',async()=>{
   const {input}=await fixture(),other=await fixture();
