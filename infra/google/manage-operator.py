@@ -78,10 +78,10 @@ def main():
         result=subprocess.run(argv,cwd=a.source.resolve(),env=env,text=True,capture_output=True,timeout=60)
         output=json.loads(result.stdout)
         if output.get('actorRef')!=actor or output.get('operationId')!=a.operation_id.lower() or output.get('action')!=a.action:raise RuntimeError('The operator receipt was invalid.')
-        save({**base,**{key:output[key] for key in ['result','code','cause','details'] if key in output}})
+        save({**base,**{key:output[key] for key in ['result','code','cause','details','where','suggestion'] if key in output}})
         return result.returncode
     except Exception:
-        save({**base,'code':'operator-action-unavailable','cause':'The action did not fully complete. Private credentials and diagnostics are suppressed.'});return 1
+        save({**base,'code':'operator-action-unavailable','cause':'The action did not fully complete. Private credentials and diagnostics are suppressed.','where':'operator.launcher','suggestion':'Rerun the same operator command with --dry-run to verify authenticated access.'});return 1
 
 
 if __name__=='__main__':sys.exit(main())

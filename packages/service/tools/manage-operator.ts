@@ -26,5 +26,5 @@ try{
   }
   process.stdout.write(JSON.stringify({event:'operator-action',action,operationId,actorRef,reasonRef,result})+'\n');
 }catch(error){
-  process.stdout.write(JSON.stringify({event:'operator-action',action,operationId,actorRef,reasonRef,code:error instanceof ServiceFailure?error.code:'operator-action-unavailable',cause:'The operator action did not fully complete. Private diagnostics are suppressed.',...(error instanceof ServiceFailure&&error.details?{details:error.details}:{})})+'\n');process.exitCode=1;
+  process.stdout.write(JSON.stringify({event:'operator-action',action,operationId,actorRef,reasonRef,code:error instanceof ServiceFailure?error.code:'operator-action-unavailable',cause:'The operator action did not fully complete. Private diagnostics are suppressed.',where:error instanceof ServiceFailure?error.where:'operator.action',suggestion:'Inspect the private operator receipt before retrying the same operation UUID.',...(error instanceof ServiceFailure&&error.details?{details:error.details}:{})})+'\n');process.exitCode=1;
 }finally{await db.end();}
