@@ -34,7 +34,7 @@ def main():
         if not re.fullmatch(uuid,a.grant_id or '') or not re.fullmatch(r'[1-9][0-9]{0,18}',a.subcredits or '') or int(a.subcredits)>9223372036854775807:p.error('Use a grant UUID and positive exact integer subcredits within signed bigint.')
     elif a.grant_id or a.subcredits:p.error('Debit fields are accepted only for a debit action.')
     project='femlab-app-staging' if a.environment=='staging' else 'femlab-app'
-    clean_env={k:v for k,v in os.environ.items() if k not in ['CLOUDSDK_AUTH_ACCESS_TOKEN','CLOUDSDK_AUTH_ACCESS_TOKEN_FILE','GOOGLE_APPLICATION_CREDENTIALS','CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE','STRIPE_SECRET_KEY','STRIPE_WEBHOOK_SECRET','OPENAI_API_KEY','FREE_ELIGIBILITY_HMAC_KEY','FEMLAB_OPERATOR_ACCESS_TOKEN']}
+    clean_env={k:v for k,v in os.environ.items() if k not in ['CLOUDSDK_AUTH_ACCESS_TOKEN','CLOUDSDK_AUTH_ACCESS_TOKEN_FILE','GOOGLE_APPLICATION_CREDENTIALS','CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE','STRIPE_SECRET_KEY','STRIPE_WEBHOOK_SECRET','OPENAI_API_KEY','FREE_ELIGIBILITY_HMAC_KEY','FEMLAB_OPERATOR_ACCESS_TOKEN','FIREBASE_AUTH_EMULATOR_HOST']}
     def g(*args):
         result=subprocess.run(['gcloud',*args,'--project='+project,'--account='+a.account,'--quiet'],env=clean_env,text=True,capture_output=True)
         if result.returncode:raise RuntimeError('Authenticated cloud operation unavailable.')
@@ -47,6 +47,8 @@ def main():
         print(json.dumps(receipt))
     base={'event':'operator-action','action':a.action,'environment':a.environment,'operationId':a.operation_id.lower(),'reasonRef':a.reason_ref}
     try:
+        if 'FIREBASE_AUTH_EMULATOR_HOST' in os.environ:
+            save({**base,'code':'operator-emulator-forbidden','cause':'Unset FIREBASE_AUTH_EMULATOR_HOST before selecting a real operator environment.','where':'operator.configuration','suggestion':'Unset FIREBASE_AUTH_EMULATOR_HOST and rerun the same command with --dry-run.'});return 1
         # A source account label must not silently name an impersonated or injected principal.
         impersonation=g('config','get-value','auth/impersonate_service_account')
         if impersonation not in ('','(unset)'):raise RuntimeError('Select a directly authenticated principal.')

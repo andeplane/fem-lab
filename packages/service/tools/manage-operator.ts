@@ -10,6 +10,7 @@ const operationId=rawOperationId?.toLowerCase();
 const actorRef=process.env.FEMLAB_OPERATOR_ACTOR_REF??'';
 const db=new pg.Pool({max:1,connectionTimeoutMillis:5000,statement_timeout:5000});
 try{
+  if(Object.hasOwn(process.env,'FIREBASE_AUTH_EMULATOR_HOST'))throw new ServiceFailure(400,'operator-emulator-forbidden','Emulator routing is forbidden for real operator actions.','operator.configuration','Unset FIREBASE_AUTH_EMULATOR_HOST and use the authenticated operator launcher.');
   if(!['debit','suspend'].includes(action??'')||!accountId||!operationId||!reasonRef||!/^[-a-zA-Z0-9._]{1,64}$/.test(reasonRef)||!/^[a-f0-9]{64}$/.test(actorRef)||!(/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i).test(operationId))throw new Error('Invalid authenticated operator input.');
   let result:unknown;
   if(action==='debit'){

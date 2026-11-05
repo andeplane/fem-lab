@@ -85,7 +85,9 @@ operational acceptance boundaries are in the
 
 Service operators use `infra/google/manage-operator.py` with their existing Google
 Cloud principal, the selected environment and a reviewed checkout. The launcher
-verifies that authenticated principal and the required project permissions. A
+verifies that authenticated principal and the required project permissions. Unset
+`FIREBASE_AUTH_EMULATOR_HOST` first; the launcher and direct CLI reject emulator
+routing for these real-environment actions. A
 private receipt records the operation UUID, actor reference, non-personal case
 reference and outcome. Begin with an authenticated dry run:
 

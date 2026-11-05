@@ -10,7 +10,9 @@ reference and private receipt path. For account actions it also requires the tar
 account UUID and the port of an operator-owned Cloud SQL proxy. It obtains a
 short-lived OAuth token through the selected gcloud account, verifies the token's
 email through Google's authenticated userinfo endpoint, rejects impersonation,
-and checks the project's required IAM permissions. The actor reference recorded
+and checks the project's required IAM permissions. Both launcher and direct CLI
+reject an inherited `FIREBASE_AUTH_EMULATOR_HOST` before credentials or Auth setup:
+a shell configured for local emulation cannot report a real-project suspension. The actor reference recorded
 in financial entries is SHA-256 of that verified principal, never an actor string
 supplied by the account API caller.
 
