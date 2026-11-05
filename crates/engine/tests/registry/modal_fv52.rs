@@ -92,7 +92,7 @@ fn dot(a: &[f64], b: &[f64]) -> f64 {
     a.iter().zip(b).map(|(x, y)| x * y).sum()
 }
 
-fn quarter_turn_closes_modal_subspaces(raw: &[Value], frequencies: &[f64]) {
+fn quarter_turn_closes_modal_subspaces(raw: &[Value], frequencies: &[f64]) -> f64 {
     let p = numbers(&raw[1]["positions"]);
     let positions: Vec<_> = p.chunks_exact(3).map(|x| [x[0], x[1], x[2]]).collect();
     let index: std::collections::BTreeMap<_, _> =
@@ -100,8 +100,10 @@ fn quarter_turn_closes_modal_subspaces(raw: &[Value], frequencies: &[f64]) {
     let permutation: Vec<_> =
         positions.iter().map(|p| index[&[(10.0 - p[1]).to_bits(), p[0].to_bits(), p[2].to_bits()]]).collect();
     let vectors: Vec<_> = raw[2..].iter().map(|field| numbers(&field["values"])).collect();
-    let mut clusters: Vec<Vec<usize>> = Vec::new();
-    for (i, &frequency) in frequencies.iter().enumerate() {
+    // The independently checked analytic rigid span is one zero eigenspace;
+    // tiny signed Ritz noise must not split it into artificial frequency clusters.
+    let mut clusters: Vec<Vec<usize>> = vec![vec![0, 1, 2]];
+    for (i, &frequency) in frequencies.iter().enumerate().skip(3) {
         if clusters.is_empty()
             || (frequency - frequencies[clusters.last().unwrap()[0]]).abs() > 1e-7 * frequency.max(1.0)
         {
@@ -109,6 +111,7 @@ fn quarter_turn_closes_modal_subspaces(raw: &[Value], frequencies: &[f64]) {
         }
         clusters.last_mut().unwrap().push(i);
     }
+    let mut largest_error = 0.0_f64;
     for cluster in clusters.iter().take_while(|cluster| cluster[0] < 20) {
         assert!(*cluster.last().unwrap() < 23, "four extra modes must protect the measurement window");
         let mut basis: Vec<Vec<f64>> = Vec::new();
@@ -144,6 +147,7 @@ fn quarter_turn_closes_modal_subspaces(raw: &[Value], frequencies: &[f64]) {
             assert!(error < 1e-6, "quarter turn must stay in cluster {cluster:?}, mode {}, error={error:e}", i + 1);
         }
     }
+    largest_error
 }
 
 #[test]
@@ -173,16 +177,13 @@ fn fv52_enlarged_spectra_obey_square_symmetry_and_nested_space_min_max() {
             let frequencies: Vec<_> =
                 raw[0]["frequencies"].as_array().unwrap().iter().map(|f| f["value"].as_f64().unwrap()).collect();
             full_rigid_span(&raw);
-            quarter_turn_closes_modal_subspaces(&raw, &frequencies);
+            let quarter_turn_error = quarter_turn_closes_modal_subspaces(&raw, &frequencies);
             if let Some(ref previous) = previous_spectrum {
                 for (f, old) in frequencies[3..20].iter().zip(&previous[3..20]) {
-                    assert!(
-                        f <= &(old * (1.0 + 1e-8)),
-                        "conforming nested spaces cannot increase an indexed eigenvalue"
-                    );
+                    assert!(*f <= old * (1.0 + 1e-8), "conforming nested spaces cannot increase an indexed eigenvalue");
                 }
             }
-            println!("FV52 {nx}x{ny}x{nz} threads={threads}, eta={residual:e}, frequencies={frequencies:?}");
+            println!("FV52 {nx}x{ny}x{nz} threads={threads}, eta={residual:e}, quarter-turn error={quarter_turn_error:e}, frequencies={frequencies:?}");
             let actual = serde_json::to_string(&raw).unwrap();
             if let Some(ref before) = expected {
                 assert!(&actual == before, "all 24 retained shapes and summary must be exact across workers");

@@ -31,8 +31,10 @@ def rotation_subspace_errors(raw):
     permutation = [index[(10 - y, x, z)] for x, y, z in positions]
     frequencies = [f["value"] for f in raw[2]["frequencies"]]
     vectors = [field["values"] for field in raw[8:]]
-    clusters = []
-    for i, frequency in enumerate(frequencies):
+    # Rigid-span projection is checked independently before this function.
+    # Near-zero Ritz noise does not split the physical zero eigenspace.
+    clusters = [[0, 1, 2]]
+    for i, frequency in enumerate(frequencies[3:], 3):
         if not clusters or abs(frequency - frequencies[clusters[-1][0]]) > 1e-7 * max(1, frequency):
             clusters.append([])
         clusters[-1].append(i)
