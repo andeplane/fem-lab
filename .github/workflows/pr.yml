@@ -164,24 +164,6 @@ jobs:
       - run: chmod +x tools/project-io/*/femlab-project-io
       - run: npm ci
       - run: ${{ matrix.run }}
-      # Temporary #86 acceptance: removed after exact-source Chromium evidence is recorded.
-      - name: verify the three guided workflows in Chromium
-        if: matrix.slice == 'app build'
-        run: |
-          npx playwright install --with-deps chromium
-          FEMLAB_AI_MODE=development npm run build -w packages/app
-          npm run size
-          PW_PORT=4986 npm run e2e -w packages/app -- --project=cpu --retries=0 e2e/tutorial.spec.ts e2e/tutorial-remaining-workflows.spec.ts
-          PW_PORT=4986 npm run e2e -w packages/app -- --project=sw --retries=0 --grep "cold Pages bootstrap"
-      - uses: actions/upload-artifact@v4
-        if: always() && matrix.slice == 'app build'
-        with:
-          name: tutorial-86-acceptance
-          retention-days: 3
-          path: |
-            packages/app/test-results
-            packages/app/playwright-report
-            packages/app/dist
 
   # The one required check. Skipped Rust jobs (no Rust change) pass; failed or cancelled ones fail.
   gate:

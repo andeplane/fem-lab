@@ -93,6 +93,9 @@ Three true mirror planes restrain only their normal displacements, leaving therm
 
 Removing the pressure from the Step leaves stress-free expansion, with 0.5 mm in every corner component. Clamping an entire mirror face instead of its normal displacement creates restraint stresses and changes that solution. An eighth is valid only when geometry, material directions, temperature and loads all reflect across all three planes.
 
+
+For this validated **heating-only** control, floating-point reaction residuals can be about 10⁻⁷ N while the true mechanical actions are zero. The reported relative balance can then divide roundoff by roundoff and show a misleading failure ([known issue #842](https://github.com/andeplane/fem-lab/issues/842)). Inspect the absolute residual alongside the independent stress/displacement solution for this control. The pressure-loaded tutorial has a nonzero physical force scale and retains its normal force-balance check; this limitation does not justify disregarding imbalance in a loaded Model.
+
 ### LE10: the full-face support variant
 
 Choose **Tutorials → LE10: the full-face support variant**. Build the curved mapped base and sweep a 0.6 m thickness into quadratic solids. This is the independently verified **ESRD full-face-support variant**, with all three outer-face displacement components fixed. Its reference is **σyy(D) = −5.25 MPa**, at the upper inner corner `D = [2 m, 0 m, 0.6 m]`; the tutorial mesh gives about **−5.234 MPa**. Probe stress component **1**, rather than displacement, von Mises or a mid-plane point.

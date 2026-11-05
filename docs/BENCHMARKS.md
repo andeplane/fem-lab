@@ -918,6 +918,9 @@ where `jn` are zeros of J0 and α = 52/(7850 × 460) m²/s. Eight radial roots a
 
 E11's free-heating control removes only pressure: all corner components become 0.5 mm and von Mises is below 1e−7 MPa. Clamping the x mirror face in all components instead gives 63.8825 MPa at the central probe (gated above 20 MPa), distinguishing a real symmetry condition from an artificial restraint. This is an independently solvable cube, not a claim to reproduce Autodesk's disk-brake-rotor CAD or yield assessment.
 
+
+The E11 heating-only control does not gate a relative zero-action balance: physical applied forces vanish and absolute support residuals are about 10⁻⁷ N, while the current normalization divides those roundoff residuals by a roundoff scale and reports balance ≈ 0.237. [#842](https://github.com/andeplane/fem-lab/issues/842) tracks that diagnostic separately. Raw residuals remain unrounded, and the loaded E11 force-balance gate remains unchanged.
+
 The same tutorial test independently reruns D1's established full-face LE10 coarse/fine meshes and requires decreasing stress-reference error (coarse > 4%, fine < 2%, improvement > 10×) and force balance. Its closing explanation retains the original NAFEMS mid-plane-line-support distinction and −5.38 MPa reference; the guided walkthrough does not relabel the full-face variant as the original.
 
 **E9 uses a one-metre 100 × 100 mm bar**, held at x = 0, with E = 1 GPa,
