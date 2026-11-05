@@ -18582,7 +18582,7 @@ fn mean_dilatation_quad4_has_the_known_first_order_strain_consistency_rate() {
     let kind = ElementKind::Quad4;
     let el = element_for(kind);
     let mat = steel();
-    let mut previous = None;
+    let mut previous: Option<f64> = None;
     for n in [2, 4, 8] {
         let h = 1.0 / f64::from(n);
         let mut error2 = 0.0;
