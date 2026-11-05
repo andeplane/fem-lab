@@ -242,10 +242,10 @@ jobs:
         run: npm run e2e -w packages/app -- python-notebook.spec.ts --project=cpu
         env:
           PW_PORT: 4310
-      - if: failure() && matrix.slice == 'app build' && needs.changes.outputs.python == 'true'
+      - if: always() && matrix.slice == 'app build' && needs.changes.outputs.python == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: python-browser-failure
+          name: python-browser-evidence
           path: packages/app/test-results
 
   # The one required check. Skipped Rust jobs (no Rust change) pass; failed or cancelled ones fail.

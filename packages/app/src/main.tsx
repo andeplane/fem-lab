@@ -596,7 +596,8 @@ class Producer {
         current.results.invalidateTransient();
         current.comparison.pausePlayback();
         await current.refresh();
-        await current.results.onAck(ack);
+        const notebook = [...scriptJobs].some(job => job.producer === this && job.runner instanceof PythonHost);
+        await current.results.onAck(ack, !notebook);
         current.comparison.resume();
       }
       // Cancellation can finish by recovering into a fresh same-owner session without

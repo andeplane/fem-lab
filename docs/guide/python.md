@@ -9,7 +9,8 @@ supported solver limits are unchanged.
 Open the **Script** panel, select **Python notebook**, edit cells and press **Run all cells**.
 A line beginning `# %%` starts another visible cell. Cells run from top to bottom in one fresh
 Python environment. `fem` is an asynchronous generated client; use `await` for engine calls.
-`numpy` is pre-imported as `np`. Import `matplotlib.pyplot` to produce plots next to the cells.
+`numpy` is pre-imported as `np`. A notebook solve updates the 3D contours while keeping the
+selected bottom tab, so cells, console and plots remain available. Import `matplotlib.pyplot` to produce plots next to the cells.
 The optional pinned Pyodide distribution and numpy download only on the first Python run;
 matplotlib downloads when imported. Network access to the distribution is required on a cold
 browser cache. Normal application startup has no Python download.
@@ -26,7 +27,9 @@ plt.plot(np.sort(field['values']))
 
 The example's `conduct` Step must already have a solved thermal Result. `query_field` returns
 scientific f64 values in SI units, independently of display units, with its retained Result
-identity and component count. Its values are a numpy view of the transferred numeric buffer.
+identity and component count. Its f64 buffer is transferred to the Python Worker, copied into Pyodide memory and
+viewed by numpy through a memoryview, following the [Pyodide buffer conversion](https://pyodide.org/en/0.29.3/usage/type-conversions.html#using-javascript-typed-arrays-from-python).
+There is no additional JSON encoding or renderer f32 conversion at this analysis boundary.
 The Script run has a maximum 30000 ms execution deadline after a separate maximum 120000 ms
 runtime startup deadline. Source is limited to 64000 characters; console plus plot output is
 limited to 8 MiB. Each browser registry request is limited to 1 MiB. Stop terminates the disposable worker; already-applied Commands stay in the

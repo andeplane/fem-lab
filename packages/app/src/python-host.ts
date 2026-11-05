@@ -53,7 +53,7 @@ export class PythonHost {
             if (!active) return;
             const data = value as Record<string, unknown>;
             // Preserve scientific f64 fields across the worker boundary without JSON encoding
-            // or renderer f32 conversion. Python receives a numpy view of this transferred buffer.
+            // or renderer f32 conversion. Pyodide copies binary data into its heap for numpy.
             if (name === 'query.field' && Array.isArray(data?.values)) {
               const values = Float64Array.from(data.values as number[]);
               worker.postMessage({ kind: 'reply', id: msg.id, value: { ...data, values } }, [values.buffer]);

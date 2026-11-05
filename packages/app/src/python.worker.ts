@@ -41,12 +41,12 @@ self.onmessage = async (event: MessageEvent<{ kind: string; id?: number; value?:
 from _femlab_bridge import rpc
 async def _registry(op, payload):
     value = await rpc(op, payload)
+    result = value.to_py() if hasattr(value, 'to_py') else value
     if op == 'query' and payload.get('query') == 'query.field':
-        # to_py preserves typed buffers as memoryviews; numpy is a view, not a JSON list.
-        result = value.to_py()
+        # to_py copies the typed buffer into Python memory; numpy views that memoryview.
         result['values'] = np.asarray(result['values'])
         return result
-    return value.to_py()
+    return result
 fem = femlab.AsyncClient(_registry)
 `);
       post('ready');

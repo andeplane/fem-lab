@@ -28,7 +28,8 @@ TypeScript-only tool schema and runtime admission check; it cannot request the P
 runtime, and nested script execution remains refused by the QuickJS host. Downloaded project source
 never runs automatically on open. Credentials/account/billing/script host operations are
 not admitted through the Python bridge. Scientific field values travel as transferred f64
-typed buffers, not renderer f32 buffers or an additional JSON serialization.
+typed buffers. Pyodide copies that binary data into its own WASM heap and numpy views the
+Python memoryview; neither renderer f32 conversion nor additional JSON encoding is used.
 
 The old Phase Py table proposed recording `script.run` in the engine Journal. That would
 make headless replay depend on a Python runtime and conflicts with ADR0004 and the
