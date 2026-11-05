@@ -770,14 +770,16 @@ pub(crate) fn planned_cost(
         procedure::Step::HeatTransient { dt, t_end, output_every, solver, .. } => {
             let (steps, _) = procedure::time_grid(*dt, *t_end)?;
             let base = crate::solve::cost_estimate(mesh, 1, solver.solver);
-            // Linear heat: original five plus film, evaluated, previous/rate and capacity_rate.
+            // Linear recovery: film, t, evaluated, capacity_rate and flow, plus both
+            // three-component padded Temperature/Reaction fields = eleven nodal vectors.
+            // The old/rate and iteration scratch have been dropped before this peak.
             // Radiation retains the conservative thirteen-vector allowance. Contact reuses
             // film RHS for the original load, drops it after transposition, and drops that
             // transformed load before expansion: seven outer + old radiation + next iterate
             // + reduced RHS/solution + replacement = twelve at that peak, within thirteen.
             // Reduction and matrix/factor storage (including contact fill) remain excluded.
             let p = explicit_problem.expect("a transient heat cost plan needs its resolved Problem");
-            let work = if procedure::heat::radiates(p) { 13 } else { 9 };
+            let work = if procedure::heat::radiates(p) { 13 } else { 11 };
             return crate::solve::add_transient_cost(base, mesh.n_nodes(), 1, steps, *output_every, work).map(
                 |estimate| PlannedCost {
                     estimate: thermal_recovery_cost(estimate, mesh),

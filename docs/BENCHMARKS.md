@@ -2331,14 +2331,18 @@ Vec headers, spare capacity and allocator overhead are deliberately separate; Hi
 the exact outer frame count and remains the only full-series allocation.
 
 The cost Query reports two phases. The integration phase counts the #122 assembly lower bound,
-the retained payload and a conservative full-field f64 working allowance: `9 × nodes × 8` bytes
+the retained payload and a conservative full-field f64 working allowance: `11 × nodes × 8` bytes
 for heat and `6 × nodes × storedComponents × 8` bytes for explicit dynamics. Heat's free-DOF
 vectors are charged at the full nodal length; the original five-field allowance covers the temporary old
 and new temperature vectors during `expand`. Heat balance recovery (#208) adds four nodal
 buffers at its capacity-multiplication peak: film weights, θ-stage temperature, the previous
 temperature reused in place as its rate, and capacity times that rate. The rate is dropped before
-final field recovery. These nine vectors extend the existing counted allowance, not the
-excluded assembly/solver allocations or final derived fields. Radiating heat uses `13 × nodes × 8`
+final field recovery. Endpoint recovery (#850) counts film weights, temperature, theta-stage
+temperature, capacity rate, support flow and the two three-component padded primary/reaction
+fields: eleven scalar nodal equivalents. The new gradient/flux element-node arrays and their
+GP intermediates are separately counted in `recoveryBytes`, conservatively added to both
+phases; element-local scratch and excluded assembly/solver allocations remain additional.
+Radiating heat uses `13 × nodes × 8`
 bytes as a conservative allowance. With contact, the seven outer vectors are film weights,
 zero RHS, temperature, previous temperature, full RHS, free RHS and free solution. The old
 radiation residual and next iterate add two. The film RHS becomes the full original load;

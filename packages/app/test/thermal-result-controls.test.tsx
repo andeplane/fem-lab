@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Store, type UiState } from '../src/store';
 import { App } from '../src/ui/App';
 import type { Dispatch } from '../src/ui/cmd';
+import type { Query as UiQuery } from '../src/ui/SchemaForm';
 import { ResultsView } from '../src/results';
 
 const v = (value: number, unit: string) => ({ value, unit });
@@ -29,7 +30,7 @@ function mount(patch: Partial<UiState>) {
   store.set({ ready: true, model, viewMode: 'results', tab: 'results', fieldKey: 'temperature', legend: { min: 0, max: 100, unit: 'K' }, ...patch });
   const root = document.createElement('div'); document.body.append(root); mounted.push(root);
   const dispatch = vi.fn<Dispatch>(async () => undefined);
-  const query = vi.fn(async () => ({ value: { value: -100, unit: 'W/m^2' }, element: 0, interpolated: true }));
+  const query = vi.fn<UiQuery>(async () => ({ value: { value: -100, unit: 'W/m^2' }, element: 0, interpolated: true }));
   act(() => render(<App store={store} dispatch={dispatch} viewer={{ current: null }} query={query} />, root));
   return { root, store, dispatch, query };
 }
@@ -128,7 +129,7 @@ describe('retained Result deformation capabilities', () => {
     expect(root.querySelector('.legend-sub')?.textContent).toBe('warm · final endpoint 2 s');
     expect(view.legendBurn()?.title).toBe('qx · final endpoint 2 s');
     await act(async () => root.querySelector<HTMLButtonElement>('[data-cmd="query.probe"]')!.click());
-    expect(sampleQuery).toHaveBeenLastCalledWith({ query: 'query.probe', step: 'warm', field: 'heatFlux', component: 0, at: ['0 mm', '0 mm', '0 mm'] });
+    expect(sampleQuery).toHaveBeenLastCalledWith({ query: 'query.probe', resultId: result.resultId, step: 'warm', field: 'heatFlux', component: 0, at: ['0 mm', '0 mm', '0 mm'] });
     await act(async () => view.showField({ field: 'temperatureGradient', component: 0 }));
     expect(view.legendBurn()?.title).toBe('∇Tx · final endpoint 2 s');
     // Re-entering history restores the primary temperature field and its real selected time.
@@ -136,5 +137,36 @@ describe('retained Result deformation capabilities', () => {
     expect(store.state.fieldKey).toBe('temperature');
     expect(root.querySelector('[aria-label="displayed transient time"]')?.textContent).toBe('1 s');
     expect(view.legendBurn()?.title).toBe('T · 1 s');
+  });
+
+  it('refreshes endpoint probe/path for a new solve of the same Step and discards late old replies', async () => {
+    const result = { ...thermal, extremes: [extreme('temperature', 'K'), extreme('heatFlux', 'W/m^2')] };
+    const { root, store, query } = mount({ result, fieldKey: 'heatFluxx' });
+    const probe = (value: number) => ({ value: { value, unit: 'W/m^2' }, element: 0, interpolated: true });
+    const path = (value: number) => ({ s: [0, 1], values: [value, value], unit: 'W/m^2' });
+    query.mockImplementation(async q => q.query === 'query.path' ? path(-100) : probe(-100));
+    await act(async () => {
+      root.querySelector<HTMLButtonElement>('[data-cmd="query.probe"]')!.click();
+      root.querySelector<HTMLButtonElement>('[data-cmd="query.path"]')!.click();
+    });
+    expect(root.querySelector('.probe-out')?.textContent).toContain('-100 W/m^2');
+    expect(root.querySelector('.sample .chart')?.textContent).toContain('-100');
+    let releaseProbe!: (value: unknown) => void, releasePath!: (value: unknown) => void;
+    query.mockImplementationOnce(() => new Promise(resolve => { releaseProbe = resolve; }));
+    query.mockImplementationOnce(() => new Promise(resolve => { releasePath = resolve; }));
+    await act(async () => {
+      root.querySelector<HTMLButtonElement>('[data-cmd="query.probe"]')!.click();
+      root.querySelector<HTMLButtonElement>('[data-cmd="query.path"]')!.click();
+    });
+    query.mockImplementation(async q => q.query === 'query.path' ? path(-200) : probe(-200));
+    await act(async () => store.set({ result: { ...result, resultId: 'thermal-2' } }));
+    expect(query.mock.calls.slice(-2).map(([q]) => q.resultId)).toEqual(['thermal-2', 'thermal-2']);
+    await vi.waitFor(() => expect(root.querySelector('.probe-out')?.textContent).toContain('-200 W/m^2'));
+    const newPath = root.querySelector('.sample .chart')?.textContent;
+    expect(newPath).toContain('-200');
+    await act(async () => { releaseProbe(probe(-999)); releasePath(path(-999)); });
+    expect(root.querySelector('.probe-out')?.textContent).toContain('-200 W/m^2');
+    expect(root.querySelector('.probe-out')?.textContent).not.toContain('-999');
+    expect(root.querySelector('.sample .chart')?.textContent).toBe(newPath);
   });
 });

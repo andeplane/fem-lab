@@ -226,11 +226,11 @@ function Sample({ s, query }: { s: UiState; query: Query }) {
   const requested = useRef<{ probe: string[] | null; path: { from: string[]; to: string[] } | null }>({ probe: null, path: null });
   const generation = useRef(0);
   const sampledIdentity = useRef({ probe: '', path: '' });
-  const identity = `${s.result?.step}:${s.transient?.generation}:${s.transient?.frame.index}:${s.fieldKey}`;
+  const identity = `${s.result?.resultId}:${s.result?.step}:${s.transient?.generation}:${s.transient?.frame.index}:${s.fieldKey}`;
   const currentIdentity = useRef(identity);
   if (currentIdentity.current !== identity) { currentIdentity.current = identity; generation.current++; }
   const context = {
-    step: s.result?.step, field,
+    resultId: s.result?.resultId, step: s.result?.step, field,
     ...(s.transient ? { sample: { kind: 'frame', index: s.transient.frame.index } } : {}),
     ...((s.transient || thermalVector) && choice.component !== null ? { component: choice.component } : {}),
   };
