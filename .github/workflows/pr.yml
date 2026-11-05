@@ -107,47 +107,6 @@ jobs:
           shared-key: workspace
           save-if: false
       - run: cargo test --workspace --exclude femlab
-      # Temporary #846 strict runtime proof; removed after receipts before merge.
-      - name: strict GPU coverage on software Vulkan
-        run: |
-          sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers
-          rustup component add llvm-tools-preview
-          cargo install cargo-llvm-cov --locked
-          ICD=$(find /usr/share/vulkan/icd.d -name '*lvp*' -print -quit)
-          test -n "$ICD"
-          export VK_ICD_FILENAMES="$ICD"
-          export LVP_POISON_MEMORY=true
-          CARGO_PROFILE_TEST_OPT_LEVEL=0 cargo llvm-cov -p femlab-engine -p femlab-geometry --features gpu-tests --fail-under-lines 100 --fail-under-functions 100 --fail-under-regions 100 2>&1 | tee strict846.log
-      - name: export strict GPU coverage detail
-        if: always()
-        run: CARGO_PROFILE_TEST_OPT_LEVEL=0 cargo llvm-cov report -p femlab-engine -p femlab-geometry --json --output-path gpu846-coverage.json
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: gpu846-coverage
-          path: |
-            strict846.log
-            gpu846-coverage.json
-          if-no-files-found: error
-          retention-days: 7
-      - name: mass guard negative control
-        run: |
-          cp crates/engine/src/procedure/implicit.rs /tmp/implicit846.rs
-          python3 - <<'PYCODE'
-          from pathlib import Path
-          p=Path('crates/engine/src/procedure/implicit.rs')
-          s=p.read_text()
-          assert s.count('    validate_assembled_mass(&red0.k_ff)?;') == 1
-          p.write_text(s.replace('    validate_assembled_mass(&red0.k_ff)?;', '    // Intentionally omit the admission guard for the negative control.'))
-          PYCODE
-          set +e
-          cargo test -p femlab-engine --test fem implicit_rejects_zero_and_partial_free_mass_for_zero_and_nonzero_loads -- --exact --nocapture > negative846.log 2>&1
-          RESULT=$?
-          set -e
-          cp /tmp/implicit846.rs crates/engine/src/procedure/implicit.rs
-          test "$RESULT" = 101
-          grep 'every free DOF needs inertia' negative846.log
-          git diff --exit-code -- crates/engine/src/procedure/implicit.rs
       # This multi-minute physics study belongs to main; relevant operator/oracle PRs
       # also run it explicitly. The cheap fixed-deck/rigid replay test always runs above.
       - if: needs.changes.outputs.fv52 == 'true'
