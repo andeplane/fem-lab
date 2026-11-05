@@ -3820,6 +3820,10 @@ fn thermal_vector_queries_keep_units_mesh_identity_replay_and_frame_limits() {
         pollster::block_on(replayed.replay(&e.export_file().journal.entries, true, true)).unwrap();
         for (i, field) in [Field::TemperatureGradient, Field::HeatFlux].into_iter().enumerate() {
             assert_eq!(replayed.field(Some("warm"), field).unwrap(), &vectors[i]);
+            let replay_bits: Vec<_> =
+                replayed.field(Some("warm"), field).unwrap().data.iter().map(|v| v.to_bits()).collect();
+            let original_bits: Vec<_> = vectors[i].data.iter().map(|v| v.to_bits()).collect();
+            assert_eq!(replay_bits, original_bits, "1-to-4-worker Journal replay preserves every IEEE-754 bit");
         }
         let retained = frame_query(
             &mut e,
@@ -3842,6 +3846,8 @@ fn thermal_vector_queries_keep_units_mesh_identity_replay_and_frame_limits() {
         for request in [
             serde_json::json!({"query":"query.frame","step":"warm","field":field,"index":1}),
             serde_json::json!({"query":"query.probe","step":"warm","field":field,"sample":{"kind":"frame","index":1},"at":["0.5 m","0.05 m","0.05 m"]}),
+            serde_json::json!({"query":"query.path","step":"warm","field":field,"sample":{"kind":"frame","index":1},
+                "from":["0.1 m","0.05 m","0.05 m"],"to":["0.9 m","0.05 m","0.05 m"],"n":3}),
         ] {
             let error = frame_query(&mut e, request).unwrap_err();
             assert_eq!(error.code, ErrorCode::Unsupported);

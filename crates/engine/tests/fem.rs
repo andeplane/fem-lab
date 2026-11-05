@@ -5054,6 +5054,9 @@ fn thermal_result_vectors_keep_tilted_anisotropic_flux_and_axisymmetric_basis() 
             let one = Pool::new(1).install(|| femlab_engine::post::thermal::fields(&p, &t).unwrap());
             let many = Pool::new(4).install(|| femlab_engine::post::thermal::fields(&p, &t).unwrap());
             assert_eq!(one, many);
+            let one_bits: Vec<_> = one.0.data.iter().chain(&one.1.data).map(|v| v.to_bits()).collect();
+            let many_bits: Vec<_> = many.0.data.iter().chain(&many.1.data).map(|v| v.to_bits()).collect();
+            assert_eq!(one_bits, many_bits, "worker count preserves every IEEE-754 bit");
         }
     }
 }
@@ -5133,6 +5136,15 @@ fn thermal_result_vectors_preserve_interfaces_and_probe_each_element() {
         femlab_engine::fem::heat::recover(ElementKind::Hex8, &ctx, &[0.0; 8]).unwrap_err().code,
         ErrorCode::MeshInverted
     );
+    let mut folded = mesh.clone();
+    for x in folded.coords.chunks_exact_mut(3) {
+        x[0] = -x[0];
+    }
+    let invalid =
+        heat_problem(&folded, &sets, &bodies, Idealisation::Solid3d, conductor(2.0, 1.0, 1.0), Vec::new(), Vec::new());
+    assert_eq!(femlab_engine::post::thermal::fields(&invalid, &t).unwrap_err().code, ErrorCode::MeshInverted);
+    p.material_of_block[0] = None;
+    assert!(femlab_engine::post::thermal::fields(&p, &t).is_err(), "missing element material is a structured error");
 }
 
 /// Cylindrical resistance: T=300+100 log(r)/log(2) on 1<=r<=2, H=0.2,
