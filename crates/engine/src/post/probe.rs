@@ -1,4 +1,4 @@
-//! Sampling a nodal or element field where the user points: one value at a point, or a line of them
+//! Sampling a nodal, element-node or element field where the user points: one value or a line of them
 //! (plan A §8).
 //!
 //! Point location is a bounding-box scan followed by a Newton inversion of the isoparametric
@@ -15,6 +15,7 @@ const BBOX_SLACK: f64 = 1e-9;
 
 /// The element containing `x` and the nodal field interpolated there, or `None` when the point
 /// is outside the mesh. Element fields return the containing element’s constant value.
+/// Element-node fields interpolate only the containing element's unaveraged values.
 /// Ties (a point on a shared face) go to the lowest element id.
 pub fn probe(mesh: &Mesh, f: &FieldData, x: [f64; 3]) -> Option<(u32, Vec<f64>)> {
     probe_checked(mesh, f, x).ok().flatten()
@@ -26,8 +27,11 @@ pub fn probe_checked(mesh: &Mesh, f: &FieldData, x: [f64; 3]) -> Result<Option<(
     let mut coords = Vec::new();
     let mut shape = Vec::new();
     let mut failed = None;
+    let mut element_node_end = 0;
     for elem in 0..mesh.n_elems() as u32 {
         let kind = mesh.kind_of(elem);
+        let element_node_start = element_node_end;
+        element_node_end += kind.n_nodes();
         coords.resize(kind.n_nodes() * 3, 0.0);
         mesh.elem_coords(elem, &mut coords);
         if !in_bbox(kind, &coords, x) {
@@ -50,8 +54,9 @@ pub fn probe_checked(mesh: &Mesh, f: &FieldData, x: [f64; 3]) -> Result<Option<(
         element.shape_at(xi, &mut shape);
         let mut out = vec![0.0; f.comps];
         for (a, &node) in mesh.elem_nodes(elem).iter().enumerate() {
+            let entity = if f.per == Per::ElemNode { element_node_start + a } else { node as usize };
             for (c, o) in out.iter_mut().enumerate() {
-                *o += shape[a] * f.data[node as usize * f.comps + c];
+                *o += shape[a] * f.data[entity * f.comps + c];
             }
         }
         return Ok(Some((elem, out)));

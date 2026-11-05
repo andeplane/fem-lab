@@ -152,6 +152,32 @@ pub fn conductivity(kind: ElementKind, c: &ElementCtx<'_>, out: &mut [f64]) -> R
     Ok(kin.min_det)
 }
 
+/// Physical temperature gradient and Fourier flux at thermal Gauss points, three
+/// components per point. The omitted gradient of a 2D model is zero. Flux uses the full
+/// conductivity tensor, so tilted anisotropy may imply an omitted-direction flux even
+/// though the reduced conduction operator integrates only represented divergence terms.
+pub fn recover(kind: ElementKind, c: &ElementCtx<'_>, temperature: &[f64]) -> Result<(Vec<f64>, Vec<f64>), Error> {
+    let kin = kinematics(kind, c, rule_of(kind))?;
+    let dim = kind.dim();
+    let k = c.material.conductivity_tensor();
+    let mut gradient = vec![0.0; kin.n_gp * 3];
+    let mut flux = vec![0.0; kin.n_gp * 3];
+    for gp in 0..kin.n_gp {
+        for a in 0..kin.n_nodes {
+            // Partition of unity: subtract a constant before differentiating so the
+            // absolute temperature origin cannot create a numerical gradient.
+            let delta = temperature[a] - temperature[0];
+            for i in 0..dim {
+                gradient[3 * gp + i] += kin.g[gp * kin.n_nodes + a][i] * delta;
+            }
+        }
+        for i in 0..3 {
+            flux[3 * gp + i] = -(0..dim).map(|j| k[i][j] * gradient[3 * gp + j]).sum::<f64>();
+        }
+    }
+    Ok((gradient, flux))
+}
+
 /// `∫ ρ c_p Nᵀ N dV` into `out`: the consistent capacity the θ-method integrates with.
 pub fn capacity(kind: ElementKind, c: &ElementCtx<'_>, out: &mut [f64]) -> Result<(), Error> {
     let kin = kinematics(kind, c, product_rule_of(kind))?;

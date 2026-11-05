@@ -1,0 +1,47 @@
+import { expect, test } from './fixtures';
+
+test('@cpu inspects recovered thermal vectors with signed components and intensity units', async ({ page }, testInfo) => {
+  await page.addInitScript(() => localStorage.setItem('femlab.tour.dismissed', '1'));
+  await page.goto('./');
+  await page.waitForFunction(() => typeof window.fem !== 'undefined');
+  const result = await page.evaluate(async () => {
+    await window.fem.dispatch({ cmd: 'model.new', name: 'Fourier vector check' });
+    await window.fem.dispatch({ cmd: 'model.setUnits', units: { temperature: 'degC', temperatureGradient: 'K/mm', heatFlux: 'kW/m^2' } });
+    await window.fem.dispatch({ cmd: 'geometry.addBox', name: 'bar', size: ['1 m', '0.1 m', '0.1 m'] });
+    await window.fem.dispatch({ cmd: 'material.add', name: 'conductor', k: '5 W/(m K)' });
+    await window.fem.dispatch({ cmd: 'material.assign', material: 'conductor', bodies: ['bar'] });
+    await window.fem.dispatch({ cmd: 'constraint.temperature', name: 'cold', on: 'bar.xmin', value: '300 K' });
+    await window.fem.dispatch({ cmd: 'constraint.temperature', name: 'hot', on: 'bar.xmax', value: '320 K' });
+    await window.fem.dispatch({ cmd: 'mesh.set', mesher: { kind: 'lattice', size: { nx: 4, ny: 1, nz: 1 } } });
+    await window.fem.dispatch({ cmd: 'step.add', name: 'conduct', procedure: 'heat-steady', constraints: ['cold', 'hot'], loads: [] });
+    await window.fem.dispatch({ cmd: 'solve.run', step: 'conduct', solver: 'cpu-direct' });
+    const gradient = await window.fem.query.field({ step: 'conduct', field: 'temperatureGradient' });
+    const flux = await window.fem.query.field({ step: 'conduct', field: 'heatFlux' });
+    const probe = await window.fem.query.probe({ step: 'conduct', field: 'heatFlux', component: 0, at: ['0.37 m', '0.05 m', '0.05 m'] });
+    return { gradient, flux, probe };
+  });
+  expect(result.gradient.per).toBe('elementNode');
+  expect(result.gradient.unit).toBe('K/m');
+  expect(result.gradient.values[0]).toBeCloseTo(20, 8);
+  expect(result.flux.per).toBe('elementNode');
+  expect(result.flux.unit).toBe('W/m^2');
+  expect(result.flux.values[0]).toBeCloseTo(-100, 8);
+  expect(Math.abs(result.flux.values[2]!)).toBeLessThan(1e-8);
+  expect(result.probe.value.unit).toBe('kW/m^2');
+  expect(result.probe.value.value).toBeCloseTo(-0.1, 10);
+  const legend = page.locator('.legend');
+  await legend.getByRole('button', { name: '∇Tx', exact: true }).click();
+  await expect(page.locator('.legend-field')).toHaveText('∇Tx');
+  await expect(page.locator('.legend-unit')).toHaveText('K/mm');
+  await expect(page.locator('.rtable tbody tr').filter({ hasText: '∇Tx' })).toContainText('0.02 K/mm');
+  await legend.getByRole('button', { name: 'qx', exact: true }).click();
+  await expect(page.locator('.legend-field')).toHaveText('qx');
+  await expect(page.locator('.legend-unit')).toHaveText('kW/m^2');
+  await expect(page.locator('.rtable tbody tr').filter({ hasText: 'qx' })).toContainText('-0.1 kW/m^2');
+  await legend.getByRole('button', { name: '|q|', exact: true }).click();
+  await expect(page.locator('.legend-field')).toHaveText('|q|');
+  await legend.getByRole('button', { name: 'qz', exact: true }).click();
+  await expect(page.locator('.legend-field')).toHaveText('qz');
+  await expect(page.locator('.legend-unit')).toHaveText('kW/m^2');
+  await page.screenshot({ path: testInfo.outputPath('thermal-vectors.png') });
+});

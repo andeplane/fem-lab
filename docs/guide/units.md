@@ -13,6 +13,13 @@ await fem.model.setUnits({ units: { length: 'mm', force: 'N', stress: 'MPa' } })
 
 The generated [API reference](./api-reference.md) declares each field's dimension, accepted structure and bounds. `query.convert` helps inspect a conversion. Keep significant figures appropriate to the property source and intended comparison, rather than the number of digits a renderer can show.
 
+Thermal vector displays have separate `temperatureGradient` (default `K/m`) and `heatFlux`
+(default `W/m^2`) unit settings. For example, `K/mm` and `kW/m^2` scale those intensive
+quantities without changing the temperature or total-power unit. Gradients are temperature
+**differences** per length: `degC/m` has the same scale as `K/m` and applies no 273.15 offset.
+An absolute-temperature `degC` unit alone is dimensionally invalid for a gradient; `W` is
+invalid for heat flux. Raw `query.field` arrays always retain their SI units.
+
 ## Coordinate conventions
 
 A default solid Model uses global x/y/z. Box face suffixes `xmin` through `zmax` refer to those directions. Plane-stress and plane-strain models use the xy plane. Axisymmetric sections use x as radius and y as the revolution axis; optional twist makes the third vector component circumferential. Beam section quantities use local member axes. Shell directors define top and bottom, and laminate ply angles refer to their stated material/reference axes.

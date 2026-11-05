@@ -25,7 +25,8 @@ use crate::query::{
 };
 use crate::solve::SolveOptions;
 use crate::units::{
-    convert, Dim, Dimension, Force, Frequency, Length, Power, ReactionQuantity, Stress, Temperature, Time, Torque, Q,
+    convert, Dim, Dimension, Force, Frequency, HeatFlux, Length, Power, ReactionQuantity, Stress, Temperature,
+    TemperatureGradient, Time, Torque, Q,
 };
 
 /// The three built-in laws a Model material resolves to; plugins add their own later.
@@ -110,6 +111,8 @@ pub fn field_dimension(field: Field, reaction: ReactionQuantity) -> Dimension {
             ReactionQuantity::Power => Power::DIM,
         },
         Field::Temperature => Temperature::DIM,
+        Field::TemperatureGradient => TemperatureGradient::DIM,
+        Field::HeatFlux => HeatFlux::DIM,
         Field::Strain | Field::Rotation | Field::PlasticStrain | Field::ErrorEstimate => Dimension::NONE,
         Field::Stress
         | Field::StressUnaveraged
@@ -709,6 +712,23 @@ pub(crate) struct PlannedCost {
     transient: Option<(usize, usize, &'static str)>,
 }
 
+/// Conservative storage shared by endpoint thermal recovery and the two new Result fields.
+fn thermal_recovery_cost(mut cost: crate::query::CostEstimate, mesh: &Mesh) -> crate::query::CostEstimate {
+    let mut entities = 0u64;
+    for block in &mesh.blocks {
+        let per_element = block.kind.n_nodes().saturating_add(crate::fem::shape::rule_of(block.kind).points.len());
+        entities = entities.saturating_add((block.n_elems() as u64).saturating_mul(per_element as u64));
+    }
+    // Both three-component endpoint fields and both intermediate GP arrays can coexist.
+    // Count them conservatively even though this recovery peak follows time integration.
+    let bytes = entities.saturating_mul(6 * std::mem::size_of::<f64>() as u64);
+    cost.recovery_bytes = bytes;
+    cost.bytes = cost.bytes.saturating_add(bytes);
+    cost.feasible = if cost.bytes > cost.budget_bytes { Some(false) } else { None };
+    cost.note.push_str(&format!(" Thermal endpoint gradient/flux and Gauss recovery arrays: {bytes} bytes; unaveraged element-node layout. Element-local scratch and JavaScript heap overhead remain excluded."));
+    cost
+}
+
 /// The cost Query and solve preflight share one schedule and byte calculation. Explicit Steps
 /// derive their step count from the same element-frequency bound as the integrator.
 ///
@@ -744,7 +764,9 @@ pub(crate) fn planned_cost(
             return crate::solve::add_transient_cost(base, mesh.n_nodes(), mesh.dim, o.increments, 1, 5)
                 .map(|estimate| PlannedCost { estimate, transient: None });
         }
-        procedure::Step::HeatSteady { solver, .. } => crate::solve::cost_estimate(mesh, 1, solver.solver),
+        procedure::Step::HeatSteady { solver, .. } => {
+            thermal_recovery_cost(crate::solve::cost_estimate(mesh, 1, solver.solver), mesh)
+        }
         procedure::Step::HeatTransient { dt, t_end, output_every, solver, .. } => {
             let (steps, _) = procedure::time_grid(*dt, *t_end)?;
             let base = crate::solve::cost_estimate(mesh, 1, solver.solver);
@@ -756,8 +778,12 @@ pub(crate) fn planned_cost(
             // Reduction and matrix/factor storage (including contact fill) remain excluded.
             let p = explicit_problem.expect("a transient heat cost plan needs its resolved Problem");
             let work = if procedure::heat::radiates(p) { 13 } else { 9 };
-            return crate::solve::add_transient_cost(base, mesh.n_nodes(), 1, steps, *output_every, work)
-                .map(|estimate| PlannedCost { estimate, transient: Some((steps, *output_every, "heat-transient")) });
+            return crate::solve::add_transient_cost(base, mesh.n_nodes(), 1, steps, *output_every, work).map(
+                |estimate| PlannedCost {
+                    estimate: thermal_recovery_cost(estimate, mesh),
+                    transient: Some((steps, *output_every, "heat-transient")),
+                },
+            );
         }
         // A harmonic Step solves nothing, but it retains two nodal fields per frequency, so it
         // is budgeted like a transient with six stored components instead of three.
@@ -803,12 +829,18 @@ impl PlannedCost {
         if let Some((steps, every, procedure)) = self.transient {
             crate::solve::enforce_transient_budget(&self.estimate, step, procedure, steps, every)
         } else if self.estimate.feasible == Some(false) {
-            Err(Error::new(
-                ErrorCode::SolveTooLarge,
-                "random-response modal recovery exceeds the planning memory budget",
-            )
-            .at(format!("step '{step}'"))
-            .suggest("step.add fewer nModes on the modal predecessor, or mesh.set a coarser mesh"))
+            let (cause, suggestion) = if self.estimate.recovery_bytes > 0 {
+                (
+                    "heat solve and endpoint recovery exceed the planning memory budget",
+                    "mesh.set a coarser mesh, then query.cost before solve.run",
+                )
+            } else {
+                (
+                    "random-response modal recovery exceeds the planning memory budget",
+                    "step.add fewer nModes on the modal predecessor, or mesh.set a coarser mesh",
+                )
+            };
+            Err(Error::new(ErrorCode::SolveTooLarge, cause).at(format!("step '{step}'")).suggest(suggestion))
         } else {
             Ok(())
         }
@@ -1749,6 +1781,8 @@ mod tests {
             (Field::Displacement, "displacement", Length::DIM),
             (Field::Reaction, "reaction", Force::DIM),
             (Field::Temperature, "temperature", Temperature::DIM),
+            (Field::TemperatureGradient, "temperatureGradient", TemperatureGradient::DIM),
+            (Field::HeatFlux, "heatFlux", HeatFlux::DIM),
             (Field::Strain, "strain", Dimension::NONE),
             (Field::Rotation, "rotation", Dimension::NONE),
             (Field::PlasticStrain, "plasticStrain", Dimension::NONE),
@@ -1803,5 +1837,29 @@ mod tests {
         let error = transient.enforce("sweep").unwrap_err();
         assert_eq!(error.code, crate::ErrorCode::SolveTooLarge);
         assert!(error.suggestion.unwrap().contains("outputEvery"));
+    }
+
+    #[test]
+    fn thermal_endpoint_arrays_are_counted_at_the_budget_boundary() {
+        let mesh = femlab_geometry::Structured { kind: femlab_geometry::ElementKind::Hex8, n: [1, 1, 1] }
+            .box_([1.0, 1.0, 1.0]);
+        let step = procedure::Step::HeatSteady {
+            solver: SolveOptions::default(),
+            control: procedure::NonlinearControl::default(),
+        };
+        let mut cost = planned_cost(&mesh, 3, None, &step, 0).unwrap();
+        assert_eq!(cost.estimate.recovery_bytes, 768);
+        assert_eq!(cost.estimate.bytes, cost.estimate.assembly_bytes + 768);
+        assert_eq!(cost.estimate.retained_bytes, 0);
+        cost.estimate.budget_bytes = cost.estimate.bytes;
+        let cost = cost.with_records(0, 0);
+        assert!(cost.enforce("conduct").is_ok(), "exactly at the counted budget");
+        let mut below = cost;
+        below.estimate.budget_bytes -= 1;
+        let error = below.with_records(0, 0).enforce("conduct").unwrap_err();
+        assert_eq!(error.code, ErrorCode::SolveTooLarge);
+        assert_eq!(error.where_.as_deref(), Some("step 'conduct'"));
+        assert!(error.cause.contains("heat solve and endpoint recovery"));
+        assert!(error.suggestion.unwrap().contains("coarser mesh"));
     }
 }

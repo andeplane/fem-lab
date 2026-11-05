@@ -131,6 +131,8 @@ pub enum Query {
     /// for laminate ply faces (k starts at 1, bottom to top within each Section). Ply stresses
     /// are global xx, yy, zz, xy, xz, yz in Pa, unaveraged per element node; elements without
     /// that ply carry zeros. Both sides of an interface remain distinct. Explicit ids use solved metadata;
+    /// temperatureGradient (K/m) and heatFlux (W/m^2) are final heat endpoint vectors,
+    /// recovered per element node without averaging. They are not retained frame fields.
     /// omitted ids refuse stale Results. Retained samples use query.frame's existing protocol.
     #[serde(rename = "query.field", rename_all = "camelCase")]
     #[schemars(extend("x-execution" = "modelRead"))]
@@ -193,10 +195,11 @@ pub enum Query {
         field: Option<Field>,
     },
 
-    /// A field value at a point (default: the last solved Step). Nodal fields are
-    /// interpolated; errorEstimate returns the containing element's constant value
+    /// A field value at a point (default: the last solved Step). Nodal and unaveraged
+    /// element-node fields are interpolated within the containing element; no interface
+    /// averaging is applied. errorEstimate returns the containing element's constant value
     /// with interpolated=false. Shared-face ties use the lowest element id. Component
-    /// indices: displacement 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.
+    /// indices: displacement and thermal vectors 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.
     /// Optional sample selects a retained primary-field frame; omitted means the final field.
     /// Omitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.
     #[serde(rename = "query.probe", rename_all = "camelCase")]
@@ -217,6 +220,8 @@ pub enum Query {
     },
 
     /// A field sampled at `n` points along the line from `from` to `to`, for a line plot.
+    /// Element-node fields interpolate within one element without interface averaging;
+    /// shared-face ties use the lowest element id, exactly as query.probe does.
     /// Optional sample selects a retained primary-field frame; omitted means the final field.
     /// Omitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.
     #[serde(rename = "query.path", rename_all = "camelCase")]
@@ -1062,11 +1067,15 @@ pub struct CostEstimate {
     pub nnz_lower: u64,
     /// Estimated peak of the counted solve and frame-read phases. It includes mandatory
     /// assembly storage, retained primary values, a conservative transient f64 working-vector
-    /// allowance and known native/browser frame-response storage. It is incomplete because
+    /// allowance, thermal endpoint/recovery arrays and known native/browser frame-response storage. It is incomplete because
     /// solver fill, JSON and allocator overhead are not known before solving.
     pub bytes: u64,
     /// Mandatory assembly storage before transient-specific values are added.
     pub assembly_bytes: u64,
+    /// Thermal endpoint gradient/flux fields plus their intermediate Gauss arrays. This
+    /// conservative allowance is added to both counted phases; excludes element-local scratch.
+    #[serde(default)]
+    pub recovery_bytes: u64,
     /// Numeric fields and Mesh snapshots of every existing retained Result; none is evicted before success.
     pub resident_result_bytes: u64,
     /// Numeric Mesh snapshot created for the new Result; excludes Model and allocator overhead.

@@ -4964,6 +4964,219 @@ fn steady() -> Step {
     Step::HeatSteady { solver: SolveOptions::default(), control: NonlinearControl::default() }
 }
 
+/// E12: Fourier conduction is an intensive vector, not a boundary power or smoothed
+/// nodal temperature derivative. Every supported thermal family/refinement solves it.
+#[test]
+fn thermal_result_vectors_solve_fourier_conduction_for_every_family() {
+    for kind in ALL_KINDS {
+        for n in [2, 4, 8] {
+            let (size, id) = if kind.dim() == 3 {
+                ([1.0, 0.1, 0.1], Idealisation::Solid3d)
+            } else {
+                ([1.0, 0.1, 0.0], Idealisation::PlaneStress { thickness: 0.2 })
+            };
+            let mesh = Structured { kind, n: [n, 1, 1] }.box_(size);
+            let sets = sets_of(&mesh);
+            let bodies = one_body();
+            let p = heat_problem(
+                &mesh,
+                &sets,
+                &bodies,
+                id,
+                conductor(5.0, 1.0, 1.0),
+                vec![hold("cold", "xmin", 300.0), hold("hot", "xmax", 320.0)],
+                Vec::new(),
+            );
+            let res = run_step(&p, &steady()).expect("the Fourier bar solves");
+            let count: usize = mesh.blocks.iter().map(|b| b.conn.len()).sum();
+            for (field, want) in [(Field::TemperatureGradient, 20.0), (Field::HeatFlux, -100.0)] {
+                let f = &res.fields[&field];
+                assert_eq!((f.per, f.comps, f.len()), (Per::ElemNode, 3, count));
+                for row in f.data.chunks_exact(3) {
+                    assert!(
+                        (row[0] - want).abs() < 1e-8 && row[1].abs() < 1e-8 && row[2].abs() < 1e-8,
+                        "{kind:?}/{n} {field:?}: {row:?}"
+                    );
+                }
+                let value = probe(&mesh, f, [0.37, 0.04, size[2] * 0.5]).expect("inside").1;
+                assert!((value[0] - want).abs() < 1e-8);
+            }
+            // Independently integrate q dot n over the hot end. Support heat removal is
+            // negative there because this Dirichlet support supplies heat to the body.
+            let area = if kind.dim() == 3 { 0.01 } else { 0.02 };
+            assert!((res.reactions[1].1[0] + 100.0 * area).abs() < 1e-8);
+        }
+    }
+}
+
+/// A 45-degree material rotation about y gives Kxz=(k3-k1)/2. This analytic
+/// tensor-vector product checks a tilted axis and absolute-temperature shift invariance.
+#[test]
+fn thermal_result_vectors_keep_tilted_anisotropic_flux_and_axisymmetric_basis() {
+    let s = std::f64::consts::FRAC_1_SQRT_2;
+    for (kind, id, offset) in [
+        (ElementKind::Hex20, Idealisation::Solid3d, 0.0),
+        (ElementKind::Quad8, Idealisation::PlaneStrain, 0.0),
+        (ElementKind::Tri6, Idealisation::Axisymmetric { twist: false }, 1.0),
+    ] {
+        let mut mesh = Structured { kind, n: [2, 1, 1] }.box_([1.0, 0.2, if kind.dim() == 3 { 0.2 } else { 0.0 }]);
+        for point in mesh.coords.chunks_exact_mut(3) {
+            point[0] += offset;
+        }
+        let sets = sets_of(&mesh);
+        let bodies = one_body();
+        let mut material = conductor(1.0, 1.0, 1.0);
+        material.k = [2.0, 3.0, 10.0];
+        let expected_flux = if kind.dim() == 3 {
+            material.axes = Some([[s, 0.0, -s], [0.0, 1.0, 0.0], [s, 0.0, s]]);
+            [-12.0, -9.0, -8.0]
+        } else {
+            material.axes = Some([[s, -s, 0.0], [s, s, 0.0], [0.0, 0.0, 1.0]]);
+            [-6.5, -8.5, 0.0]
+        };
+        let p = heat_problem(&mesh, &sets, &bodies, id, material, Vec::new(), Vec::new());
+        for origin in [0.0, 273.15, 1e6] {
+            let t: Vec<f64> = (0..mesh.n_nodes())
+                .map(|n| {
+                    let x = mesh.node(n as u32);
+                    origin + 2.0 * x[0] + 3.0 * x[1]
+                })
+                .collect();
+            let (g, q) = femlab_engine::post::thermal::fields(&p, &t).expect("valid geometry");
+            for (gradient, flux) in g.data.chunks_exact(3).zip(q.data.chunks_exact(3)) {
+                for (actual, want) in gradient.iter().zip([2.0, 3.0, 0.0]) {
+                    assert!((actual - want).abs() < 1e-7);
+                }
+                for (actual, want) in flux.iter().zip(expected_flux) {
+                    assert!((actual - want).abs() < 1e-6, "{kind:?}: {flux:?}");
+                }
+            }
+            let one = Pool::new(1).install(|| femlab_engine::post::thermal::fields(&p, &t).unwrap());
+            let many = Pool::new(4).install(|| femlab_engine::post::thermal::fields(&p, &t).unwrap());
+            assert_eq!(one, many);
+        }
+    }
+}
+
+/// T=300+10x(1-x), k=5, source=100 has qx=100x-50 and equal removal
+/// at both ends. Linear elements converge in gradient L2 at order one; quadratic
+/// elements recover this polynomial exactly. Neither oracle calls the heat kernel.
+#[test]
+fn thermal_result_vectors_recover_a_varying_polynomial_and_converge() {
+    for kind in [ElementKind::Hex8, ElementKind::Hex20] {
+        let mut errors = Vec::new();
+        for n in [2, 4, 8] {
+            let mesh = Structured { kind, n: [n, 1, 1] }.box_([1.0, 0.1, 0.1]);
+            let sets = sets_of(&mesh);
+            let bodies = one_body();
+            let p = heat_problem(
+                &mesh,
+                &sets,
+                &bodies,
+                Idealisation::Solid3d,
+                conductor(5.0, 1.0, 1.0),
+                vec![hold("left", "xmin", 300.0), hold("right", "xmax", 300.0)],
+                vec![HeatLoad::Source { bodies: bodies.clone(), q: 100.0 }],
+            );
+            let res = run_step(&p, &steady()).expect("the polynomial bar solves");
+            let mut square_error = 0.0;
+            let g = &res.fields[&Field::TemperatureGradient];
+            for (entity, &node) in mesh.blocks.iter().flat_map(|b| &b.conn).enumerate() {
+                let x = mesh.node(node)[0];
+                square_error += (g.data[3 * entity] - (10.0 - 20.0 * x)).powi(2);
+                assert!((res.fields[&Field::HeatFlux].data[3 * entity] + 5.0 * g.data[3 * entity]).abs() < 1e-9);
+            }
+            errors.push((square_error / g.len() as f64).sqrt());
+            for (_, reaction) in &res.reactions {
+                assert!((reaction[0] - 0.5).abs() < 1e-9);
+            }
+            assert!((res.scalars["applied_total_x"] - 1.0).abs() < 1e-9);
+        }
+        if kind == ElementKind::Hex8 {
+            for pair in errors.windows(2) {
+                assert!((pair[0] / pair[1] - 2.0).abs() < 1e-7, "{errors:?}");
+            }
+        } else {
+            assert!(errors.iter().all(|e| *e < 1e-8), "{errors:?}");
+        }
+    }
+}
+
+/// Independent element values may jump at a conductivity interface. Query interpolation
+/// selects one side, including a shared-face tie, rather than averaging that jump away.
+#[test]
+fn thermal_result_vectors_preserve_interfaces_and_probe_each_element() {
+    let mesh = two_blocks(ElementKind::Hex8, [1, 1, 1], [1, 1, 1], [1.0, 0.1, 0.1], 0.0);
+    let sets = sets_of(&mesh);
+    let bodies = two_bodies();
+    let mut p =
+        heat_problem(&mesh, &sets, &bodies, Idealisation::Solid3d, conductor(2.0, 1.0, 1.0), Vec::new(), Vec::new());
+    p.materials.push(conductor(10.0, 1.0, 1.0));
+    p.material_of_block = vec![Some(0), Some(1)];
+    let t: Vec<f64> = (0..mesh.n_nodes()).map(|n| 300.0 + 5.0 * mesh.node(n as u32)[0]).collect();
+    let (_, flux) = femlab_engine::post::thermal::fields(&p, &t).unwrap();
+    for (x, element, want) in [(0.5, 0, -10.0), (1.0, 0, -10.0), (1.5, 1, -50.0)] {
+        let (got_element, value) = probe(&mesh, &flux, [x, 0.05, 0.05]).expect("inside");
+        assert_eq!(got_element, element);
+        assert!((value[0] - want).abs() < 1e-10);
+    }
+    let walk = path(&mesh, &flux, [0.5, 0.05, 0.05], [1.5, 0.05, 0.05], 3);
+    assert!((walk[2].1.as_ref().unwrap()[0] + 50.0).abs() < 1e-10);
+    // Recovery uses the same structured inverted-Jacobian error as assembly.
+    let mut coords = vec![0.0; 24];
+    mesh.elem_coords(0, &mut coords);
+    for x in coords.chunks_exact_mut(3) {
+        x[0] = -x[0];
+    }
+    let ctx = p.ctx(0, &coords, &[0.0; 8]).unwrap();
+    assert_eq!(
+        femlab_engine::fem::heat::recover(ElementKind::Hex8, &ctx, &[0.0; 8]).unwrap_err().code,
+        ErrorCode::MeshInverted
+    );
+}
+
+/// Cylindrical resistance: T=300+100 log(r)/log(2) on 1<=r<=2, H=0.2,
+/// so q_r=-500/(r log(2)) and Q=2*pi*H*500/log(2), independent of radius.
+#[test]
+fn thermal_result_vectors_converge_to_radial_fourier_flux_and_total_power() {
+    let exact_gradient = 100.0 / (1.5 * 2.0f64.ln());
+    let exact_power = 2.0 * PI * 0.2 * 500.0 / 2.0f64.ln();
+    for kind in [ElementKind::Quad4, ElementKind::Quad8] {
+        let mut errors = Vec::new();
+        for n in [4, 8, 16] {
+            let mut mesh = Structured { kind, n: [n, 1, 1] }.box_([1.0, 0.2, 0.0]);
+            for point in mesh.coords.chunks_exact_mut(3) {
+                point[0] += 1.0;
+            }
+            let sets = sets_of(&mesh);
+            let bodies = one_body();
+            let p = heat_problem(
+                &mesh,
+                &sets,
+                &bodies,
+                Idealisation::Axisymmetric { twist: false },
+                conductor(5.0, 1.0, 1.0),
+                vec![hold("inner", "xmin", 300.0), hold("outer", "xmax", 400.0)],
+                Vec::new(),
+            );
+            let res = run_step(&p, &steady()).expect("the radial conductor solves");
+            let g = probe(&mesh, &res.fields[&Field::TemperatureGradient], [1.5, 0.1, 0.0]).unwrap().1;
+            let q = probe(&mesh, &res.fields[&Field::HeatFlux], [1.5, 0.1, 0.0]).unwrap().1;
+            errors.push((g[0] - exact_gradient).abs());
+            assert!((q[0] + 5.0 * g[0]).abs() < 1e-9);
+            assert!(g[1].abs() < 1e-9 && q[1].abs() < 1e-9);
+            assert_eq!((g[2], q[2]), (0.0, 0.0));
+            assert!((res.reactions[0].1[0] / exact_power - 1.0).abs() < 0.003);
+            assert!((res.reactions[0].1[0] + res.reactions[1].1[0]).abs() < 1e-8);
+        }
+        assert!(errors[2] < errors[1] && errors[1] < errors[0], "{kind:?}: {errors:?}");
+        let expected_rate = if kind == ElementKind::Quad4 { 1.0 } else { 2.0 };
+        let rate = (errors[1] / errors[2]).log2();
+        assert!((rate - expected_rate).abs() < 0.25, "{kind:?}: {errors:?}, rate {rate}");
+        assert!(errors[2] < if kind == ElementKind::Quad4 { 3.0 } else { 0.1 });
+    }
+}
+
 /// The nodal temperature of a heat Result.
 fn temperature_of(res: &StepResult) -> Vec<f64> {
     res.fields[&Field::Temperature].component(0)
@@ -5356,6 +5569,14 @@ fn steady_heat_power_balances_flux_sources_and_outgoing_convection() {
                 let res = run_step(&p, &steady()).unwrap();
                 assert!(res.scalars["applied_total_x"].abs() < 1e-8, "{kind:?}: {:?}", res.scalars);
                 assert!(res.reactions.is_empty());
+                let qx =
+                    probe(&mesh, &res.fields[&Field::HeatFlux], [1.0, 0.05, if kind.dim() == 3 { 0.05 } else { 0.0 }])
+                        .unwrap()
+                        .1[0];
+                assert!(
+                    (qx - flux).abs() < 1e-7,
+                    "Fourier flux equals imposed input and integrated film removal: {kind:?}, {qx} vs {flux}"
+                );
                 // The film face temperature follows q/h independently of k or mesh spacing.
                 for &node in &sets["xmax"].nodes {
                     assert!((temperature_of(&res)[node as usize] - (293.15 + flux / 50.0)).abs() < 1e-8);
@@ -5411,6 +5632,14 @@ fn transient_heat_reactions_include_storage_at_the_last_theta_stage() {
                     };
                     let res = run_step(&p, &step).unwrap();
                     assert!((res.scalars["storage_power"] - 0.12).abs() < 1e-10);
+                    for (field, expected) in
+                        [(Field::TemperatureGradient, 4.0 * (1.0 + end)), (Field::HeatFlux, -45.0 * 4.0 * (1.0 + end))]
+                    {
+                        for value in res.fields[&field].data.chunks_exact(3) {
+                            assert!((value[0] - expected).abs() < 1e-9, "endpoint {field:?}: {value:?}");
+                            assert!(value[1].abs() < 1e-9 && value[2].abs() < 1e-9);
+                        }
+                    }
                     assert!((res.scalars["dt"] - effective_dt).abs() < 1e-15);
                     let stage_factor = 1.0 + end - (1.0 - theta) * effective_dt;
                     let applied = film * 0.01 * (100.0 - 14.0 * stage_factor);

@@ -251,7 +251,9 @@ impl PortableResult {
                 Field::StressUnaveraged | Field::StressTop | Field::StressBottom | Field::ShellMoment => {
                     (Per::ElemNode, 6)
                 }
-                Field::SectionForce | Field::SectionMoment => (Per::ElemNode, 3),
+                Field::SectionForce | Field::SectionMoment | Field::TemperatureGradient | Field::HeatFlux => {
+                    (Per::ElemNode, 3)
+                }
                 Field::ErrorEstimate => (Per::Element, 1),
                 Field::VonMises | Field::PlasticStrain | Field::ContactPressure => (Per::Node, 1),
                 _ => (Per::Node, 3),

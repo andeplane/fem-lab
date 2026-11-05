@@ -448,6 +448,16 @@ pub enum Field {
     PlasticStrain,
     Reaction,
     Temperature,
+    /// Endpoint temperature gradient in K/m, three components, recovered at thermal Gauss
+    /// points and corner-shape extrapolated per element node without interface averaging.
+    /// Global x/y/z in 3D; x/y/0 in planar models and radial/axial/0 in axisymmetry.
+    /// Available on heat Results only; retained frames contain temperature, not this field.
+    TemperatureGradient,
+    /// Endpoint conductive flux q = -K grad(T), in W/m^2, with the same location and axes as
+    /// temperatureGradient. Uses the full material conductivity tensor. Current 2D Models
+    /// allow only in-plane material axes, giving zero omitted gradient/flux. Tilted axes in
+    /// 3D can couple all components. This is flux density, not applied inward flux or total W.
+    HeatFlux,
     Rotation,
     SectionForce,
     SectionMoment,

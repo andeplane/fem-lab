@@ -15,6 +15,8 @@ export const SI_UNIT: Record<string, string> = {
   power: 'W',
   stress: 'Pa',
   temperature: 'K',
+  temperatureGradient: 'K/m',
+  heatFlux: 'W/m^2',
   torque: 'N m',
   dimensionless: '',
 };
@@ -33,6 +35,8 @@ export const FIELD_DIMENSION: Record<Field, keyof typeof SI_UNIT> = {
   errorEstimate: 'dimensionless',
   plasticStrain: 'dimensionless',
   temperature: 'temperature',
+  temperatureGradient: 'temperatureGradient',
+  heatFlux: 'heatFlux',
   rotation: 'dimensionless',
   sectionForce: 'force',
   sectionMoment: 'torque',
@@ -106,6 +110,10 @@ export const FIELD_CHOICES: FieldChoice[] = [
   { key: 'peeq', label: 'ε̄ᵖ', field: 'plasticStrain', component: 0 },
   { key: 'contactPressure', label: 'p_c', field: 'contactPressure', component: 0 },
   { key: 'temperature', label: 'T', field: 'temperature', component: 0 },
+  { key: 'temperatureGradient', label: '|∇T|', field: 'temperatureGradient', component: null, magnitude: true },
+  ...VEC.map((a, i) => ({ key: `temperatureGradient${a}`, label: `∇T${a}`, field: 'temperatureGradient', component: i })),
+  { key: 'heatFlux', label: '|q|', field: 'heatFlux', component: null, magnitude: true },
+  ...VEC.map((a, i) => ({ key: `heatFlux${a}`, label: `q${a}`, field: 'heatFlux', component: i })),
   { key: 'errorEstimate', label: 'Estimated spatial error', field: 'errorEstimate', component: 0 },
 ];
 

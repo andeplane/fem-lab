@@ -2929,7 +2929,7 @@ fn probing_and_walking_a_solved_field() {
         at: [Q::text("2 m"), Q::text("50 mm"), Q::text("50 mm")],
     };
     assert_eq!(e.query(off).expect_err("outside").code, ErrorCode::NotFound);
-    // an unaveraged field is not nodal, so it cannot be sampled at a point
+    // An unaveraged field interpolates the containing element's own values.
     let per_elem = Query::Probe {
         result_id: None,
         sample: None,
@@ -2938,7 +2938,9 @@ fn probing_and_walking_a_solved_field() {
         component: Some(0),
         at: [Q::text("0 m"), Q::text("50 mm"), Q::text("50 mm")],
     };
-    assert_eq!(e.query(per_elem).expect_err("per element node").code, ErrorCode::Unsupported);
+    let QueryResult::Probe(p) = e.query(per_elem).expect("element-node interpolation") else { panic!() };
+    assert!(p.interpolated);
+    assert_eq!(p.element, 0);
     // a path down the axis rises monotonically to the tip
     let path = Query::Path {
         result_id: None,
@@ -3765,6 +3767,86 @@ fn a_steady_heat_step_conducts_a_linear_profile_and_exports_it() {
     for (point, value) in points.chunks_exact(3).zip(temperature.chunks_exact(3)) {
         assert!((value[0] - (273.15 + 100.0 * point[0])).abs() < 1e-9, "T(x) = 273.15 + 100 x kelvin");
         assert_eq!(&value[1..], &[0.0, 0.0]);
+    }
+}
+
+#[test]
+fn thermal_vector_queries_keep_units_mesh_identity_replay_and_frame_limits() {
+    for nx in [2, 4, 8] {
+        let mut e = inherited_heat_bar(nx, 1);
+        ok(
+            &mut e,
+            r#"{"cmd":"model.setUnits","units":{"temperature":"degC","temperatureGradient":"K/mm","heatFlux":"kW/m^2"}}"#,
+        );
+        let cost = frame_query(&mut e, serde_json::json!({"query":"query.cost","step":"warm"})).unwrap();
+        // Each Hex8 contributes eight GP and eight element-node entities, six f64s each.
+        assert_eq!(cost["recoveryBytes"].as_u64().unwrap(), nx as u64 * 16 * 6 * 8);
+        ok(&mut e, r#"{"cmd":"solve.run","step":"warm","solver":"cpu-direct"}"#);
+        let thermal = result_of(&mut e, Some("warm"));
+        let vectors: Vec<_> = [Field::TemperatureGradient, Field::HeatFlux]
+            .iter()
+            .map(|&field| e.field(Some("warm"), field).unwrap().clone())
+            .collect();
+        for (field, unit, want) in [("temperatureGradient", "K/m", 100.0), ("heatFlux", "W/m^2", -1000.0)] {
+            let raw =
+                frame_query(&mut e, serde_json::json!({"query":"query.field","step":"warm","field":field})).unwrap();
+            assert_eq!(raw["per"], "elementNode");
+            assert_eq!(raw["unit"], unit);
+            assert_eq!(raw["components"], 3);
+            assert_eq!(raw["entityCount"], 8 * nx);
+            assert!((raw["values"][0].as_f64().unwrap() - want).abs() < 1e-8);
+        }
+        assert!(
+            (probe_at(&mut e, "warm", Field::TemperatureGradient, Some(0), ["0.37 m", "0.05 m", "0.05 m"]) - 0.1).abs()
+                < 1e-10
+        );
+        let walk = frame_query(
+            &mut e,
+            serde_json::json!({"query":"query.path","step":"warm","field":"heatFlux","component":0,
+            "from":["0.1 m","0.05 m","0.05 m"],"to":["0.9 m","0.05 m","0.05 m"],"n":5}),
+        )
+        .unwrap();
+        assert_eq!(walk["unit"], "kW/m^2");
+        ok(&mut e, r#"{"cmd":"solve.run","step":"expand","solver":"cpu-direct"}"#);
+        // Chaining consumes only temperature; it neither destroys the predecessor's
+        // endpoint fields nor invents thermal fields on the structural Result.
+        assert_eq!(e.field(Some("warm"), Field::HeatFlux).unwrap(), &vectors[1]);
+        assert_eq!(e.field(Some("expand"), Field::HeatFlux).unwrap_err().code, ErrorCode::NotFound);
+        assert!(
+            (probe_at(&mut e, "expand", Field::Displacement, Some(0), ["1 m", "0.05 m", "0.05 m"]) - 0.0005).abs()
+                < 1e-12
+        );
+        let mut replayed = Engine::new(None, Box::new(NoClock), 4);
+        pollster::block_on(replayed.replay(&e.export_file().journal.entries, true, true)).unwrap();
+        for (i, field) in [Field::TemperatureGradient, Field::HeatFlux].into_iter().enumerate() {
+            assert_eq!(replayed.field(Some("warm"), field).unwrap(), &vectors[i]);
+        }
+        let retained = frame_query(
+            &mut e,
+            serde_json::json!({"query":"query.field","resultId":thermal.result_id,"field":"heatFlux"}),
+        )
+        .unwrap();
+        ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":3,"ny":2,"nz":1}}}"#);
+        let after = frame_query(
+            &mut e,
+            serde_json::json!({"query":"query.field","resultId":thermal.result_id,"field":"heatFlux"}),
+        )
+        .unwrap();
+        assert_eq!(retained, after);
+    }
+    let mut e = solved_transient_chain();
+    let frames = frame_query(&mut e, serde_json::json!({"query":"query.frames","step":"warm"})).unwrap();
+    assert_eq!(frames["field"], "temperature");
+    for field in ["temperatureGradient", "heatFlux"] {
+        assert!(frame_query(&mut e, serde_json::json!({"query":"query.field","step":"warm","field":field})).is_ok());
+        for request in [
+            serde_json::json!({"query":"query.frame","step":"warm","field":field,"index":1}),
+            serde_json::json!({"query":"query.probe","step":"warm","field":field,"sample":{"kind":"frame","index":1},"at":["0.5 m","0.05 m","0.05 m"]}),
+        ] {
+            let error = frame_query(&mut e, request).unwrap_err();
+            assert_eq!(error.code, ErrorCode::Unsupported);
+            assert!(error.cause.contains("retains only Temperature"));
+        }
     }
 }
 
