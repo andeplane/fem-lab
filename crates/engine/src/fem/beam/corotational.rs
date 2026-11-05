@@ -128,7 +128,7 @@ fn normalize(a: V) -> Result<V, Error> {
 fn singular() -> Error {
     Error::new(
         ErrorCode::MeshInverted,
-        "the corotational beam frame is singular (collapsed chord or opposed section directors)",
+        "the corotational beam frame is singular (collapsed chord, opposed section directors or relative rotation at pi)",
     )
     .at("element")
     .suggest("step.add with smaller load increments, or mesh.set with more beam elements")
@@ -245,6 +245,11 @@ pub(super) fn tangent(
         )
         .at("material")
         .suggest("material.add with an elastic law, or mesh the member as a solid"));
+    }
+    if cxt.gravity.iter().any(|g| *g != 0.0) {
+        return Err(Error::new(ErrorCode::Unsupported,
+            "corotational beams do not support gravity: finite-rotation distributed-load and section recovery are not implemented")
+            .at("loads").suggest("step.add with procedure 'static', or model self-weight with solid elements"));
     }
     let fr = frame(cxt)?;
     let p = props(cxt, fr.half)?;

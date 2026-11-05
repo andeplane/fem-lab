@@ -19307,6 +19307,8 @@ fn corotational_beam_refuses_singular_frames_and_stateful_materials_and_propagat
         outside_chart[5] = angle;
         assert_eq!(element_tangent(ElementKind::Beam2, &c, &outside_chart).unwrap_err().code, ErrorCode::Unsupported);
     }
+    let weighted = beam_ctx(&coords, &mat, Some(&sec), None, [0.0, 0.0, -9.81], None);
+    assert_eq!(element_tangent(ElementKind::Beam2, &weighted, &[0.0; 12]).unwrap_err().code, ErrorCode::Unsupported);
     let stateful = Material { law: &J2Plasticity, ..steel() };
     let plastic = beam_ctx(&coords, &stateful, Some(&sec), None, [0.0; 3], None);
     assert_eq!(element_tangent(ElementKind::Beam2, &plastic, &[0.0; 12]).unwrap_err().code, ErrorCode::Unsupported);

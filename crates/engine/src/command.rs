@@ -255,7 +255,7 @@ pub enum Procedure {
     /// an objective corotational kernel. Their rotations are total global rotation vectors;
     /// moment components are generalized dead loads conjugate to those coordinates. Total
     /// rotation-vector magnitude must remain below pi radians at every beam node. Stateful
-    /// beam materials and singular relative-section rotation frames are rejected. Beam
+    /// beam materials, gravity loads and singular relative-section rotation frames are rejected. Beam
     /// strain is engineering axial section strain, not continuum Green–Lagrange strain.
     /// Solid and plane-strain idealisations only. Incompatible modes are switched off, so
     /// hex8 and quad4 lock in bending under this procedure — use `order: 2`. Loads do not

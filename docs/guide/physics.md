@@ -43,6 +43,8 @@ Beam output strain is engineering axial section strain and output stress is the 
 
 Total beam rotation vectors must remain strictly inside the principal exponential chart, with magnitude less than pi radians at every node. Reaching that limit or a nonfinite rotation is an explicit unsupported error; reducing load increments does not extend the supported final-rotation range. This prevents the rank loss of exponential coordinates near full turns.
 
+The corotational beam kernel rejects gravity loads. Its finite-rotation distributed-load interpolation and within-element self-weight stress recovery are not implemented. Use linear `static` beams or a solid model for self-weight; manually replacing gravity with nodal loads does not establish an equivalent distributed-load model. Nodal dead forces/moments and axial thermal expansion remain supported within the stated limits.
+
 ## Establish suitability
 
 Examples, analytical Benchmarks and convergence tests establish specific known-answer cases. They do not certify every model assembled from those capabilities. Check geometry approximation, boundary assumptions, property provenance, mesh/time convergence, equilibrium and relevant failure mechanisms. See [Results and verification](./results-verification.md). Remote FEM solving, Python bindings and arbitrary user plugin loading are not current product capabilities; see [architecture](./architecture-extensions.md).
