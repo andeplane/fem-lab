@@ -1541,6 +1541,7 @@ impl Engine {
                 Ok(Output::None)
             }
             Command::StepAdd {
+                formulation,
                 name,
                 procedure,
                 constraints,
@@ -1643,6 +1644,7 @@ impl Engine {
                         .ok_or_else(|| Error::not_found("step", prev, &self.model.names(ObjectKind::Step)))?;
                 }
                 let s = Step {
+                    formulation: *formulation,
                     name: name.clone(),
                     procedure: *procedure,
                     constraints: constraints.clone(),

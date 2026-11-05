@@ -190,7 +190,7 @@ Goal: geometry that is not a box, and the classic benchmarks that need it.
 | NAFEMS T4 steady conduction + convection | quad/tri | T(E) = 18.3 °C (converged 18.25) | 0.5 °C |
 | NAFEMS FV32 tapered membrane, modal | quad8 | 44.623, 130.03, 162.70, 246.05, 379.90, 391.44 Hz | 1 % |
 | Lamé thick cylinder (plane strain + 3D) | quad/hex p=1,2 | u_r(a) = 5.90e-5 m, σθθ = 100 MPa, σrr = −60 MPa | 1 % disp, 2 % stress at p=2 |
-| Near-incompressible cylinder, ν = 0.49 / 0.499 / 0.4999 | quad4/quad8/hex, mixed later | regenerated from Lamé | monotone; < 2 % for a locking-free element |
+| Near-incompressible cylinder, ν = 0.49 / 0.499 / 0.4999 | quad4/quad8/hex; small-strain B-bar | regenerated from Lamé | monotone refinement; Quad4 B-bar < 2 % on displacement and both bore stresses |
 | Kirsch plate with hole | p=2 | K_t = 3.00 (infinite plate); 3.018 for the Ansys VM142 geometry | 2 % |
 | Cook's membrane | tri/quad p=1,2 | 21.520 (ν = 1/3) vs 23.9 (plane stress) — **resolve before hard-coding** | 1 % at fine mesh + Richardson |
 | MacNeal–Harder straight cantilever, in-plane shear, skewed meshes | quad4, quad4-incompatible, quad8 | 0.108 in | quad8 ≤ 1 %; quad4 error recorded, not gated |

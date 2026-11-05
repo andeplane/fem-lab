@@ -1,0 +1,172 @@
+{
+  "name": "c3-bbar-axisymmetric-quad4",
+  "reference": "Benchmark C3, independent Lame solution at nu=0.4999, a=.1 m, b=.2 m, E=200 GPa and internal p=60 MPa with axial strain zero. A=p*a^2/(b^2-a^2), B=A*b^2, sigma_rr=A-B/r^2 and sigma_hoop=A+B/r^2; therefore bore stresses are -60 and +100 MPa. Bore radial displacement is (1+nu)/E * [A*(1-2nu)*a+B/a] = 5.99989998e-05 m. Small-strain mean-dilatation Quad4 uses full deviatoric quadrature and volume-averaged mechanical trace. The Rust C3 regression separately gates refinement at 4/8/16/32/64 radial cells and one/four workers; this CLI case is its finest supported mesh, not a recorded-FE-value oracle.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "lame-axisymmetric"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "m",
+        "stress": "MPa",
+        "force": "N"
+      }
+    },
+    {
+      "cmd": "model.setIdealisation",
+      "idealisation": {
+        "kind": "axisymmetric"
+      }
+    },
+    {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "200 GPa",
+      "nu": 0.4999
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "mapped",
+        "body": "tube",
+        "blocks": [
+          {
+            "corners": [
+              [
+                "0.1 m",
+                "0 m"
+              ],
+              [
+                "0.2 m",
+                "0 m"
+              ],
+              [
+                "0.2 m",
+                "0.1 m"
+              ],
+              [
+                "0.1 m",
+                "0.1 m"
+              ]
+            ],
+            "n": [
+              64,
+              2
+            ],
+            "tags": [
+              "zmin",
+              "outer",
+              "zmax",
+              "inner"
+            ]
+          }
+        ]
+      },
+      "order": 1,
+      "formulation": "mean-dilatation"
+    },
+    {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "tube"
+      ]
+    },
+    {
+      "cmd": "constraint.symmetry",
+      "name": "zmin",
+      "on": "tube.zmin",
+      "normal": "y"
+    },
+    {
+      "cmd": "constraint.symmetry",
+      "name": "zmax",
+      "on": "tube.zmax",
+      "normal": "y"
+    },
+    {
+      "cmd": "load.pressure",
+      "name": "inside",
+      "on": "tube.inner",
+      "value": "60 MPa"
+    },
+    {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": [
+        "zmin",
+        "zmax"
+      ],
+      "loads": [
+        "inside"
+      ]
+    },
+    {
+      "cmd": "solve.run",
+      "step": "static"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 0,
+        "at": [
+          "0.1 m",
+          "0.05 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 5.99989998e-05,
+      "tol": 0.02,
+      "rel": true,
+      "note": "C3 analytic radial bore displacement, epsilon_z=0"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "stress",
+        "component": 2,
+        "at": [
+          "0.1 m",
+          "0.05 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 100,
+      "tol": 0.02,
+      "rel": true,
+      "note": "C3 analytic bore hoop stress = 100 MPa"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "stress",
+        "component": 0,
+        "at": [
+          "0.1 m",
+          "0.05 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": -60,
+      "tol": 0.02,
+      "rel": true,
+      "note": "C3 analytic bore radial stress = -60 MPa"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/stale",
+      "expect": false
+    }
+  ]
+}

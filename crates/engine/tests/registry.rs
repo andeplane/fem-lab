@@ -14853,3 +14853,54 @@ mod portable_optional;
 
 #[path = "registry/modal_fv52.rs"]
 mod modal_fv52;
+
+#[test]
+fn structural_step_formulation_overrides_mesh_and_survives_definition_open_and_replay() {
+    use femlab_engine::command::Formulation;
+    let mut e = engine();
+    cantilever(&mut e);
+    let mesh_full =
+        r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":2,"ny":1,"nz":1}},"formulation":"full"}"#;
+    ok(&mut e, mesh_full);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    let full = e.field(Some("static"), Field::Displacement).unwrap().clone();
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"bbar","procedure":"static","constraints":["root"],"loads":["tip"],"formulation":"mean-dilatation"}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"bbar"}"#);
+    let bbar = e.field(Some("bbar"), Field::Displacement).unwrap().clone();
+    assert_eq!(e.model().mesh.as_ref().unwrap().formulation, Formulation::Full);
+    assert_ne!(bbar, full, "a Step override must change the operator, not only its metadata");
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"explicit-full","procedure":"static","constraints":["root"],"loads":["tip"],"formulation":"full"}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"explicit-full"}"#);
+    assert_eq!(e.field(Some("explicit-full"), Field::Displacement).unwrap(), &full);
+    let definition =
+        serde_json::to_value(e.query(Query::Definition { kind: ObjectKind::Step, name: "bbar".into() }).unwrap())
+            .unwrap();
+    assert_eq!(definition["command"]["formulation"], "mean-dilatation");
+    let mesh_mean = r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":2,"ny":1,"nz":1}},"formulation":"mean-dilatation"}"#;
+    ok(&mut e, mesh_mean);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    assert_eq!(e.field(Some("static"), Field::Displacement).unwrap(), &bbar);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"explicit-full"}"#);
+    assert_eq!(e.field(Some("explicit-full"), Field::Displacement).unwrap(), &full);
+    let saved = e.export_file();
+    let text = serde_json::to_string(&saved).unwrap();
+    let reopened: femlab_engine::ModelFile = serde_json::from_str(&text).unwrap();
+    assert_eq!(reopened.model.steps, saved.model.steps);
+    for threads in [1, 4] {
+        let mut replayed = Engine::new(None, Box::new(NoClock), threads);
+        pollster::block_on(replayed.replay(&reopened.journal.entries, false, true)).unwrap();
+        assert_eq!(replayed.model(), e.model());
+        assert_eq!(replayed.field(Some("explicit-full"), Field::Displacement).unwrap(), &full);
+    }
+    for procedure in ["heat-steady", "heat-transient"] {
+        let command = serde_json::json!({"cmd":"step.add","name":"heat-choice","procedure":procedure,"constraints":[],"loads":[],"formulation":"mean-dilatation"});
+        ok(&mut e, &command.to_string());
+        assert_eq!(e.model().step("heat-choice").unwrap().formulation, Some(Formulation::MeanDilatation));
+    }
+}

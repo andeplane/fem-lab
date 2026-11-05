@@ -825,7 +825,7 @@ const commands = {
       "x-execution": "modelWrite"
     },
     {
-      "description": "Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`\n1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).\n`formulation: mean-dilatation` gives small-strain Hex8 the volume-averaged B-bar\nstrain used by Abaqus C3D8; other kinds keep full integration. Existing full Journals\nretain their original pointwise strain. Mean-dilatation Hex8 cannot run finite deformation.\n`formulation: full` is the textbook linear element that locks in bending: keep the\ndefault incompatible modes or use order 2 when bending matters. Mesher-defined geometry\nowns a Body name distinct from explicit Bodies, cuts, named Sets and point masses.\nKeeping that name preserves its material;\nchanging/removing it requires no remaining Body references and clears its material.\nUse model.rename to change an implicit Body name while preserving its references.\n`simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles\n(tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved\ngeometry: the selected mesher still determines the boundary approximation, and the `tet`\nmesher is the one that meshes a curved solid freely. `formulation` has no effect when\n`simplices` is true, or under the `tet` mesher, because simplex elements have no\nincompatible modes. Imported sources retain authored labels/connectivity and exact Sets,\ndefault to full integration, and require solid3d, no simplex split/refinement.\nTheir element kinds determine interpolation; order 1 means retain the authored source, including quadratic nodes.\nRemoving or emptying a referenced imported Set fails without mutation.",
+      "description": "Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`\n1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).\n`formulation: mean-dilatation` gives small-strain Hex8 and plane-strain/axisymmetric\nQuad4 the physical-volume-averaged B-bar mechanical strain (including thermal eigenstrain).\nPlane-stress Quad4 and other kinds keep full integration. Existing full Journals retain\ntheir original pointwise strain. Mean-dilatation Hex8/Quad4 cannot run finite deformation.\nA structural step.add formulation overrides this mesh default without rebuilding the mesh.\n`formulation: full` is the textbook linear element that locks in bending: keep the\ndefault incompatible modes or use order 2 when bending matters. Mesher-defined geometry\nowns a Body name distinct from explicit Bodies, cuts, named Sets and point masses.\nKeeping that name preserves its material;\nchanging/removing it requires no remaining Body references and clears its material.\nUse model.rename to change an implicit Body name while preserving its references.\n`simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles\n(tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved\ngeometry: the selected mesher still determines the boundary approximation, and the `tet`\nmesher is the one that meshes a curved solid freely. `formulation` has no effect when\n`simplices` is true, or under the `tet` mesher, because simplex elements have no\nincompatible modes. Imported sources retain authored labels/connectivity and exact Sets,\ndefault to full integration, and require solid3d, no simplex split/refinement.\nTheir element kinds determine interpolation; order 1 means retain the authored source, including quadratic nodes.\nRemoving or emptying a referenced imported Set fails without mutation.",
       "type": "object",
       "properties": {
         "mesher": {
@@ -1712,6 +1712,27 @@ const commands = {
           ],
           "x-procedures": [
             "*"
+          ]
+        },
+        "formulation": {
+          "description": "Structural element formulation for this Step; omitted inherits mesh.set. Mean-dilatation\nuses small-strain Hex8/Quad4 B-bar in solid3d, planeStrain and axisymmetric; plane-stress\nQuad4 and other kinds retain full integration. Finite-deformation B-bar is unsupported.\nThis structural setting has no effect on heat Steps.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Formulation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "x-procedures": [
+            "static",
+            "static-nonlinear",
+            "modal",
+            "buckling",
+            "explicit",
+            "implicit",
+            "harmonic",
+            "randomVibration"
           ]
         },
         "nModes": {
@@ -4456,7 +4477,7 @@ const commands = {
           "const": "full"
         },
         {
-          "description": "Small-strain Hex8 B-bar: eight-point deviatoric strain with volume-averaged dilatation.\nOther element kinds retain full integration. This is the Abaqus C3D8 formulation,\nnot uniformly reduced integration; finite-deformation Hex8 steps are unsupported.",
+          "description": "Small-strain B-bar for Hex8 and Quad4 in plane strain or axisymmetry (with or without\ntwist): full-point deviatoric strain with physical-volume-averaged mechanical dilatation.\nPlane-stress Quad4 and other kinds retain full integration. This includes the Abaqus\nC3D8 formulation, not uniform reduced integration. Finite-deformation B-bar is unsupported.",
           "type": "string",
           "const": "mean-dilatation"
         }

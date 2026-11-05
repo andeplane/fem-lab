@@ -521,7 +521,7 @@ pub struct InitialVelocity {
     pub value: [f64; 3],
 }
 
-/// A Step. Everything after `output` belongs to one procedure each and is `None` for the rest;
+/// A Step with optional procedure settings and a structural formulation override.
 /// `after` names the Step whose Result this one continues (plan B §2.2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -533,6 +533,8 @@ pub struct Step {
     pub output: Vec<Field>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub formulation: Option<Formulation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub n_modes: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1024,6 +1026,7 @@ mod tests {
         m.loads.push(Load { name: "p".into(), kind: LoadKind::Pressure { on: "beam.xmax".into(), value: 1.0 } });
         m.loads.push(Load { name: "g".into(), kind: LoadKind::Gravity { g: [0.0, 0.0, -9.81] } });
         m.steps.push(Step {
+            formulation: None,
             name: "st".into(),
             procedure: Procedure::Static,
             constraints: vec![],

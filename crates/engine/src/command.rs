@@ -463,9 +463,10 @@ pub enum Formulation {
     IncompatibleModes,
     /// Full integration: the textbook linear element, which locks in bending.
     Full,
-    /// Small-strain Hex8 B-bar: eight-point deviatoric strain with volume-averaged dilatation.
-    /// Other element kinds retain full integration. This is the Abaqus C3D8 formulation,
-    /// not uniformly reduced integration; finite-deformation Hex8 steps are unsupported.
+    /// Small-strain B-bar for Hex8 and Quad4 in plane strain or axisymmetry (with or without
+    /// twist): full-point deviatoric strain with physical-volume-averaged mechanical dilatation.
+    /// Plane-stress Quad4 and other kinds retain full integration. This includes the Abaqus
+    /// C3D8 formulation, not uniform reduced integration. Finite-deformation B-bar is unsupported.
     MeanDilatation,
 }
 
@@ -1797,9 +1798,11 @@ pub enum Command {
 
     /// Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`
     /// 1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).
-    /// `formulation: mean-dilatation` gives small-strain Hex8 the volume-averaged B-bar
-    /// strain used by Abaqus C3D8; other kinds keep full integration. Existing full Journals
-    /// retain their original pointwise strain. Mean-dilatation Hex8 cannot run finite deformation.
+    /// `formulation: mean-dilatation` gives small-strain Hex8 and plane-strain/axisymmetric
+    /// Quad4 the physical-volume-averaged B-bar mechanical strain (including thermal eigenstrain).
+    /// Plane-stress Quad4 and other kinds keep full integration. Existing full Journals retain
+    /// their original pointwise strain. Mean-dilatation Hex8/Quad4 cannot run finite deformation.
+    /// A structural step.add formulation overrides this mesh default without rebuilding the mesh.
     /// `formulation: full` is the textbook linear element that locks in bending: keep the
     /// default incompatible modes or use order 2 when bending matters. Mesher-defined geometry
     /// owns a Body name distinct from explicit Bodies, cuts, named Sets and point masses.
@@ -2336,6 +2339,13 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[schemars(extend("x-procedures" = ["*"]))]
         after: Option<String>,
+        /// Structural element formulation for this Step; omitted inherits mesh.set. Mean-dilatation
+        /// uses small-strain Hex8/Quad4 B-bar in solid3d, planeStrain and axisymmetric; plane-stress
+        /// Quad4 and other kinds retain full integration. Finite-deformation B-bar is unsupported.
+        /// This structural setting has no effect on heat Steps.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["static", "static-nonlinear", "modal", "buckling", "explicit", "implicit", "harmonic", "randomVibration"]))]
+        formulation: Option<Formulation>,
         /// Number of requested modes or buckling factors; omitted means six for modal or one for buckling.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[schemars(extend("x-procedures" = ["modal", "buckling"]))]

@@ -506,4 +506,22 @@ describe('SchemaForm', () => {
     type(field(r2, 'nu').querySelector('input')!, '');
     expect(s2.state.form!.values['nu']).toBeUndefined();
   });
+
+  it('edits a structural Step formulation and preserves it when viewing another procedure', async () => {
+    const original = { name: 'analysis', procedure: 'static', constraints: [], loads: [] };
+    const { root, store, sent } = mount('step.add', original);
+    const choose = (path: string, value: string) => [...field(root, path).querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === value)!.click();
+    choose('formulation', 'mean-dilatation');
+    expect(store.state.form!.values['formulation']).toBe('mean-dilatation');
+    root.querySelector<HTMLButtonElement>('.apply')!.click();
+    expect(sent.at(-1)).toEqual({ cmd: 'step.add', ...original, formulation: 'mean-dilatation' });
+    choose('procedure', 'heat-steady');
+    expect(field(root, 'formulation')).toBeNull();
+    expect(store.state.form!.values['formulation']).toBe('mean-dilatation');
+    choose('procedure', 'static');
+    expect(field(root, 'formulation')).not.toBeNull();
+    root.querySelector<HTMLButtonElement>('[title="Revert to the values this form opened with"]')!.click();
+    expect(store.state.form!.values).toEqual(original);
+    await Promise.resolve();
+  });
 });

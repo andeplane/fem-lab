@@ -29,7 +29,7 @@ Materials provide isotropic/orthotropic elasticity, directional thermal properti
 
 Bonded contact provides a tied connection. Frictionless contact uses an active-set, small-sliding formulation with pairing established on the undeformed geometry, only for supported static/nonlinear static analyses. It is not general finite-sliding frictional contact. Thermal connection/resistance has a separate Command.
 
-In finite-deformation continuum analysis, the elastic law uses a St Venant–Kirchhoff interpretation; output stress is Cauchy stress and probe coordinates remain in the reference geometry. Incompatible modes are disabled there, so use suitable quadratic elements for bending. Mean-dilatation Hex8 cannot run finite deformation.
+In finite-deformation continuum analysis, the elastic law uses a St Venant–Kirchhoff interpretation; output stress is Cauchy stress and probe coordinates remain in the reference geometry. Incompatible modes are disabled there, so use suitable quadratic elements for bending. Mean-dilatation Hex8 and plane-strain/axisymmetric Quad4 use a small-strain B-bar mechanical strain, with thermal dilatation averaged consistently. They cannot run finite deformation; they do not establish a finite-strain mixed formulation for hyperelasticity or plasticity.
 
 ## Establish suitability
 

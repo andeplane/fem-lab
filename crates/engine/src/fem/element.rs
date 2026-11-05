@@ -303,6 +303,8 @@ fn fill_b(b: &mut [f64], nt: usize, col: usize, comp: usize, g: [f64; 3], dim: u
 /// `[B | B̄_α]`: `n_gp` blocks of `VOIGT × nt` row-major, with `m` incompatible-mode columns
 /// after the `n_dof` displacement columns.
 struct Kin {
+    /// Project mechanical dilatation in the supported small-strain B-bar elements.
+    mean_dilatation: bool,
     n_gp: usize,
     n_nodes: usize,
     /// Geometric dimension: what the Jacobian, the shape-function gradients and a body or face
@@ -346,6 +348,30 @@ fn kinematics(kind: ElementKind, c: &ElementCtx<'_>) -> Result<Kin, Error> {
     kinematics_with_rule(kind, c, rule_of(kind))
 }
 
+fn mean_dilatation(kind: ElementKind, c: &ElementCtx<'_>) -> bool {
+    c.formulation == Formulation::MeanDilatation
+        && (kind == ElementKind::Hex8
+            || (kind == ElementKind::Quad4 && !matches!(c.idealisation, Idealisation::PlaneStress { .. })))
+}
+
+/// Replace only the three-dimensional trace by its physical-volume average. The same
+/// projection acts on B columns and on thermal eigenstrain: mechanical strain is their
+/// difference. Axisymmetric weights already contain 2πr. In plane strain the projected
+/// third normal component is an assumed strain, not an added displacement degree of freedom.
+fn project_dilatation(values: &mut [f64], weights: &[f64], columns: usize) {
+    let volume: f64 = weights.iter().sum();
+    for col in 0..columns {
+        let trace = |b: &[f64], g: usize| (0..3).map(|row| b[(g * VOIGT + row) * columns + col]).sum::<f64>();
+        let mean = weights.iter().enumerate().map(|(g, w)| w * trace(values, g)).sum::<f64>() / volume;
+        for g in 0..weights.len() {
+            let correction = (mean - trace(values, g)) / 3.0;
+            for row in 0..3 {
+                values[(g * VOIGT + row) * columns + col] += correction;
+            }
+        }
+    }
+}
+
 fn kinematics_with_rule(kind: ElementKind, c: &ElementCtx<'_>, rule: Rule) -> Result<Kin, Error> {
     let (nn, dim) = (kind.n_nodes(), kind.dim());
     let dofs = c.idealisation.dofs_per_node();
@@ -354,6 +380,7 @@ fn kinematics_with_rule(kind: ElementKind, c: &ElementCtx<'_>, rule: Rule) -> Re
     let m = n_modes(kind, c.formulation);
     let nt = n_dof + m;
     let mut kin = Kin {
+        mean_dilatation: mean_dilatation(kind, c),
         n_gp,
         n_nodes: nn,
         dim,
@@ -438,21 +465,11 @@ fn kinematics_with_rule(kind: ElementKind, c: &ElementCtx<'_>, rule: Rule) -> Re
             }
         }
     }
-    if c.formulation == Formulation::MeanDilatation && kind == ElementKind::Hex8 {
+    if kin.mean_dilatation {
         // B-bar retains every deviatoric/shear component and replaces only the trace by
         // its physical-volume average. Integrate the average with the existing full rule;
         // evaluating at the centroid is a different operator on a distorted hexahedron.
-        let volume: f64 = kin.w.iter().sum();
-        for col in 0..nt {
-            let trace = |b: &[f64], g: usize| (0..3).map(|row| b[(g * VOIGT + row) * nt + col]).sum::<f64>();
-            let mean = (0..n_gp).map(|g| kin.w[g] * trace(&kin.b, g)).sum::<f64>() / volume;
-            for g in 0..n_gp {
-                let correction = (mean - trace(&kin.b, g)) / 3.0;
-                for row in 0..3 {
-                    kin.b[(g * VOIGT + row) * nt + col] += correction;
-                }
-            }
-        }
+        project_dilatation(&mut kin.b, &kin.w, nt);
     }
     Ok(kin)
 }
@@ -672,6 +689,9 @@ fn thermal_strain(kin: &Kin, c: &ElementCtx<'_>) -> Option<Vec<f64>> {
         for (i, &b) in base.iter().enumerate() {
             e[g * VOIGT + i] = b * d;
         }
+    }
+    if kin.mean_dilatation {
+        project_dilatation(&mut e, &kin.w, 1);
     }
     Some(e)
 }
@@ -1080,10 +1100,10 @@ fn tangent_and_force_of(
     state_in: &[f64],
     out: TangentOut<'_>,
 ) -> Result<f64, Error> {
-    if c.formulation == Formulation::MeanDilatation && kind == ElementKind::Hex8 {
-        return Err(Error::new(ErrorCode::Unsupported, "mean-dilatation Hex8 supports small strain only")
+    if mean_dilatation(kind, c) {
+        return Err(Error::new(ErrorCode::Unsupported, "mean-dilatation Hex8/Quad4 supports small strain only")
             .at("formulation")
-            .suggest("step.add with procedure static, or mesh.set with formulation full"));
+            .suggest("step.add with procedure static or formulation full"));
     }
     // Incompatible modes are off under finite strain: the enhanced field is derived for
     // infinitesimal strain and hourglasses in compression, so this integrates fully whatever

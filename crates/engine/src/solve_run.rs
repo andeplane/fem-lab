@@ -311,7 +311,9 @@ fn build_problem_with_temperature<'a>(
             .collect::<Result<Vec<_>, _>>()?,
         orientation_of_block,
         idealisation: model.idealisation.clone(),
-        formulation: model.mesh.as_ref().map_or_else(Default::default, |m| m.formulation),
+        formulation: step
+            .formulation
+            .unwrap_or_else(|| model.mesh.as_ref().map_or_else(Default::default, |m| m.formulation)),
         constraints,
         couplings,
         points,
