@@ -1,6 +1,7 @@
 import importlib.util
 from pathlib import Path
 import unittest
+from copy import deepcopy
 
 spec=importlib.util.spec_from_file_location('operations',Path(__file__).with_name('operations.py'))
 operations=importlib.util.module_from_spec(spec)
@@ -53,6 +54,19 @@ class OperationalDeployment(unittest.TestCase):
         for desired in policies.values():
             self.assertEqual(desired['notificationChannels'],['projects/femlab-app/notificationChannels/1'])
             self.assertEqual(desired['alertStrategy']['notificationRateLimit']['period'],'900s')
+    def test_unchanged_policy_does_not_reset_incidents_and_changed_policy_keeps_condition_identity(self):
+        desired=operations.policy('femlab-app','projects/femlab-app/notificationChannels/1','fixed-filter')
+        current=deepcopy(desired);current['name']='projects/femlab-app/alertPolicies/1';current['conditions'][0]['name']=current['name']+'/conditions/2';current['conditions'][0]['conditionMatchedLog']['labelExtractors']={};current['documentation']['subject']='';current['alertStrategy']['notificationPrompts']=['OPENED']
+        class Fake:
+            project='femlab-app'
+            def __init__(self):self.calls=[]
+            def api(self,*args):self.calls.append(args);return args[2]
+        cloud=Fake();self.assertIs(operations.upsert_policy(cloud,deepcopy(desired),[current]),current);self.assertEqual(cloud.calls,[])
+        changed=deepcopy(desired);changed['conditions'][0]['conditionMatchedLog']['filter']='new-reviewed-filter'
+        result=operations.upsert_policy(cloud,changed,[current])
+        self.assertEqual(len(cloud.calls),1);self.assertEqual(cloud.calls[0][3],'PATCH')
+        self.assertEqual(result['conditions'][0]['name'],current['conditions'][0]['name'])
+        self.assertEqual(result['conditions'][0]['conditionMatchedLog']['filter'],'new-reviewed-filter')
     def test_synthetic_drill_writes_logging_and_never_publishes_directly(self):
         class Fake:
             project='femlab-app-staging'

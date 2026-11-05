@@ -84,7 +84,21 @@ def upsert_policy(cloud, desired, policies):
     if len(matches)>1:
         raise RuntimeError('Multiple owned alert policies need reconciliation.')
     if matches:
-        desired['name']=matches[0]['name']
+        current=matches[0]
+        def same(want,have):
+            if isinstance(want,dict):
+                return isinstance(have,dict) and all(key=='name' or same(item,have.get(key)) for key,item in want.items())
+            if isinstance(want,list):
+                return isinstance(have,list) and len(want)==len(have) and all(same(a,b) for a,b in zip(want,have))
+            return want==have
+        # Repatching an unchanged policy discards Monitoring's precomputed incident
+        # state. Compare the fields managed here; preserve generated IDs/defaults.
+        if same(desired,current):
+            return current
+        desired['name']=current['name']
+        if len(desired['conditions'])==len(current.get('conditions',[]))==1:
+            condition_name=current['conditions'][0].get('name')
+            if condition_name:desired['conditions'][0]['name']=condition_name
         return cloud.api('monitoring','v3/'+desired['name'],desired,'PATCH')
     return cloud.api('monitoring',f'v3/projects/{cloud.project}/alertPolicies',desired,'POST')
 
