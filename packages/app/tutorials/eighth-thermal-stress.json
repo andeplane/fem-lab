@@ -1,0 +1,226 @@
+{
+  "id": "eighth-thermal-stress",
+  "title": "Thermal stress with one-eighth symmetry",
+  "minutes": 13,
+  "summary": "Use three true mirror planes to remove rigid motion while preserving thermal expansion; combine heating and pressure and check the exact displacement, stress and reaction.",
+  "steps": [
+    {
+      "title": "One eighth of a symmetric solid",
+      "explain": "Use a cube centred at the origin as an independently checkable teaching problem. The full cube is 1 m on each side; model only its positive octant. This teaches the symmetry/thermal-expansion decision in Fusion\u2019s rotor tutorial without pretending a cube is the vendor\u2019s disk-brake geometry.",
+      "expect": {
+        "cmd": "model.new"
+      },
+      "highlight": "model.new",
+      "doIt": {
+        "cmd": "model.new",
+        "name": "eighth-thermal-stress"
+      }
+    },
+    {
+      "title": "Units for a small expansion",
+      "explain": "Display lengths in millimetres and stresses in MPa. The geometry still uses explicit metre values.",
+      "expect": {
+        "cmd": "model.setUnits"
+      },
+      "highlight": "model.setUnits",
+      "doIt": {
+        "cmd": "model.setUnits",
+        "units": {
+          "length": "mm",
+          "stress": "MPa",
+          "temperature": "degC"
+        }
+      }
+    },
+    {
+      "title": "The octant",
+      "explain": "The three minimum faces lie on the full cube\u2019s mirror planes x = 0, y = 0 and z = 0. All three maximum faces are physical outside faces.",
+      "expect": {
+        "cmd": "geometry.addBox"
+      },
+      "highlight": "geometry.addBox",
+      "doIt": {
+        "cmd": "geometry.addBox",
+        "name": "octant",
+        "size": [
+          "0.5 m",
+          "0.5 m",
+          "0.5 m"
+        ]
+      }
+    },
+    {
+      "title": "Elastic expansion",
+      "explain": "Use illustrative isotropic constants E = 200 GPa, \u03bd = 0.3 and \u03b1 = 10\u207b\u2075 /K. They are exact inputs for this teaching model, not certified brake-rotor material data.",
+      "expect": {
+        "cmd": "material.add"
+      },
+      "highlight": "material.add",
+      "doIt": {
+        "cmd": "material.add",
+        "name": "solid",
+        "E": "200 GPa",
+        "nu": 0.3,
+        "alpha": "1e-5 1/K",
+        "source": "Illustrative isotropic thermoelastic verification constants"
+      }
+    },
+    {
+      "title": "Assign it",
+      "explain": "One Material on the one-eighth Body.",
+      "expect": {
+        "cmd": "material.assign"
+      },
+      "highlight": "material.assign",
+      "doIt": {
+        "cmd": "material.assign",
+        "material": "solid",
+        "bodies": [
+          "octant"
+        ]
+      }
+    },
+    {
+      "title": "Mesh the eighth",
+      "explain": "A 2 \u00d7 2 \u00d7 2 quadratic mesh is sufficient for this constant-stress, affine-displacement patch. The automated check repeats it at more than one mesh size.",
+      "expect": {
+        "cmd": "mesh.set"
+      },
+      "highlight": "mesh.set",
+      "doIt": {
+        "cmd": "mesh.set",
+        "mesher": {
+          "kind": "lattice",
+          "size": {
+            "nx": 2,
+            "ny": 2,
+            "nz": 2
+          }
+        },
+        "order": 2
+      }
+    },
+    {
+      "title": "Mirror normal to x",
+      "explain": "Symmetry removes only the displacement normal to the plane. The face can still slide in y and z as the cube expands; clamping it would invent thermal stress.",
+      "expect": {
+        "cmd": "constraint.symmetry"
+      },
+      "highlight": "constraint.symmetry",
+      "doIt": {
+        "cmd": "constraint.symmetry",
+        "name": "mirror-x",
+        "on": "octant.xmin",
+        "normal": "x"
+      }
+    },
+    {
+      "title": "Mirror normal to y",
+      "explain": "The second true mirror plane removes uy, not the entire displacement vector.",
+      "expect": {
+        "cmd": "constraint.symmetry"
+      },
+      "highlight": "constraint.symmetry",
+      "doIt": {
+        "cmd": "constraint.symmetry",
+        "name": "mirror-y",
+        "on": "octant.ymin",
+        "normal": "y"
+      }
+    },
+    {
+      "title": "Mirror normal to z",
+      "explain": "The third true mirror plane removes uz. Together these three conditions eliminate rigid motion while allowing the exact thermal expansion.",
+      "expect": {
+        "cmd": "constraint.symmetry"
+      },
+      "highlight": "constraint.symmetry",
+      "doIt": {
+        "cmd": "constraint.symmetry",
+        "name": "mirror-z",
+        "on": "octant.zmin",
+        "normal": "z"
+      }
+    },
+    {
+      "title": "A 100 K temperature rise",
+      "explain": "A uniform 100 \u00b0C temperature against a 0 \u00b0C stress-free reference gives \u0394T = 100 K. No conduction solve is needed because the temperature is specified uniformly; use the chaining tutorial for a solved nonuniform field.",
+      "expect": {
+        "cmd": "load.temperature"
+      },
+      "highlight": "load.temperature",
+      "doIt": {
+        "cmd": "load.temperature",
+        "name": "heating",
+        "bodies": [
+          "octant"
+        ],
+        "value": "100 degC",
+        "reference": "0 degC"
+      }
+    },
+    {
+      "title": "Pressure on the real outer face",
+      "explain": "Apply 10 MPa pressure on xmax. In the full cube the reflected xmin outside face carries the same inward pressure. Mirror planes are cuts through the solid; do not apply this outside pressure to them.",
+      "expect": {
+        "cmd": "load.pressure"
+      },
+      "highlight": "load.pressure",
+      "doIt": {
+        "cmd": "load.pressure",
+        "name": "compression",
+        "on": "octant.xmax",
+        "value": "10 MPa"
+      }
+    },
+    {
+      "title": "Combine the two loads",
+      "explain": "Linear static thermoelasticity combines uniform thermal expansion with uniaxial compression. All three mirror constraints belong to this Step.",
+      "expect": {
+        "cmd": "step.add"
+      },
+      "highlight": "step.add",
+      "doIt": {
+        "cmd": "step.add",
+        "name": "expand-and-compress",
+        "procedure": "static",
+        "constraints": [
+          "mirror-x",
+          "mirror-y",
+          "mirror-z"
+        ],
+        "loads": [
+          "heating",
+          "compression"
+        ]
+      }
+    },
+    {
+      "title": "Solve, then read components",
+      "explain": "At the outside corner [0.5 m, 0.5 m, 0.5 m], expect ux = 0.475 mm and uy = uz = 0.5075 mm. The stress is \u03c3xx = \u221210 MPa, \u03c3yy = \u03c3zz = 0 and von Mises = 10 MPa. A displacement magnitude is not any one of those components.",
+      "expect": {
+        "cmd": "solve.run"
+      },
+      "highlight": "solve.run",
+      "doIt": {
+        "cmd": "solve.run",
+        "step": "expand-and-compress"
+      }
+    },
+    {
+      "title": "Fit and inspect",
+      "explain": "Fit the octant, inspect the three mirror faces, then press Next. The displayed deformation scale may be exaggerated; the numerical probe uses actual displacements.",
+      "expect": null,
+      "highlight": "view.fit",
+      "doIt": {
+        "cmd": "view.fit"
+      }
+    },
+    {
+      "title": "Symmetry is a physical statement",
+      "explain": "Only use an eighth when geometry, material axes, temperature and mechanical loads reflect across all three planes. A hotter sector, an asymmetric bolt or an off-axis load invalidates this reduction.",
+      "expect": null,
+      "theory": "For uniform heating and compression $p$ in x, isotropic thermoelasticity gives $\\epsilon_x=\\alpha\\Delta T-p/E$ and $\\epsilon_y=\\epsilon_z=\\alpha\\Delta T+\\nu p/E$. Therefore $u_i=\\epsilon_i x_i$. With $\\Delta T=100\\,\\mathrm K$, $p=10\\,\\mathrm{MPa}$ and the stated constants, the corner components are **0.475, 0.5075 and 0.5075 mm**. Thermal strain itself creates no stress when expansion is free. The only nonzero direct stress is $\\sigma_{xx}=-p$, and $\\sigma_\\mathrm{VM}=p$. The modeled pressure resultant is $p(0.5)^2=2.5\\,\\mathrm{MN}$; compare the x support reaction against it, not the full cube\u2019s face force.\n\nFor a free-heating comparison, remove only `compression` from the Step\u2019s loads and solve again: every corner component becomes 0.5 mm and stress vanishes. For a deliberate wrong-model check, clamp a mirror face in all directions: the expansion is then restrained and the stress no longer has this closed form.\n\n**Other solvers:** Abaqus XSYMM/YSYMM/ZSYMM and a temperature predefined field, Ansys frictionless/symmetry planes with a thermal body load, and Nastran normal-component SPCs with a temperature load express the same reduction. Fusion\u2019s Thermal Stress workflow similarly preserves expansion on symmetry planes.\n\nProblem inspiration: [Autodesk Fusion thermal-stress tutorial](https://help.autodesk.com/cloudhelp/ENU/Fusion-Simulate/files/GUID-88BCA6F7-A333-41C8-AA35-703F6F99DE13.htm). This guide uses its own cube, loads and exact solution; it does not reproduce or validate the vendor\u2019s brake rotor, yielding assessment or CAD simplification."
+    }
+  ]
+}

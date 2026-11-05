@@ -1,0 +1,254 @@
+{
+  "id": "le10-full-face",
+  "title": "LE10: the full-face support variant",
+  "minutes": 16,
+  "summary": "Build a swept quadratic elliptic plate, distinguish the full-face ESRD support from original NAFEMS LE10, and compare the correct stress at D with an independent reference.",
+  "steps": [
+    {
+      "title": "Start the LE10 support variant",
+      "explain": "Build the ESRD full-face-support variant of NAFEMS LE10 in our own Commands. It is a thick elliptic plate under pressure, and its independent stress reference is \u22125.25 MPa. The original NAFEMS mid-plane-line support is a different boundary condition with a \u22125.38 MPa reference; this guide does not claim to run that original case.",
+      "expect": {
+        "cmd": "model.new"
+      },
+      "highlight": "model.new",
+      "doIt": {
+        "cmd": "model.new",
+        "name": "nafems-le10-plate"
+      }
+    },
+    {
+      "title": "Units and signs",
+      "explain": "Use metres, newtons and MPa. Compression is negative stress. A positive pressure acts into the selected surface.",
+      "expect": {
+        "cmd": "model.setUnits"
+      },
+      "highlight": "model.setUnits",
+      "doIt": {
+        "cmd": "model.setUnits",
+        "units": {
+          "length": "m",
+          "force": "N",
+          "stress": "MPa"
+        }
+      }
+    },
+    {
+      "title": "Elastic plate material",
+      "explain": "Use E = 210 GPa and \u03bd = 0.3, as in the published reference. This is linear static elasticity; no density or time step is needed.",
+      "expect": {
+        "cmd": "material.add"
+      },
+      "highlight": "material.add",
+      "doIt": {
+        "cmd": "material.add",
+        "name": "steel",
+        "E": "210 GPa",
+        "nu": 0.3
+      }
+    },
+    {
+      "title": "Map the two ellipses and sweep the thickness",
+      "explain": "The quarter-annulus lies between ellipses with semi-axes (2, 1) m and (3.25, 2.75) m. A mapped 12 \u00d7 12 base follows both curves exactly; eight quadratic layers span the 0.6 m thickness. mesh.set creates the implicit plate Body. Thickness refinement matters for the upper-surface stress, not just the number of elements around the hole.",
+      "expect": {
+        "cmd": "mesh.set"
+      },
+      "highlight": "mesh.set",
+      "doIt": {
+        "cmd": "mesh.set",
+        "mesher": {
+          "kind": "sweep",
+          "base": {
+            "kind": "mapped",
+            "body": "plate",
+            "blocks": [
+              {
+                "corners": [
+                  [
+                    "2 m",
+                    "0 m"
+                  ],
+                  [
+                    "3.25 m",
+                    "0 m"
+                  ],
+                  [
+                    "0 m",
+                    "2.75 m"
+                  ],
+                  [
+                    "0 m",
+                    "1 m"
+                  ]
+                ],
+                "edges": [
+                  {
+                    "kind": "line"
+                  },
+                  {
+                    "kind": "ellipse",
+                    "center": [
+                      "0 m",
+                      "0 m"
+                    ],
+                    "semiAxes": [
+                      "3.25 m",
+                      "2.75 m"
+                    ]
+                  },
+                  {
+                    "kind": "line"
+                  },
+                  {
+                    "kind": "ellipse",
+                    "center": [
+                      "0 m",
+                      "0 m"
+                    ],
+                    "semiAxes": [
+                      "2 m",
+                      "1 m"
+                    ]
+                  }
+                ],
+                "n": [
+                  12,
+                  12
+                ],
+                "tags": [
+                  "y0",
+                  "outer",
+                  "x0",
+                  "inner"
+                ]
+              }
+            ]
+          },
+          "sweep": {
+            "kind": "extrude",
+            "layers": 8,
+            "height": "0.6 m"
+          }
+        },
+        "order": 2
+      }
+    },
+    {
+      "title": "Assign the Material",
+      "explain": "The implicit swept Body is named plate. Assign the Material normally; it is the same kind of analysis target as a Body made by a geometry Command.",
+      "expect": {
+        "cmd": "material.assign"
+      },
+      "highlight": "material.assign",
+      "doIt": {
+        "cmd": "material.assign",
+        "material": "steel",
+        "bodies": [
+          "plate"
+        ]
+      }
+    },
+    {
+      "title": "Mirror the x cut",
+      "explain": "The x = 0 cut is a true reflection plane. Remove ux only so the plate can bend in z.",
+      "expect": {
+        "cmd": "constraint.symmetry"
+      },
+      "highlight": "constraint.symmetry",
+      "doIt": {
+        "cmd": "constraint.symmetry",
+        "name": "symx",
+        "on": "plate.x0",
+        "normal": "x"
+      }
+    },
+    {
+      "title": "Mirror the y cut",
+      "explain": "The y = 0 cut removes uy only. Point D is on this cut at x = 2 m, on the inner ellipse.",
+      "expect": {
+        "cmd": "constraint.symmetry"
+      },
+      "highlight": "constraint.symmetry",
+      "doIt": {
+        "cmd": "constraint.symmetry",
+        "name": "symy",
+        "on": "plate.y0",
+        "normal": "y"
+      }
+    },
+    {
+      "title": "State the support variant explicitly",
+      "explain": "Fix ux, uy and uz over the WHOLE outer elliptical face. This is ESRD\u2019s full-face variant. Holding uz only on the outer mid-plane line would permit a different through-thickness displacement field and require the original \u22125.38 MPa reference.",
+      "expect": {
+        "cmd": "constraint.fix"
+      },
+      "highlight": "constraint.fix",
+      "doIt": {
+        "cmd": "constraint.fix",
+        "name": "rim",
+        "on": "plate.outer"
+      }
+    },
+    {
+      "title": "Load the top surface",
+      "explain": "A uniform 1 MPa pressure acts down onto z = 0.6 m. The lower surface is unloaded.",
+      "expect": {
+        "cmd": "load.pressure"
+      },
+      "highlight": "load.pressure",
+      "doIt": {
+        "cmd": "load.pressure",
+        "name": "top",
+        "on": "plate.top",
+        "value": "1 MPa"
+      }
+    },
+    {
+      "title": "Define the static Step",
+      "explain": "Use both reflection constraints, the full outer-face support and the top pressure. A support is part of the benchmark definition, not a numerical knob to tune until the answer matches.",
+      "expect": {
+        "cmd": "step.add"
+      },
+      "highlight": "step.add",
+      "doIt": {
+        "cmd": "step.add",
+        "name": "static",
+        "procedure": "static",
+        "constraints": [
+          "symx",
+          "symy",
+          "rim"
+        ],
+        "loads": [
+          "top"
+        ]
+      }
+    },
+    {
+      "title": "Solve and probe point D",
+      "explain": "Probe stress component 1 (\u03c3yy) at [2 m, 0 m, 0.6 m]. The checked quadratic mesh gives about \u22125.234 MPa, within 0.31% of the independently published full-face reference \u22125.25 MPa. Do not probe the mid-plane or use von Mises: both answer different questions.",
+      "expect": {
+        "cmd": "solve.run"
+      },
+      "highlight": "solve.run",
+      "doIt": {
+        "cmd": "solve.run",
+        "step": "static"
+      }
+    },
+    {
+      "title": "Fit the plate",
+      "explain": "Fit the curved plate in the viewer; then inspect the upper inner corner and the full outer-face support. Fit changes the camera, never the Model or Result.",
+      "expect": null,
+      "highlight": "view.fit",
+      "doIt": {
+        "cmd": "view.fit"
+      }
+    },
+    {
+      "title": "Stress, refinement and the right reference",
+      "explain": "A plausible number is not enough: check its component, coordinate, interpolation and support definition.",
+      "expect": null,
+      "theory": "The reported quantity is $\\sigma_{yy}(D)$ at $D=(2,0,0.6)\\,\\mathrm m$. For the **full-face-support variant**, ESRD reports **\u22125.25 MPa**. Our 12 \u00d7 12 \u00d7 8 Hex20 mesh gives about **\u22125.234 MPa**, an error of 0.30%. A 6 \u00d7 6 \u00d7 2 quadratic mesh gives about \u22125.489 MPa (4.56% error): refining both the plane and thickness moves toward the independent reference. The automated tutorial check repeats that coarse/fine comparison.\n\nRun `query.probe` with `step: \"static\"`, `field: \"stress\"`, `component: 1`, `at: [\"2 m\", \"0 m\", \"0.6 m\"]`. The probe interpolates recovered nodal stress; it is not the raw value at a Gauss point. Inspect reaction balance as well as the local stress.\n\n**Why not \u22125.38 MPa?** The original NAFEMS LE10 support restrains in-plane motion over the outer face but vertical motion only along its mid-plane line. The present guide restrains all components over the entire outer face. The existing bundled example has the same variant; neither this tutorial nor that example establishes the original line-supported result. A coarse full-face mesh landing close to \u22125.38 MPa is discretization error, not proof of equivalent supports.\n\n**Other solvers:** Hex20 corresponds to a quadratic 20-node solid (for example Abaqus C3D20 or Ansys SOLID186); Nastran likewise uses a quadratic CHEXA. The mirrored cuts use normal-component constraints, and the variant\u2019s rim is a three-component SPC. Compare the actual boundary conditions and recovery convention rather than assuming identical element names imply identical results.\n\nSources: [ESRD StressCheck Benchmarks Guide, pp. 29\u201331](https://www.esrd.com/wp-content/uploads/dlm_uploads/Benchmarks-Guide-Standard-NAFEMS-Benchmarks-Linear-Elastic-Tests.pdf); [SimScale LE10 workflow reference](https://www.simscale.com/projects/wilHo/thick_plate_under_pressure_nafems_le10_1/). Text, Commands and visualizations here are re-authored; the original vendor tutorials are not embedded."
+    }
+  ]
+}

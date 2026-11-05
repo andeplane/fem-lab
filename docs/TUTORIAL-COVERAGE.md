@@ -529,3 +529,8 @@ puts a FEM Lab Journal beside the Abaqus click-path.
 - The classic NAFEMS single-case descriptions (LE1, LE10, LE11, T1–T4, FV32) are not free-standing
   public pages; their reference values live in `docs/BENCHMARKS.md` with sources, and four real
   NAFEMS Resource Centre publications are cited here instead.
+
+
+### Guided implementations of the remaining #86 workflows
+
+The guided catalogue now includes [`axisymmetric-transient-heat`](../packages/app/tutorials/axisymmetric-transient-heat.json), [`eighth-thermal-stress`](../packages/app/tutorials/eighth-thermal-stress.json) and [`le10-full-face`](../packages/app/tutorials/le10-full-face.json). See [the user guide](./guide/examples-tutorials.md#three-verification-walkthroughs) for prerequisites, numerical checks and supported limits. The first runs the maintained-temperature NAFEMS/COMSOL finite-cylinder scenario. The second teaches three expansion-compatible mirror planes with an independently solvable cube, not the vendor’s brake-rotor geometry. The third explicitly teaches ESRD’s supported full-face LE10 variant, not original NAFEMS line support. These are guided-learning additions; they do not change the original vendor capability verdicts or imply that all 86 tutorials have been authored.
