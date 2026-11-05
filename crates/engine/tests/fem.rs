@@ -5193,8 +5193,8 @@ fn thermal_result_vectors_preserve_interfaces_and_probe_each_element() {
 /// so q_r=-500/(r log(2)) and Q=2*pi*H*500/log(2), independent of radius.
 #[test]
 fn thermal_result_vectors_converge_to_radial_fourier_flux_and_total_power() {
-    let exact_gradient = 100.0 / (1.5 * 2.0f64.ln());
-    let exact_power = 2.0 * PI * 0.2 * 500.0 / 2.0f64.ln();
+    let exact_gradient = 100.0 / (1.5 * libm::log(2.0));
+    let exact_power = 2.0 * PI * 0.2 * 500.0 / libm::log(2.0);
     for kind in [ElementKind::Quad4, ElementKind::Quad8] {
         let mut errors = Vec::new();
         for n in [4, 8, 16] {
