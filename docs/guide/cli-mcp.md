@@ -79,3 +79,11 @@ combined with `--recover` or `--migrate`. It does not prove deployed alert deliv
 production load capacity or paid disaster recovery. Detailed thresholds and those
 operational acceptance boundaries are in the
 [service operator documentation](https://github.com/andeplane/fem-lab/blob/main/packages/service/README.md#read-only-operational-check).
+
+
+## Python/server registry host
+
+`femlab serve --port 7777` launches the optional single-user Node WASM registry host on
+loopback. The generated Python binding, Jupyter benchmark, browser Python notebook, setup
+commands and supported limits are described in [Python and notebooks](python.md). Use an SSH
+tunnel for a remote notebook; this host is separate from the hosted account/billing service.

@@ -37,6 +37,7 @@ import { SessionTransport, sameSession } from './session-transport';
 import type { ReplacementSource } from './session-protocol';
 import { bindRegistryProducer, type RegistryProducer } from './producer-registry';
 import { browserAbaqusIo } from './abaqus-files';
+import { PythonHost, type PythonResult } from './python-host';
 import { StepImporter } from './step-import';
 import {captureProjectInputs} from './project-inputs';
 import './ui/style.css';
@@ -69,7 +70,7 @@ const bundles = new WeakMap<object, Bundle>();
 const recoveredFiles = new WeakMap<ReplacementSource, CompletedFilesHost>();
 const completedFileStores = new WeakMap<CompletedFilesHost, Store>();
 const completedBundles=new WeakMap<CompletedFilesHost,Bundle>();
-const scriptJobs = new Set<{ runner: ScriptHost; producer: Producer }>();
+const scriptJobs = new Set<{ runner: ScriptHost | PythonHost; producer: Producer }>();
 const nextMeta = (name: string): ProjectMeta => ({ id: crypto.randomUUID(), name, at: Date.now(), createdAt: Date.now(), commands: 0, hash: null, thumbnail: null });
 const expired = (): FemError => new FemError('session.expired', 'this action belongs to an inactive project');
 
@@ -187,7 +188,15 @@ class Bundle {
     const recovering=Boolean(source&&recoveredFiles.has(source));
     this.artifactFailure=restored?null:(source?sourceRecovery.get(source)?.error:undefined)??(recovering?null:source?.project?.expected?.artifactError??null);
     if(this.artifactFailure)this.store.set({projectArtifactError:this.artifactFailure});
-    if(restored)this.inventory.replace(restored.artifact.files);
+    if(restored) {
+      this.inventory.replace(restored.artifact.files);
+      const notebook = restored.artifact.files.filter(file => file.role === 'input' && file.name === 'notebook.py').at(-1);
+      const notebookIndex = notebook ? restored.artifact.files.indexOf(notebook) : -1;
+      const output = restored.artifact.files.slice(notebookIndex + 1).find(file => file.role === 'output' && file.name === 'notebook-output.txt');
+      if (output) this.store.set({ scriptOut: new TextDecoder().decode(output.data).split('\n') });
+      const plots = restored.artifact.files.slice(notebookIndex + 1).filter(file => file.role === 'output' && /^python-plot-/.test(file.name));
+      if (notebook) this.store.set({ scriptLanguage: 'python', scriptEditing: true, pythonDraft: new TextDecoder().decode(notebook.data), pythonPlots: plots.map(file => { let text = ''; for (const byte of file.data) text += String.fromCharCode(byte); return btoa(text); }) });
+    }
     if(sourceInputs.has(source!))this.inventory.replace([...this.inventory.snapshot(),...sourceInputs.get(source!)!]);
     this.uiTransport = await this.transport.fork();
     this.consoleTransport = await this.transport.fork();
@@ -527,9 +536,9 @@ class Producer {
         chatBridge.send(text, Promise.resolve(child.handle()));
       } catch (error) { await child.handle().release(); throw error; }
     };
-    ctx.script.run = async (code, timeoutMs) => {
+    ctx.script.run = async (code, timeoutMs, language) => {
       const child = this;
-      const runner = new ScriptHost(() => new Worker(new URL('./script.worker.ts', import.meta.url), { type: 'module' }), p => child.registry.dispatch(p as { cmd: string }), p => child.registry.query(p as { query: string }), browserScriptValidator(() => new Worker(new URL('./script-validation.worker.ts', import.meta.url), { type: 'module' })));
+      const runner = language === 'python' ? new PythonHost(() => new Worker(new URL('./python.worker.ts', import.meta.url), { type: 'module' }), p => child.registry.dispatch(p as { cmd: string }), p => child.registry.query(p as { query: string })) : new ScriptHost(() => new Worker(new URL('./script.worker.ts', import.meta.url), { type: 'module' }), p => child.registry.dispatch(p as { cmd: string }), p => child.registry.query(p as { query: string }), browserScriptValidator(() => new Worker(new URL('./script-validation.worker.ts', import.meta.url), { type: 'module' })));
       const stop = () => runner.stop();
       child.lifetime.signal.addEventListener('abort', stop, { once: true });
       const job = { runner, producer: child }; scriptJobs.add(job);
@@ -537,6 +546,15 @@ class Producer {
       try {
         const result = await runner.run(code, timeoutMs);
         child.bundle.assertOwner();
+        if (language === 'python') {
+          const plots = (result as PythonResult).plots ?? [];
+          child.bundle.inventory.capture('input', 'notebook.py', 'text/x-python', code);
+          child.bundle.inventory.capture('output', 'notebook-output.txt', 'text/plain', [...result.console, result.error ?? 'done'].join('\n'));
+          for (const [index, plot] of plots.entries()) child.bundle.inventory.capture('output', `python-plot-${index + 1}.png`, 'image/png', Uint8Array.from(atob(plot), c => c.charCodeAt(0)));
+          child.bundle.publishFiles();
+          child.bundle.store.set({ scriptLanguage: 'python', pythonDraft: code, scriptEditing: true, pythonPlots: plots });
+          await child.bundle.refresh();
+        }
         child.bundle.store.set({ scriptOut: [...result.console, result.error ?? 'done'] });
         return result;
       } finally { child.lifetime.signal.removeEventListener('abort', stop); child.bundle.store.set({ scriptRunning: false, source: 'you' }); scriptJobs.delete(job); }

@@ -320,7 +320,7 @@ phase 0, so this phase is protocol and packaging, not solver work.
 Out of scope for S: multi-user, auth, job queues. If those are ever wanted they are a product
 on top of `femlab serve`, not part of the engine.
 
-## 10d. Phase Py: Python environment (todo, after phase 4)
+## 10d. Phase Py: Python environment
 
 Goal: engineers who think in numpy do their analysis in Python without leaving the app, and a
 notebook can drive the engine. Python is a *client* of the registry (ADR 0004), never a second
@@ -333,6 +333,12 @@ scripting core.
 | Py.3 | Notebook-style cell UI with matplotlib output (agg → PNG) next to the 3D view; cells and their outputs are recorded in the Journal as `script.run({ language: 'python' })` so the Model stays reproducible | a saved Model with Python cells reopens and re-executes |
 | Py.4 | Same binding installable from PyPI for the Node/server host (`pip install femlab`), talking to `femlab serve` or spawning `femlab mcp`-style stdio | a Jupyter notebook on a laptop drives a server engine |
 | Py.5 | The AI may write Python cells as well as TypeScript scripts; the eval suite gains Python variants | eval parity within 5 % of the TS pass rate |
+
+Issue #31 adds a generated CPython/Pyodide registry client, loopback Node
+host and explicitly run browser notebook. ADR0049 supersedes the old Py.3 Journal wording:
+only expanded engine Commands are journalled; source and plots stay in portable project
+files. See `docs/guide/python.md` for setup, supported limits and publication status. Public
+PyPI installation (Py.4) remains pending until the package is actually published; source/wheel installation is supported.
 
 ## 11. Cross-cutting, every phase
 

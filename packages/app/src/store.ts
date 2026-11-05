@@ -160,6 +160,9 @@ export interface UiState {
   scriptEditing: boolean;
   scriptOut: string[];
   scriptRunning: boolean;
+  scriptLanguage: 'typescript' | 'python';
+  pythonPlots: string[];
+  pythonDraft: string | null;
   hostCaps: HostCaps | null;
   engineCaps: Capabilities | null;
   notes: string[];
@@ -311,6 +314,9 @@ export const initialState: UiState = {
   scriptEditing: false,
   scriptOut: [],
   scriptRunning: false,
+  scriptLanguage: 'typescript',
+  pythonPlots: [],
+  pythonDraft: null,
   hostCaps: null,
   engineCaps: null,
   notes: [],

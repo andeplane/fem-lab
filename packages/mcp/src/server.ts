@@ -149,6 +149,7 @@ function scopedRegistry(deps: ScopedDeps): Registry {
   } as unknown as HostContext;
   const script = HOST_COMMANDS.filter((d) => d.name === 'script.run').map((d) => ({
     ...d,
+    schema: z.object({code:z.string().max(64000), timeoutMs:z.number().finite().positive().max(30000).optional(), language:z.literal('typescript').optional()}),
     description: 'First parse and type-check against the generated fem API with a separate 10000 ms validation deadline; invalid source returns diagnostics without executing. Then run TypeScript against the asynchronous fem API in an isolated QuickJS runtime. Only registry Commands/Queries, console and setTimeout/clearTimeout are available; no Node globals, imports, filesystem or network APIs. File exports use export.file and its host project policy. timeoutMs is greater than 0 and at most 30000 (default 30000), including startup. Timeout terminates the script and refuses further Commands; already admitted Commands may finish and are not rolled back. Nested script.run is refused. Returns { result, console, error? }; Commands enter the Journal like any other.',
   }));
   registry = new Registry({ schema: SCHEMA, host, hostCommands: [...script, ...HOST_COMMANDS.filter(d => d.name === 'file.importAbaqus' || d.name === 'material.addFromLibrary'), exportFileCommand(deps)], hostQueries: HOST_QUERIES.filter((d) => d.name === 'query.validateScript') });

@@ -569,8 +569,22 @@ fn bench_runs_the_committed_cases_and_reports() {
 }
 
 #[test]
-fn stubs_say_what_is_planned() {
-    femlab().args(["serve", "--port", "1234"]).assert().code(2).stderr(contains("phase S"));
+fn serve_launches_the_node_registry_host_and_propagates_its_status() {
+    let dir = scratch("serve");
+    femlab()
+        .args(["serve", "--port", "1234"])
+        .env("FEMLAB_SERVE", dir.join("missing.js"))
+        .assert()
+        .code(2)
+        .stderr(contains("FEMLAB_SERVE"));
+    let script = dir.join("serve.js");
+    std::fs::write(&script, "console.log(process.argv.slice(2).join(' ')); process.exit(7);\n").unwrap();
+    femlab()
+        .args(["serve", "--port", "1234"])
+        .env("FEMLAB_SERVE", &script)
+        .assert()
+        .code(7)
+        .stdout(contains("--port 1234"));
 }
 
 /// `femlab export` against committed reference files, one per format.

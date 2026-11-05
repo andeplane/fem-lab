@@ -1,0 +1,17 @@
+{
+  "name": "femlab-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "femlab-serve": "dist/femlab-serve.js"
+  },
+  "scripts": {
+    "build": "esbuild src/femlab-serve.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/femlab-serve.js",
+    "typecheck": "tsc -p . --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@femlab/registry": "*"
+  }
+}

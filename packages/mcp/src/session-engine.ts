@@ -4,7 +4,7 @@ import { FemError, MAX_MODEL_FILE_BYTES, modelFileEncoder, type DocumentSnapshot
 import type { PreparedEngine, SessionEngine } from '../../app/src/generated/wasm/femlab_engine_wasm';
 import type { EngineHandle, EngineProvider } from './engine';
 
-type Owner = Pick<SessionEngine, 'stamp' | 'begin_run' | 'cancel_run' | 'dispatch' | 'query' | 'snapshot' | 'begin_replacement' | 'abandon_replacement' | 'commit_candidate'>;
+type Owner = Pick<SessionEngine, 'stamp' | 'begin_run' | 'cancel_run' | 'dispatch' | 'query' | 'snapshot' | 'begin_replacement' | 'abandon_replacement' | 'commit_candidate' | 'free'>;
 export interface CheckedModule {
   SessionEngine: new (threads: number, epoch: string) => Owner;
   PreparedEngine: { create(ticket: string, options: { threads: number; gpu: boolean }): Promise<PreparedEngine> };
@@ -12,11 +12,13 @@ export interface CheckedModule {
 export function sessionEngine(wasm: CheckedModule, threads: number, epoch: string): EngineProvider {
   const owner = new wasm.SessionEngine(threads, epoch);
   let current = JSON.parse(owner.stamp()) as Stamp;
+  let disposed = false;
   let tail: Promise<unknown> = Promise.resolve();
   const ordered = <T>(run: () => T | Promise<T>): Promise<T> => {
     const result = tail.then(run); tail = result.catch(() => undefined); return result;
   };
   const acquire = () => {
+    if (disposed) return Promise.reject(new FemError('session.expired', 'the engine owner has been closed'));
     const admittedSession = JSON.stringify(current.session);
     return ordered(() => {
       let lease = JSON.parse(owner.begin_run(admittedSession)) as RunLease;
@@ -94,5 +96,9 @@ export function sessionEngine(wasm: CheckedModule, threads: number, epoch: strin
       return handle;
     });
   };
-  return { acquire };
+  return { acquire, dispose: async () => {
+    if (disposed) return;
+    disposed = true;
+    await ordered(() => owner.free());
+  } };
 }

@@ -303,12 +303,14 @@ export function makeHostContext(
       },
     },
     script: {
+      setLanguage: scriptLanguage => store.set({ scriptLanguage, tab: 'script', scriptEditing: true }),
       validate: (code, timeoutMs) => {
         if (!scripts) throw new FemError('unsupported', 'no validation Worker is available', 'query.validateScript', 'run the app with script workers');
         return scripts.validate(code, timeoutMs);
       },
       // A script's Commands are the AI's, not the person's: the Journal's `who` column says so.
-      run: async (code, timeoutMs) => {
+      run: async (code, timeoutMs, language) => {
+        if (language === 'python') throw new FemError('unsupported', 'Python needs the browser notebook host', 'script.run');
         if (!scripts) throw new FemError('unsupported', 'no script Worker is available in this host', 'script.run', 'run the app, not the test harness');
         if (scripts.running) throw new FemError('unsupported', 'a script or validation is already running', 'script.run', 'stop it with script.stop first');
         store.set({ scriptRunning: true, scriptOut: [], source: 'ai', tab: 'script' });
@@ -324,7 +326,7 @@ export function makeHostContext(
       stop: () => scripts?.stop(),
       setSource: (code, append) =>
         store.set({
-          scriptDraft: append === true ? `${store.state.scriptDraft ?? store.state.script}${code}` : code,
+          ...(store.state.scriptLanguage === 'python' ? { pythonDraft: append === true ? `${store.state.pythonDraft ?? ''}${code}` : code } : { scriptDraft: append === true ? `${store.state.scriptDraft ?? store.state.script}${code}` : code }),
           scriptEditing: true,
           tab: 'script',
         }),

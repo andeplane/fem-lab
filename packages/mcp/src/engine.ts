@@ -10,6 +10,8 @@ import { sessionEngine, type CheckedModule } from './session-engine';
 /** Only request admission may acquire the active session; no commands exist on this object. */
 export interface EngineProvider {
   acquire(): Promise<EngineHandle>;
+  /** Release the private owner after all admitted requests have ended. */
+  dispose?(): Promise<void>;
 }
 
 /** JSON in, JSON out: everything a tool call needs from the engine, and nothing else. */

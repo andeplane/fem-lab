@@ -49,6 +49,7 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   'query.validateScript': { code: '1 + 1' },
   'script.run': { code: '1 + 1', timeoutMs: 100 },
   'script.stop': {},
+  'script.setLanguage': { language: 'python' },
   'script.setSource': { code: 'fem.model.new({ name: "a" })', append: true },
   'script.setEditing': { editing: false },
   'chat.send': { text: 'hello @body:beam' },
@@ -672,4 +673,16 @@ it('binds a transport-free host phase through the same schemas, metadata and rou
   await expect(registry.dispatch({ cmd: 'workspace.retryStartup', attempt: 1 })).rejects.toMatchObject({ code: 'session.expired' });
   await expect(registry.query({ query: 'query.workspaceStatus' })).rejects.toMatchObject({ code: 'session.expired' });
   expect(context.count).toBe(2);
+});
+
+
+it('Python bypasses TypeScript validation but stays an explicit notebook execution route', async () => {
+  const { registry, host } = make();
+  await registry.dispatch({cmd:'script.run',code:'print(1)',language:'python',timeoutMs:123});
+  expect(host.script.validate).not.toHaveBeenCalled();
+  expect(host.script.run).toHaveBeenCalledWith('print(1)',123,'python');
+  await registry.dispatch({cmd:'script.setLanguage',language:'python'});
+  expect(host.script.setLanguage).toHaveBeenCalledWith('python');
+  delete host.script.setLanguage;
+  await expect(registry.dispatch({cmd:'script.setLanguage',language:'python'})).rejects.toMatchObject({code:'unsupported'});
 });

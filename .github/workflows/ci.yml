@@ -218,6 +218,13 @@ jobs:
       # The MCP server runs the Node wasm build from the `wasm` job's artifact.
       - run: npm run test -w packages/mcp
       - run: npm run build -w packages/mcp
+      - run: npm run test -w packages/server
+      - run: npm run build -w packages/server
+      - run: python3 -m venv /tmp/femlab-python
+      - run: /tmp/femlab-python/bin/pip wheel ./python --no-deps --wheel-dir /tmp/femlab-wheels
+      - run: /tmp/femlab-python/bin/pip install /tmp/femlab-wheels/femlab-*.whl numpy matplotlib ipython
+      - run: /tmp/femlab-python/bin/python -m unittest discover -s python/tests
+      - run: FEMLAB_PYTHON=/tmp/femlab-python/bin/python node tools/test-python-host.mjs
       - run: npm run test -w packages/app
       # The first build is the real app the supported-Chromium thumbnail pass drives. That pass
       # writes fixed 320×180 viewer canvases into public/examples; the final build packages them.
