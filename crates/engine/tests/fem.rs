@@ -15447,7 +15447,7 @@ fn the_default_beam_orientation_puts_the_height_vertical_and_turns_a_column_to_x
     assert_eq!((e.code, e.where_.as_deref()), (ErrorCode::ModelIllPosed, Some("orientation")));
 }
 
-/// A beam has no face, no finite-strain kernel and no stress stiffening; without a Section it
+/// A beam has no face or linear stress-stiffening matrix; without a Section it
 /// names `section.assign` from every integral; a member whose material refuses its properties
 /// fails at every integral that calls the law and at none of the ones that do not; and a
 /// folded member is `mesh.inverted`.
@@ -15467,8 +15467,7 @@ fn a_beam_refuses_what_it_cannot_do_and_names_what_it_is_missing() {
     let (mut sig, mut eps) = (vec![0.0; VOIGT], vec![0.0; VOIGT]);
     let mut state = Vec::new();
     let nl = TangentOut { k: &mut big, f: &mut v, stress: &mut sig, strain: &mut eps, state: &mut state };
-    let e = el.tangent_and_force(&c, &[0.0; 12], &[], nl).expect_err("no finite-strain kernel");
-    assert_eq!(e.code, ErrorCode::Unsupported);
+    el.tangent_and_force(&c, &[0.0; 12], &[], nl).expect("elastic finite-rotation kernel");
 
     let t = [10.0; 2];
     let bare = beam_ctx(&coords, &mat, None, None, [0.0; 3], None);
@@ -19146,4 +19145,270 @@ fn mean_dilatation_quad4_has_the_known_first_order_strain_consistency_rate() {
         }
         previous = Some(error);
     }
+}
+
+// ------------------- corotational elastic beams (B6, #825 / #345)
+#[test]
+fn corotational_beam_tangent_is_linear_at_zero_and_consistent_at_finite_rotation() {
+    let (coords, _) = skew_beam();
+    let (mat, sec) = (steel(), beam_section());
+    let c = beam_ctx(&coords, &mat, Some(&sec), None, [0.0; 3], None);
+    let el = element_for(ElementKind::Beam2);
+    let mut linear = vec![0.0; 144];
+    el.stiffness(&c, &mut linear).unwrap();
+    let (zero, force, _, _) = element_tangent(ElementKind::Beam2, &c, &[0.0; 12]).unwrap();
+    let scale = linear.iter().fold(0.0_f64, |a, b| a.max(b.abs()));
+    assert!(zero.iter().zip(&linear).all(|(a, b)| (a - b).abs() < 2e-14 * scale));
+    assert!(force.iter().all(|v| v.abs() < 1e-14 * scale));
+    let u = [0.01, -0.02, 0.03, 0.25, -0.17, 0.3, 0.02, 0.03, -0.01, 0.3, 0.1, 0.4];
+    let (k, _, _, _) = element_tangent(ElementKind::Beam2, &c, &u).unwrap();
+    let scale = k.iter().fold(0.0_f64, |a, b| a.max(b.abs()));
+    for j in 0..12 {
+        let mut plus = u;
+        let mut minus = u;
+        plus[j] += 1e-6;
+        minus[j] -= 1e-6;
+        let (_, fp, _, _) = element_tangent(ElementKind::Beam2, &c, &plus).unwrap();
+        let (_, fm, _, _) = element_tangent(ElementKind::Beam2, &c, &minus).unwrap();
+        for i in 0..12 {
+            assert!(
+                (k[i * 12 + j] - (fp[i] - fm[i]) / 2e-6).abs() < 2e-9 * scale,
+                "({i},{j}) analytic {} FD {}",
+                k[i * 12 + j],
+                (fp[i] - fm[i]) / 2e-6
+            );
+            assert!((k[i * 12 + j] - k[j * 12 + i]).abs() < 1e-14 * scale);
+        }
+    }
+}
+
+#[test]
+fn corotational_beam_rigid_rotation_translation_and_coordinate_frame_are_objective() {
+    let coords = [0.0, 0.0, 0.0, 2.0, 0.0, 0.0];
+    let (mat, sec) = (steel(), beam_section());
+    let c = beam_ctx(&coords, &mat, Some(&sec), Some([0.0, 0.0, 1.0]), [0.0; 3], None);
+    // Independent Rodrigues rigid motion about an oblique unit axis, plus translation.
+    let axis = [2.0 / 3.0, -1.0 / 3.0, 2.0 / 3.0];
+    let angle = 1.7_f64;
+    let rotate = |v: [f64; 3]| {
+        let cross = [axis[1] * v[2] - axis[2] * v[1], axis[2] * v[0] - axis[0] * v[2], axis[0] * v[1] - axis[1] * v[0]];
+        let dot: f64 = axis.iter().zip(v).map(|(a, b)| a * b).sum();
+        std::array::from_fn::<_, 3, _>(|i| {
+            angle.cos() * v[i] + angle.sin() * cross[i] + (1.0 - angle.cos()) * dot * axis[i]
+        })
+    };
+    let mut rigid = [0.0; 12];
+    for n in 0..2 {
+        let x = [coords[n * 3], coords[n * 3 + 1], coords[n * 3 + 2]];
+        let moved = rotate(x);
+        for i in 0..3 {
+            rigid[n * 6 + i] = moved[i] - x[i] + [0.7, -0.3, 1.2][i];
+            rigid[n * 6 + 3 + i] = angle * axis[i];
+        }
+    }
+    let (_, f, s, e) = element_tangent(ElementKind::Beam2, &c, &rigid).unwrap();
+    assert!(f.iter().all(|v| v.abs() < 1e-5), "{f:?}");
+    assert!(s.iter().all(|v| v.abs() < 1e-3), "{s:?}");
+    assert!(e.iter().all(|v| v.abs() < 1e-14));
+    // Changing global coordinates must rotate forces and the tangent blockwise, while the
+    // section stress and strain scalars remain invariant even in a finitely deformed state.
+    let u = [0.01, -0.02, 0.03, 0.25, -0.17, 0.3, 0.02, 0.03, -0.01, 0.3, 0.1, 0.4];
+    let (_, f, s, e) = element_tangent(ElementKind::Beam2, &c, &u).unwrap();
+    let mut transformed_coords = [0.0; 6];
+    let mut transformed_u = [0.0; 12];
+    for (src, dst) in coords.chunks_exact(3).zip(transformed_coords.chunks_exact_mut(3)) {
+        dst.copy_from_slice(&rotate([src[0], src[1], src[2]]));
+    }
+    for (src, dst) in u.chunks_exact(3).zip(transformed_u.chunks_exact_mut(3)) {
+        dst.copy_from_slice(&rotate([src[0], src[1], src[2]]));
+    }
+    let c2 = beam_ctx(&transformed_coords, &mat, Some(&sec), Some(rotate([0.0, 0.0, 1.0])), [0.0; 3], None);
+    let (_, f2, s2, e2) = element_tangent(ElementKind::Beam2, &c2, &transformed_u).unwrap();
+    let scale = f.iter().fold(0.0_f64, |a, b| a.max(b.abs()));
+    for (src, dst) in f.chunks_exact(3).zip(f2.chunks_exact(3)) {
+        let expected = rotate([src[0], src[1], src[2]]);
+        for i in 0..3 {
+            assert!((expected[i] - dst[i]).abs() < 1e-13 * scale);
+        }
+    }
+    assert!((s[0] - s2[0]).abs() < 1e-12 * s[0].abs());
+    assert!((e[0] - e2[0]).abs() < 1e-13);
+    // Superpose a rigid motion on the deformed beam, keeping the reference geometry fixed.
+    // Independent unit-quaternion composition supplies the transformed total rotations.
+    let qs = [
+        (angle / 2.0).cos(),
+        axis[0] * (angle / 2.0).sin(),
+        axis[1] * (angle / 2.0).sin(),
+        axis[2] * (angle / 2.0).sin(),
+    ];
+    let mut superposed = [0.0; 12];
+    for node in 0..2 {
+        let r = [u[node * 6 + 3], u[node * 6 + 4], u[node * 6 + 5]];
+        let norm = r.iter().map(|v| v * v).sum::<f64>().sqrt();
+        let qr = [
+            (norm / 2.0).cos(),
+            r[0] * (norm / 2.0).sin() / norm,
+            r[1] * (norm / 2.0).sin() / norm,
+            r[2] * (norm / 2.0).sin() / norm,
+        ];
+        let q = [
+            qs[0] * qr[0] - qs[1] * qr[1] - qs[2] * qr[2] - qs[3] * qr[3],
+            qs[0] * qr[1] + qs[1] * qr[0] + qs[2] * qr[3] - qs[3] * qr[2],
+            qs[0] * qr[2] - qs[1] * qr[3] + qs[2] * qr[0] + qs[3] * qr[1],
+            qs[0] * qr[3] + qs[1] * qr[2] - qs[2] * qr[1] + qs[3] * qr[0],
+        ];
+        let norm = (q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+        let theta = 2.0 * norm.atan2(q[0]);
+        let current = [
+            coords[node * 3] + u[node * 6],
+            coords[node * 3 + 1] + u[node * 6 + 1],
+            coords[node * 3 + 2] + u[node * 6 + 2],
+        ];
+        let transformed = rotate(current);
+        for i in 0..3 {
+            superposed[node * 6 + i] = transformed[i] + [0.7, -0.3, 1.2][i] - coords[node * 3 + i];
+            superposed[node * 6 + 3 + i] = theta * q[i + 1] / norm;
+        }
+    }
+    let (_, super_force, super_stress, super_strain) = element_tangent(ElementKind::Beam2, &c, &superposed).unwrap();
+    for node in 0..2 {
+        let expected = rotate([f[node * 6], f[node * 6 + 1], f[node * 6 + 2]]);
+        for i in 0..3 {
+            assert!((super_force[node * 6 + i] - expected[i]).abs() < 2e-13 * scale);
+        }
+    }
+    assert!((super_stress[0] - s[0]).abs() < 2e-12 * s[0].abs());
+    assert!((super_strain[0] - e[0]).abs() < 1e-13);
+}
+
+#[test]
+fn corotational_beam_refuses_singular_frames_and_stateful_materials_and_propagates_errors() {
+    let coords = [0.0, 0.0, 0.0, 2.0, 0.0, 0.0];
+    let (mat, sec) = (steel(), beam_section());
+    let c = beam_ctx(&coords, &mat, Some(&sec), None, [0.0; 3], None);
+    let mut collapsed = [0.0; 12];
+    collapsed[6] = -2.0;
+    let mut opposed = [0.0; 12];
+    opposed[3] = PI / 2.0;
+    opposed[9] = -PI / 2.0;
+    // Absolute rotations +pi/2 and a chord at -pi/2 reach the relative-logarithm cut.
+    let mut branch = [0.0; 12];
+    branch[5] = PI / 2.0;
+    branch[11] = PI / 2.0;
+    branch[6] = -2.0;
+    branch[7] = -2.0;
+    let mut nonfinite = [0.0; 12];
+    nonfinite[6] = f64::NAN;
+    for u in [collapsed, opposed, branch, nonfinite] {
+        assert_eq!(element_tangent(ElementKind::Beam2, &c, &u).unwrap_err().code, ErrorCode::MeshInverted);
+    }
+    for angle in [PI, 2.0 * PI, f64::NAN] {
+        let mut outside_chart = [0.0; 12];
+        outside_chart[5] = angle;
+        assert_eq!(element_tangent(ElementKind::Beam2, &c, &outside_chart).unwrap_err().code, ErrorCode::Unsupported);
+    }
+    let stateful = Material { law: &J2Plasticity, ..steel() };
+    let plastic = beam_ctx(&coords, &stateful, Some(&sec), None, [0.0; 3], None);
+    assert_eq!(element_tangent(ElementKind::Beam2, &plastic, &[0.0; 12]).unwrap_err().code, ErrorCode::Unsupported);
+    let bare = beam_ctx(&coords, &mat, None, None, [0.0; 3], None);
+    assert_eq!(element_tangent(ElementKind::Beam2, &bare, &[0.0; 12]).unwrap_err().code, ErrorCode::ModelNoSection);
+    let bad = Material { props: vec![YOUNG], ..steel() };
+    let c = beam_ctx(&coords, &bad, Some(&sec), None, [0.0; 3], None);
+    assert_eq!(element_tangent(ElementKind::Beam2, &c, &[0.0; 12]).unwrap_err().code, ErrorCode::MaterialProps);
+    let c = beam_ctx(&[0.0; 6], &mat, Some(&sec), None, [0.0; 3], None);
+    assert_eq!(element_tangent(ElementKind::Beam2, &c, &[0.0; 12]).unwrap_err().code, ErrorCode::MeshInverted);
+}
+
+/// B6: independent circular-elastica end-moment solution, including the chord-versus-arc
+/// spatial discretisation error. The error must converge at second order; no one-mesh pass.
+#[test]
+fn corotational_beam_end_moment_converges_to_circular_elastica_at_finite_angles() {
+    for theta in [PI / 2.0, -PI / 2.0] {
+        let mut errors = Vec::new();
+        for n in [4u32, 8, 16] {
+            let mesh =
+                femlab_geometry::line(&[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], &[[0, 1]], n, ElementKind::Beam2).unwrap();
+            let mut sets = root_set();
+            sets.insert(
+                "tip".into(),
+                ResolvedSet { kind: SetKind::Node, faces: Vec::new(), nodes: vec![n], elems: Vec::new() },
+            );
+            let bodies = vec!["beam".into()];
+            let mut p = beam_cantilever_problem(&mesh, &sets, &bodies, generic_section(1e-3, 1e-3, 2e-3));
+            p.loads = vec![Load::NodalMoment { nodes: "tip".into(), m: [0.0, 0.0, theta * 1e-3] }];
+            let o = NlOptions {
+                increments: 16,
+                solver: SolveOptions { solver: Solver::CpuDirect, ..SolveOptions::default() },
+                ..nl_options(16)
+            };
+            let step = Step::StaticNonlinear(o);
+            let mut solutions = Vec::new();
+            for workers in [1, 2] {
+                let res = pollster::block_on(procedure::run(&p, &step, &Pool::new(workers), None, None, &mut nop))
+                    .expect("finite moment equilibrium");
+                solutions.push(res);
+            }
+            assert_eq!(solutions[0], solutions[1], "worker count must not alter the numerical answer");
+            let res = &solutions[0];
+            let u = &res.history.as_ref().unwrap().values.last().unwrap();
+            let expected = [theta.sin() / theta, (1.0 - theta.cos()) / theta];
+            let tip = [1.0 + u[6 * n as usize], u[6 * n as usize + 1]];
+            let error = ((tip[0] - expected[0]).powi(2) + (tip[1] - expected[1]).powi(2)).sqrt();
+            errors.push(error);
+            assert!(error < 0.01, "n={n} theta={theta} tip={tip:?} exact={expected:?} error={error}");
+            assert!((u[6 * n as usize + 5] - theta).abs() < 1e-8, "tip rotation {} vs {theta}", u[6 * n as usize + 5]);
+            // Every section has kappa=M/EI, so both rotation and stress must have the proper sign.
+            for node in 0..=n as usize {
+                assert!((u[6 * node + 5] - theta * node as f64 / f64::from(n)).abs() < 1e-8);
+            }
+        }
+        for pair in errors.windows(2) {
+            let rate = (pair[0] / pair[1]).log2();
+            assert!(rate > 1.95 && rate < 2.05, "{errors:?}, rate={rate}");
+        }
+    }
+}
+
+#[test]
+fn corotational_beam_axial_and_thermal_section_response_keeps_the_linear_limit() {
+    let coords = [0.0, 0.0, 0.0, 2.0, 0.0, 0.0];
+    let (mut mat, sec) = (steel(), beam_section());
+    mat.alpha = [1e-5; 3];
+    let temp = [100.0; 2];
+    let cold = beam_ctx(&coords, &mat, Some(&sec), None, [0.0; 3], None);
+    let hot = beam_ctx(&coords, &mat, Some(&sec), None, [0.0; 3], Some(&temp));
+    for sign in [-1.0, 1.0] {
+        let mut u = [0.0; 12];
+        u[6] = sign * 0.002;
+        let (_, f, s, e) = element_tangent(ElementKind::Beam2, &cold, &u).unwrap();
+        let exact = sign * 0.001 * YOUNG;
+        assert!((s[0] / exact - 1.0).abs() < 1e-12);
+        assert!((e[0] - sign * 0.001).abs() < 1e-15);
+        assert!((f[6] / (exact * sec.a) - 1.0).abs() < 1e-12);
+    }
+    let (_, _, s, _) = element_tangent(ElementKind::Beam2, &hot, &[0.0; 12]).unwrap();
+    assert!((s[0] / (-0.001 * YOUNG) - 1.0).abs() < 1e-12);
+    let mut free = [0.0; 12];
+    free[6] = 0.002;
+    let (_, f, s, _) = element_tangent(ElementKind::Beam2, &hot, &free).unwrap();
+    assert!(f.iter().all(|v| v.abs() < 1e-4));
+    assert!(s[0].abs() < 1e-3);
+}
+
+#[test]
+fn corotational_beam_small_moment_agrees_with_the_b25_linear_solution() {
+    let mesh = femlab_geometry::line(&[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], &[[0, 1]], 1, ElementKind::Beam2).unwrap();
+    let mut sets = root_set();
+    sets.insert(
+        "tip".into(),
+        ResolvedSet { kind: SetKind::Node, faces: Vec::new(), nodes: vec![1], elems: Vec::new() },
+    );
+    let bodies = vec!["beam".into()];
+    let mut p = beam_cantilever_problem(&mesh, &sets, &bodies, generic_section(1e-3, 1e-3, 2e-3));
+    p.loads = vec![Load::NodalMoment { nodes: "tip".into(), m: [0.0, 0.0, 1e-6] }];
+    let res = run_nonlinear(&p, nl_options(4), &mut nop).unwrap();
+    let u = res.history.as_ref().unwrap().values.last().unwrap();
+    assert!((u[7] / 0.0005 - 1.0).abs() < 1e-6, "B25 small-angle tip {}", u[7]);
+    assert!((u[11] / 0.001 - 1.0).abs() < 1e-8);
+    assert_eq!(res.fields[&Field::Rotation].data[5], u[11]);
 }

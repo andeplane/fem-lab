@@ -7,7 +7,7 @@ FEM Lab supports the procedures below, but a procedure name is not a promise tha
 | Procedure | What it computes | Important limits |
 |---|---|---|
 | `static` | Linear static equilibrium, optionally sampled through a load amplitude. | Small-displacement elastic response; loading increments do not turn it into dynamics. |
-| `static-nonlinear` | Geometrically nonlinear continuum equilibrium by Newton iteration, increments and cutbacks. | 3D solids or plane strain. No finite-deformation beam/truss/shell kernels, follower loads or arc-length continuation. Pressure retains reference direction and area. |
+| `static-nonlinear` | Geometrically nonlinear continuum and elastic corotational-beam equilibrium by Newton iteration, increments and cutbacks. | 3D solids or plane strain; beam2 allows large rotations with small elastic section strains. No finite-deformation truss/shell kernels, follower loads or arc-length continuation. Pressure retains reference direction and area. |
 | `modal` | Natural frequencies and mode shapes, with optional static prestress. | Needs stiffness and mass. Prestress excludes axisymmetry, beams and shells. Free-free modes are supported. |
 | `buckling` | Linear eigenvalue critical-load factors and mode shapes. | Direct solver; excludes axisymmetry and beam/shell stress stiffening. Does not include imperfections, yielding or nonlinear prebuckling history. |
 | `heat-steady` | Steady conduction with prescribed temperature, convection, heat flux/source, radiation and supported thermal connections. | Requires conductivity and a suitable temperature reference/ambient exchange. |
@@ -36,6 +36,12 @@ Hex8/Hex20, Tet4/Tet10, Quad4/Quad8 and Tri3/Tri6 thermal meshes. They use unave
 element-node recovery; retained transient frames still contain temperature only. Current
 2D material axes must remain in plane. See [thermal field interpretation](./results-verification.md#temperature-gradient-and-conductive-heat-flux)
 for components, units, anisotropy, interpolation and power-accounting distinctions.
+
+Elastic beam2 members use an objective corotational frame in `static-nonlinear`: chord extension and relative section rotations feed the same elastic Timoshenko stiffness used by `static`. The force and tangent are the exact first and second derivatives of that energy. Rotations are total global rotation vectors, in radians, and `load.moment` supplies generalized dead-load components conjugate to those coordinates. A planar end moment is the ordinary bending moment; do not interpret general finite three-axis components as follower torques. Use load increments and spatial refinement. The retained `rotation` field reports those coordinates.
+
+Beam output strain is engineering axial section strain and output stress is the extreme-fibre elastic stress, rather than the continuum Green–Lagrange/Cauchy pair. Stateful/plastic beam materials are explicitly unsupported. Collapsed chords, opposed averaged section directors and relative rotations at the principal-logarithm cut are rejected so the nonlinear procedure can cut back; refine the member and reduce increments. This kernel does not add beam eigenvalue buckling, finite-strain plasticity, warping, or finite-deformation truss/shell support.
+
+Total beam rotation vectors must remain strictly inside the principal exponential chart, with magnitude less than pi radians at every node. Reaching that limit or a nonfinite rotation is an explicit unsupported error; reducing load increments does not extend the supported final-rotation range. This prevents the rank loss of exponential coordinates near full turns.
 
 ## Establish suitability
 

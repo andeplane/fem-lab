@@ -28,6 +28,8 @@ Line members need a Section that represents their area and, for beams, bending/t
 
 For beams, a default `constraint.fix` is a clamp, while `constraint.pin` restrains translations without clamping rotations. Choosing a Section does not connect coincident-but-distinct nodes automatically; inspect mesh connectivity and Sets.
 
+For large rotations of an elastic beam, choose `static-nonlinear` with adequate `increments` and refine the member along its length. This uses a corotational Timoshenko element: section strains remain small, while the chord and nodal sections rotate. A cantilever under a planar end moment approaches the circular centreline with curvature `M / (E I)` as the mesh is refined. Read the retained `rotation` field for the total global rotation vector; see [physics limits](./physics.md) for moment conventions and explicitly unsupported combinations. A linear `static` Step continues to use small-displacement kinematics.
+
 ## Shells and laminates
 
 A shell Section supplies thickness for the `surface` mesher's midsurface. Directors identify the positive/top side. A laminate Section is a perfectly bonded stack ordered bottom to top, with each ply's Material, thickness and angle. Ply materials replace the Body material for the laminate integration.
