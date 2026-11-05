@@ -689,6 +689,8 @@ export interface Fem {
      * for laminate ply faces (k starts at 1, bottom to top within each Section). Ply stresses
      * are global xx, yy, zz, xy, xz, yz in Pa, unaveraged per element node; elements without
      * that ply carry zeros. Both sides of an interface remain distinct. Explicit ids use solved metadata;
+     * temperatureGradient (K/m) and heatFlux (W/m^2) are final heat endpoint vectors,
+     * recovered per element node without averaging. They are not retained frame fields.
      * omitted ids refuse stale Results. Retained samples use query.frame's existing protocol.
      */
     field(args: Omit<Extract<Query, { query: 'query.field' }>, 'query'>): Promise<ResultField>;
@@ -719,16 +721,19 @@ export interface Fem {
      */
     frame(args?: Omit<Extract<Query, { query: 'query.frame' }>, 'query'>): Promise<FrameResult>;
     /**
-     * A field value at a point (default: the last solved Step). Nodal fields are
-     * interpolated; errorEstimate returns the containing element's constant value
+     * A field value at a point (default: the last solved Step). Nodal and unaveraged
+     * element-node fields are interpolated within the containing element; no interface
+     * averaging is applied. errorEstimate returns the containing element's constant value
      * with interpolated=false. Shared-face ties use the lowest element id. Component
-     * indices: displacement 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.
+     * indices: displacement and thermal vectors 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.
      * Optional sample selects a retained primary-field frame; omitted means the final field.
      * Omitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.
      */
     probe(args: Omit<Extract<Query, { query: 'query.probe' }>, 'query'>): Promise<ProbeResult>;
     /**
      * A field sampled at `n` points along the line from `from` to `to`, for a line plot.
+     * Element-node fields interpolate within one element without interface averaging;
+     * shared-face ties use the lowest element id, exactly as query.probe does.
      * Optional sample selects a retained primary-field frame; omitted means the final field.
      * Omitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.
      */

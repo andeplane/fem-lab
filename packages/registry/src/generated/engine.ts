@@ -3507,7 +3507,9 @@ export type Field =
   | "stressTop"
   | "stressBottom"
   | "shellMoment"
-  | "errorEstimate";
+  | "errorEstimate"
+  | "temperatureGradient"
+  | "heatFlux";
 /**
  * A scalar `g(t)` that scales the driven part of a Step over time: every prescribed
  * temperature of a heat-transient Step, and every Load and prescribed displacement of a
@@ -18740,6 +18742,15 @@ export interface UnitSet {
   density?: string | null;
   time?: string | null;
   temperature?: string | null;
+  /**
+   * Temperature difference per length; defaults to K/m. In degC/m the temperature is an
+   * interval: compound units never apply an absolute-temperature offset.
+   */
+  temperatureGradient?: string | null;
+  /**
+   * Conductive flux density display unit; defaults to W/m^2, independently of total power.
+   */
+  heatFlux?: string | null;
   acceleration?: string | null;
 }
 /**
@@ -19605,6 +19616,15 @@ export interface UnitSet1 {
   density?: string | null;
   time?: string | null;
   temperature?: string | null;
+  /**
+   * Temperature difference per length; defaults to K/m. In degC/m the temperature is an
+   * interval: compound units never apply an absolute-temperature offset.
+   */
+  temperatureGradient?: string | null;
+  /**
+   * Conductive flux density display unit; defaults to W/m^2, independently of total power.
+   */
+  heatFlux?: string | null;
   acceleration?: string | null;
 }
 export interface BodyRow {
@@ -20163,6 +20183,15 @@ export interface UnitSet2 {
   density?: string | null;
   time?: string | null;
   temperature?: string | null;
+  /**
+   * Temperature difference per length; defaults to K/m. In degC/m the temperature is an
+   * interval: compound units never apply an absolute-temperature offset.
+   */
+  temperatureGradient?: string | null;
+  /**
+   * Conductive flux density display unit; defaults to W/m^2, independently of total power.
+   */
+  heatFlux?: string | null;
   acceleration?: string | null;
 }
 /**
@@ -20449,6 +20478,15 @@ export interface UnitSet3 {
   density?: string | null;
   time?: string | null;
   temperature?: string | null;
+  /**
+   * Temperature difference per length; defaults to K/m. In degC/m the temperature is an
+   * interval: compound units never apply an absolute-temperature offset.
+   */
+  temperatureGradient?: string | null;
+  /**
+   * Conductive flux density display unit; defaults to W/m^2, independently of total power.
+   */
+  heatFlux?: string | null;
   acceleration?: string | null;
 }
 /**
@@ -21623,7 +21661,7 @@ export interface CostEstimate {
   /**
    * Estimated peak of the counted solve and frame-read phases. It includes mandatory
    * assembly storage, retained primary values, a conservative transient f64 working-vector
-   * allowance and known native/browser frame-response storage. It is incomplete because
+   * allowance, thermal endpoint/recovery arrays and known native/browser frame-response storage. It is incomplete because
    * solver fill, JSON and allocator overhead are not known before solving.
    */
   bytes: number;
@@ -21631,6 +21669,11 @@ export interface CostEstimate {
    * Mandatory assembly storage before transient-specific values are added.
    */
   assemblyBytes: number;
+  /**
+   * Thermal endpoint gradient/flux fields plus their intermediate Gauss arrays. This
+   * conservative allowance is added to both counted phases; excludes element-local scratch.
+   */
+  recoveryBytes?: number;
   /**
    * Numeric fields and Mesh snapshots of every existing retained Result; none is evicted before success.
    */
@@ -22482,6 +22525,15 @@ export interface UnitSet4 {
   density?: string | null;
   time?: string | null;
   temperature?: string | null;
+  /**
+   * Temperature difference per length; defaults to K/m. In degC/m the temperature is an
+   * interval: compound units never apply an absolute-temperature offset.
+   */
+  temperatureGradient?: string | null;
+  /**
+   * Conductive flux density display unit; defaults to W/m^2, independently of total power.
+   */
+  heatFlux?: string | null;
   acceleration?: string | null;
 }
 /**
@@ -22580,6 +22632,15 @@ export interface UnitSet5 {
   density?: string | null;
   time?: string | null;
   temperature?: string | null;
+  /**
+   * Temperature difference per length; defaults to K/m. In degC/m the temperature is an
+   * interval: compound units never apply an absolute-temperature offset.
+   */
+  temperatureGradient?: string | null;
+  /**
+   * Conductive flux density display unit; defaults to W/m^2, independently of total power.
+   */
+  heatFlux?: string | null;
   acceleration?: string | null;
 }
 /**
@@ -22677,6 +22738,15 @@ export interface UnitSet6 {
   density?: string | null;
   time?: string | null;
   temperature?: string | null;
+  /**
+   * Temperature difference per length; defaults to K/m. In degC/m the temperature is an
+   * interval: compound units never apply an absolute-temperature offset.
+   */
+  temperatureGradient?: string | null;
+  /**
+   * Conductive flux density display unit; defaults to W/m^2, independently of total power.
+   */
+  heatFlux?: string | null;
   acceleration?: string | null;
 }
 /**
@@ -22775,6 +22845,15 @@ export interface UnitSet7 {
   density?: string | null;
   time?: string | null;
   temperature?: string | null;
+  /**
+   * Temperature difference per length; defaults to K/m. In degC/m the temperature is an
+   * interval: compound units never apply an absolute-temperature offset.
+   */
+  temperatureGradient?: string | null;
+  /**
+   * Conductive flux density display unit; defaults to W/m^2, independently of total power.
+   */
+  heatFlux?: string | null;
   acceleration?: string | null;
 }
 /**
@@ -23132,6 +23211,15 @@ export interface UnitSet8 {
   density?: string | null;
   time?: string | null;
   temperature?: string | null;
+  /**
+   * Temperature difference per length; defaults to K/m. In degC/m the temperature is an
+   * interval: compound units never apply an absolute-temperature offset.
+   */
+  temperatureGradient?: string | null;
+  /**
+   * Conductive flux density display unit; defaults to W/m^2, independently of total power.
+   */
+  heatFlux?: string | null;
   acceleration?: string | null;
 }
 /**
@@ -23230,6 +23318,15 @@ export interface UnitSet9 {
   density?: string | null;
   time?: string | null;
   temperature?: string | null;
+  /**
+   * Temperature difference per length; defaults to K/m. In degC/m the temperature is an
+   * interval: compound units never apply an absolute-temperature offset.
+   */
+  temperatureGradient?: string | null;
+  /**
+   * Conductive flux density display unit; defaults to W/m^2, independently of total power.
+   */
+  heatFlux?: string | null;
   acceleration?: string | null;
 }
 /**
@@ -23410,6 +23507,15 @@ export interface UnitSet10 {
   density?: string | null;
   time?: string | null;
   temperature?: string | null;
+  /**
+   * Temperature difference per length; defaults to K/m. In degC/m the temperature is an
+   * interval: compound units never apply an absolute-temperature offset.
+   */
+  temperatureGradient?: string | null;
+  /**
+   * Conductive flux density display unit; defaults to W/m^2, independently of total power.
+   */
+  heatFlux?: string | null;
   acceleration?: string | null;
 }
 /**
@@ -23508,6 +23614,15 @@ export interface UnitSet11 {
   density?: string | null;
   time?: string | null;
   temperature?: string | null;
+  /**
+   * Temperature difference per length; defaults to K/m. In degC/m the temperature is an
+   * interval: compound units never apply an absolute-temperature offset.
+   */
+  temperatureGradient?: string | null;
+  /**
+   * Conductive flux density display unit; defaults to W/m^2, independently of total power.
+   */
+  heatFlux?: string | null;
   acceleration?: string | null;
 }
 /**
