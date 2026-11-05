@@ -1,6 +1,6 @@
 {
   "name": "c3-bbar-axisymmetric-quad4",
-  "reference": "Benchmark C3, independent Lame solution at nu=0.4999, a=.1 m, b=.2 m, E=200 GPa and internal p=60 MPa with axial strain zero. A=p*a^2/(b^2-a^2), B=A*b^2, sigma_rr=A-B/r^2 and sigma_hoop=A+B/r^2; therefore bore stresses are -60 and +100 MPa. Bore radial displacement is (1+nu)/E * [A*(1-2nu)*a+B/a] = 5.99989998e-05 m. Small-strain mean-dilatation Quad4 uses full deviatoric quadrature and volume-averaged mechanical trace. The Rust C3 regression separately gates refinement at 4/8/16/32 radial cells and one/four workers; this CLI case is its finest supported mesh, not a recorded-FE-value oracle.",
+  "reference": "Benchmark C3, independent Lame solution at nu=0.4999, a=.1 m, b=.2 m, E=200 GPa and internal p=60 MPa with axial strain zero. A=p*a^2/(b^2-a^2), B=A*b^2, sigma_rr=A-B/r^2 and sigma_hoop=A+B/r^2; therefore bore stresses are -60 and +100 MPa. Bore radial displacement is (1+nu)/E * [A*(1-2nu)*a+B/a] = 5.99989998e-05 m. Small-strain mean-dilatation Quad4 uses full deviatoric quadrature and volume-averaged mechanical trace. The Rust C3 regression separately gates refinement at 4/8/16/32/64 radial cells and one/four workers; this CLI case is its finest supported mesh, not a recorded-FE-value oracle.",
   "journal": [
     {
       "cmd": "model.new",
@@ -52,7 +52,7 @@
               ]
             ],
             "n": [
-              32,
+              64,
               2
             ],
             "tags": [

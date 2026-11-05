@@ -2246,6 +2246,12 @@ export type Command =
     }
   | {
       /**
+       * Structural element formulation for this Step; omitted inherits mesh.set. Mean-dilatation
+       * uses small-strain Hex8/Quad4 B-bar in solid3d, planeStrain and axisymmetric; plane-stress
+       * Quad4 and other kinds retain full integration. Finite-deformation B-bar is unsupported.
+       */
+      formulation?: Formulation | null;
+      /**
        * Analysis Step name; reusing it replaces the Step definition.
        */
       name: string;
@@ -6723,6 +6729,12 @@ export type QueryResult_Command =
     }
   | {
       /**
+       * Structural element formulation for this Step; omitted inherits mesh.set. Mean-dilatation
+       * uses small-strain Hex8/Quad4 B-bar in solid3d, planeStrain and axisymmetric; plane-stress
+       * Quad4 and other kinds retain full integration. Finite-deformation B-bar is unsupported.
+       */
+      formulation?: Formulation | null;
+      /**
        * Analysis Step name; reusing it replaces the Step definition.
        */
       name: string;
@@ -9571,6 +9583,12 @@ export type ModelFile_Command =
       cmd: "load.remove";
     }
   | {
+      /**
+       * Structural element formulation for this Step; omitted inherits mesh.set. Mean-dilatation
+       * uses small-strain Hex8/Quad4 B-bar in solid3d, planeStrain and axisymmetric; plane-stress
+       * Quad4 and other kinds retain full integration. Finite-deformation B-bar is unsupported.
+       */
+      formulation?: Formulation | null;
       /**
        * Analysis Step name; reusing it replaces the Step definition.
        */
@@ -12514,6 +12532,12 @@ export type PortableProject_Command =
       cmd: "load.remove";
     }
   | {
+      /**
+       * Structural element formulation for this Step; omitted inherits mesh.set. Mean-dilatation
+       * uses small-strain Hex8/Quad4 B-bar in solid3d, planeStrain and axisymmetric; plane-stress
+       * Quad4 and other kinds retain full integration. Finite-deformation B-bar is unsupported.
+       */
+      formulation?: Formulation | null;
       /**
        * Analysis Step name; reusing it replaces the Step definition.
        */
@@ -15482,6 +15506,12 @@ export type ReadReply_Command =
     }
   | {
       /**
+       * Structural element formulation for this Step; omitted inherits mesh.set. Mean-dilatation
+       * uses small-strain Hex8/Quad4 B-bar in solid3d, planeStrain and axisymmetric; plane-stress
+       * Quad4 and other kinds retain full integration. Finite-deformation B-bar is unsupported.
+       */
+      formulation?: Formulation | null;
+      /**
        * Analysis Step name; reusing it replaces the Step definition.
        */
       name: string;
@@ -18211,6 +18241,12 @@ export type DocumentSnapshot_Command =
     }
   | {
       /**
+       * Structural element formulation for this Step; omitted inherits mesh.set. Mean-dilatation
+       * uses small-strain Hex8/Quad4 B-bar in solid3d, planeStrain and axisymmetric; plane-stress
+       * Quad4 and other kinds retain full integration. Finite-deformation B-bar is unsupported.
+       */
+      formulation?: Formulation | null;
+      /**
        * Analysis Step name; reusing it replaces the Step definition.
        */
       name: string;
@@ -20320,6 +20356,7 @@ export interface ShellPly {
  * `after` names the Step whose Result this one continues (plan B §2.2).
  */
 export interface Step {
+  formulation?: Formulation | null;
   name: string;
   procedure: Procedure;
   constraints: string[];

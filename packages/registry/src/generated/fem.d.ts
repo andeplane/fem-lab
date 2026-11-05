@@ -222,9 +222,11 @@ export interface Fem {
     /**
      * Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`
      * 1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).
-     * `formulation: mean-dilatation` gives small-strain Hex8 the volume-averaged B-bar
-     * strain used by Abaqus C3D8; other kinds keep full integration. Existing full Journals
-     * retain their original pointwise strain. Mean-dilatation Hex8 cannot run finite deformation.
+     * `formulation: mean-dilatation` gives small-strain Hex8 and plane-strain/axisymmetric
+     * Quad4 the physical-volume-averaged B-bar mechanical strain (including thermal eigenstrain).
+     * Plane-stress Quad4 and other kinds keep full integration. Existing full Journals retain
+     * their original pointwise strain. Mean-dilatation Hex8/Quad4 cannot run finite deformation.
+     * A structural step.add formulation overrides this mesh default without rebuilding the mesh.
      * `formulation: full` is the textbook linear element that locks in bending: keep the
      * default incompatible modes or use order 2 when bending matters. Mesher-defined geometry
      * owns a Body name distinct from explicit Bodies, cuts, named Sets and point masses.

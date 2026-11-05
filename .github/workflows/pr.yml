@@ -142,6 +142,8 @@ jobs:
           node-version: 22
           cache: npm
       - uses: ./.github/actions/wasm
+      - name: Verify C3 analytical CLI cases
+        run: ./target/release/femlab bench --filter c3-bbar --cpu --threads 1 --json
       - uses: actions/upload-artifact@v4
         with:
           name: wasm

@@ -18490,7 +18490,7 @@ fn mean_dilatation_c3_near_incompressible_cylinder_converges_in_displacement_and
         for axisymmetric in [false, true] {
             let exact_u = (1.0 + nu) / young * (aa * (1.0 - 2.0 * nu) * a + bb / a);
             let mut errors = Vec::new();
-            for n in [4, 8, 16, 32] {
+            for n in [4, 8, 16, 32, 64] {
                 let (mesh, id, constraints, at, hoop) = if axisymmetric {
                     (
                         annulus_strip(ElementKind::Quad4, [n, 2]),
@@ -18532,7 +18532,7 @@ fn mean_dilatation_c3_near_incompressible_cylinder_converges_in_displacement_and
                     let error =
                         [(u / exact_u - 1.0).abs(), (sig[hoop] / 100e6 - 1.0).abs(), (sig[0] / -60e6 - 1.0).abs()];
                     eprintln!("C3 Bbar nu={nu} axisym={axisymmetric} n={n} threads={threads}: u={u:.12e} hoop={:.9e} radial={:.9e} errors={error:?}", sig[hoop], sig[0]);
-                    if n == 32 {
+                    if n == 64 {
                         assert!(
                             error.into_iter().all(|e| e < 0.02),
                             "C3 displacement and both bore stresses: {error:?}"
@@ -18549,10 +18549,12 @@ fn mean_dilatation_c3_near_incompressible_cylinder_converges_in_displacement_and
                 }
             }
             for pair in errors.windows(2) {
-                for component in 0..3 {
+                for (component, (previous, next)) in pair[0].iter().zip(pair[1]).enumerate() {
+                    let rate = (previous / next).log2();
+                    let minimum = if component == 0 { 1.8 } else { 0.8 };
                     assert!(
-                        pair[1][component] < pair[0][component],
-                        "C3 nu={nu} axisym={axisymmetric} must converge: {errors:?}"
+                        rate > minimum,
+                        "C3 nu={nu} axisym={axisymmetric} component={component} rate={rate}: {errors:?}"
                     );
                 }
             }
@@ -18571,4 +18573,43 @@ fn mean_dilatation_quad4_refuses_unimplemented_finite_strain() {
     let error = element_for(ElementKind::Quad4).tangent_and_force(&c, &[0.0; 8], &[], out).unwrap_err();
     assert_eq!(error.code, ErrorCode::Unsupported);
     assert!(error.cause.contains("small strain"));
+}
+
+/// On each square of a unit-domain mesh, P changes every normal strain by
+/// (mean(y)-y)/3. Its exact integrated six-component strain error is h/6.
+#[test]
+fn mean_dilatation_quad4_has_the_known_first_order_strain_consistency_rate() {
+    let kind = ElementKind::Quad4;
+    let el = element_for(kind);
+    let mat = steel();
+    let mut previous = None;
+    for n in [2, 4, 8] {
+        let h = 1.0 / f64::from(n);
+        let mut error2 = 0.0;
+        for j in 0..n {
+            let coords: Vec<f64> = node_xi(kind)
+                .iter()
+                .flat_map(|x| [(x[0] + 1.0) * h / 2.0, (f64::from(j) + (x[1] + 1.0) / 2.0) * h, 0.0])
+                .collect();
+            let u: Vec<f64> = coords.chunks_exact(3).flat_map(|x| [x[0] * x[1], 0.0]).collect();
+            let c = ctx(&coords, &mat, Idealisation::PlaneStrain, Formulation::MeanDilatation);
+            let (mut stress, mut strain) = (vec![0.0; 24], vec![0.0; 24]);
+            el.recover(&c, &u, &mut stress, &mut strain).unwrap();
+            for g in 0..4 {
+                let xi = el.gp_xi(g);
+                let x = (xi[0] + 1.0) * h / 2.0;
+                let y = (f64::from(j) + (xi[1] + 1.0) / 2.0) * h;
+                let exact = [y, 0.0, 0.0, x, 0.0, 0.0];
+                error2 += f64::from(n) * h * h / 4.0
+                    * strain[g * 6..g * 6 + 6].iter().zip(exact).map(|(v, e)| (v - e).powi(2)).sum::<f64>();
+            }
+        }
+        let error = error2.sqrt();
+        assert!((error - h / 6.0).abs() < 1e-13);
+        if let Some(last) = previous {
+            let rate: f64 = (last / error).log2();
+            assert!((rate - 1.0).abs() < 1e-12);
+        }
+        previous = Some(error);
+    }
 }
