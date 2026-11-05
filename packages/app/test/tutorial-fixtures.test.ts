@@ -12,6 +12,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { HOST_COMMANDS } from '@femlab/registry';
 import { TUTORIALS } from '../src/tutorial/tutorials';
 import type { Tutorial } from '../src/tutorial/types';
+import { checkOriginalLe10 } from './le10-original';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..', '..', '..');
@@ -67,7 +68,7 @@ describe('tutorials/*.json', () => {
   it('bundles the four built-ins the PLAN promises plus one per procedure', () => {
     expect(files.length).toBeGreaterThanOrEqual(11);
     expect(TUTORIALS.map((t) => t.id).sort()).toEqual(
-      ['axisymmetric-transient-heat', 'eighth-thermal-stress', 'le10-full-face', 'cantilever', 'heat-conduction', 'journal-as-program', 'mesh-convergence', 'modal-analysis', 'plate-with-hole', 'pressure-vessel', 'free-free-modal', 'read-a-result', 'symmetry-and-2d', 'thermal-bar', 'thermal-design-check', 'transient-heat', 'composite-block-shear', 'solve-cost-and-solvers', 'thermal-stress-chaining', 'steel-roof-truss', 'column-buckling', 'concrete-floor-slab'].sort(),
+      ['axisymmetric-transient-heat', 'eighth-thermal-stress', 'le10-full-face', 'le10-original', 'cantilever', 'heat-conduction', 'journal-as-program', 'mesh-convergence', 'modal-analysis', 'plate-with-hole', 'pressure-vessel', 'free-free-modal', 'read-a-result', 'symmetry-and-2d', 'thermal-bar', 'thermal-design-check', 'transient-heat', 'composite-block-shear', 'solve-cost-and-solvers', 'thermal-stress-chaining', 'steel-roof-truss', 'column-buckling', 'concrete-floor-slab'].sort(),
     );
     // every file in the folder is registered: adding one and forgetting the import fails here
     expect(files.map((f) => path.basename(f, '.json')).sort()).toEqual(TUTORIALS.map((t) => t.id).sort());
@@ -105,8 +106,11 @@ describe('tutorials/*.json', () => {
   for (const tutorial of TUTORIALS) {
     it(`${tutorial.id}: its doIt Commands replay through the wasm engine`, async () => {
       const commands = engineCommands(tutorial);
-      await replay(commands); // rejects (and fails the test) if the sequence does not run
-    }, tutorial.id === 'modal-analysis' ? 45_000 : 30_000);
+      if (tutorial.id === 'le10-original') await checkOriginalLe10(wasm.Engine, commands);
+      else await replay(commands); // rejects (and fails the test) if the sequence does not run
+    // Only this new imported three-mesh case includes repeated geometry certification:
+    // Mini measured 2.8 + 5.5 + 25.7 s. Keep existing fixture deadlines unchanged.
+    }, tutorial.id === 'le10-original' ? 120_000 : tutorial.id === 'modal-analysis' ? 45_000 : 30_000);
   }
 });
 

@@ -4,6 +4,7 @@
 import axisymmetricTransientHeat from '../../tutorials/axisymmetric-transient-heat.json';
 import eighthThermalStress from '../../tutorials/eighth-thermal-stress.json';
 import le10FullFace from '../../tutorials/le10-full-face.json';
+import le10Original from '../../tutorials/le10-original.json';
 import cantilever from '../../tutorials/cantilever.json';
 import columnBuckling from '../../tutorials/column-buckling.json';
 import freeFreeModal from '../../tutorials/free-free-modal.json';
@@ -40,6 +41,7 @@ export const TUTORIALS: Tutorial[] = [
   axisymmetricTransientHeat,
   eighthThermalStress,
   le10FullFace,
+  le10Original,
   meshConvergence,
   symmetryAnd2d,
   journalAsProgram,

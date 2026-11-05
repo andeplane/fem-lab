@@ -67,7 +67,7 @@ This passes the stated tip-only check under those assumptions, with about 2.59 K
 The closing step explains corresponding Abaqus steady-state heat-transfer, Ansys Steady-State Thermal and Nastran heat-transfer terminology. These describe comparable workflows; the tutorial does not establish equivalent solver implementations or certify a design.
 
 
-## Three verification walkthroughs
+## Verification walkthroughs
 
 These tutorials run locally without an account or hosted AI. Start each in a separate Model: **Do it for me** executes ordinary registered Commands, including the solve. The final **Fit** action only changes the camera; inspect the Result and then choose **Next**. The closing theory explains corresponding Abaqus, Ansys and Nastran terminology and links the original problem source.
 
@@ -100,7 +100,17 @@ For this validated **heating-only** control, floating-point reaction residuals c
 
 Choose **Tutorials → LE10: the full-face support variant**. Build the curved mapped base and sweep a 0.6 m thickness into quadratic solids. This is the independently verified **ESRD full-face-support variant**, with all three outer-face displacement components fixed. Its reference is **σyy(D) = −5.25 MPa**, at the upper inner corner `D = [2 m, 0 m, 0.6 m]`; the tutorial mesh gives about **−5.234 MPa**. Probe stress component **1**, rather than displacement, von Mises or a mid-plane point.
 
-The original NAFEMS LE10 holds vertical displacement only on the outer face’s mid-plane line, and has the different **−5.38 MPa** target. Neither this guide nor the existing full-face example proves that original result. The tutorial explicitly compares support definitions and the 6 × 6 × 2 versus 12 × 12 × 8 quadratic refinements. A coarse mesh accidentally approaching another problem’s reference is not verification.
+The original NAFEMS LE10 holds vertical displacement only on the outer face’s mid-plane line, and has the different **−5.38 MPa** target. Use the separate **LE10: original mid-plane line support** guide for that original result; this full-face guide and example retain their different supports and reference. The tutorial explicitly compares support definitions and the 6 × 6 × 2 versus 12 × 12 × 8 quadratic refinements. A coarse mesh accidentally approaching another problem’s reference is not verification.
+
+### LE10: original mid-plane line support
+
+Choose **Tutorials → LE10: original mid-plane line support**. This reproduces the original [SimScale/NAFEMS plate definition](https://www.simscale.com/docs/validation-cases/thick-plate-under-pressure/): ellipses with semi-axes (2, 1) m and (3.25, 2.75) m, thickness 0.6 m, E = 210 GPa, ν = 0.3 and 1 MPa top pressure. The two cut faces remove only their normal displacement. The whole outer curved face holds **ux and uy**, while **uz is held only on its z = 0.3 m mid-plane line**.
+
+The guide imports a reproducible 1225-node, 216-cell Hex20 mesh through the normal checked imported-mesh contract. Its complete authored INP source includes a named 13-node mid-plane Set and a SHA-256 provenance hash. `node tools/generate-le10-original.mjs` after the normal Node WASM build regenerates the three source decks in `tools/fixtures/le10-original/`, coarse/middle test fixtures and fine tutorial payload through the registry mesher, exporter and converter. The imported `order: 1` retains the authored quadratic connectivity; it does not linearize it. Import certification may take longer than the solve.
+
+Show stress **component 1 (σyy)** and probe `[2 m, 0 m, 0.6 m]`. The original independent reference is **−5.38 MPa**; the fine mesh gives **−5.38031 MPa**. The 4 × 4 × 2 and 4 × 4 × 4 meshes give −5.65287 and −5.40449 MPa, with decreasing reference error. This is a discrete point-stress refinement check, not a formal asymptotic convergence-rate claim for a singular line support. Stress is interpolated from recovered nodal values.
+
+Check the support physically as well: the upper and lower outer edges move vertically by approximately −9.77 μm and −8.65 μm, while the mid-plane line remains at zero uz. All 120 other outer-face nodes retain z freedom. A full-face vertical clamp would remove those motions and requires the separate −5.25 MPa reference. The total vertical reaction balances approximately **5.449 MN**. The [ESRD benchmark guide, pp. 29–31](https://www.esrd.com/wp-content/uploads/dlm_uploads/Benchmarks-Guide-Standard-NAFEMS-Benchmarks-Linear-Elastic-Tests.pdf) records both support definitions and explains their distinction.
 
 ## Keep a comparison record
 

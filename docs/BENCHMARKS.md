@@ -860,6 +860,40 @@ The fixture also gates reaction balance and Result freshness. Separate simplex t
 the exact linear heat profile at both orders over three refinements, body-scoped face areas,
 and named edge preservation and deterministic replay for Tri3/Tri6.
 
+**D1a: original line-supported LE10 (#86).** The separately named `le10-original`
+guided fixture uses the original [SimScale problem](https://www.simscale.com/docs/validation-cases/thick-plate-under-pressure/)
+and signed NAFEMS reference **σyy(D) = −5.38 MPa**. Geometry/material/pressure match D1,
+but the entire outer face restrains **ux/uy only**, with **uz only on the curved outer
+mid-plane line z=0.3 m**. The x/y reflection cuts remove only ux/uy respectively. Probe
+D=(2,0,0.6) m using recovered nodal stress component 1. No engine or schema extension is
+needed: authored Hex20 source includes a named mid-plane NSET, retained by the registered
+INP converter and checked imported mesh contract. `tools/generate-le10-original.mjs`
+reproduces the committed source decks and portable Commands through registry I/O; the
+SHA-256 includes the support Set, not merely the coordinates.
+
+| Base × base × thickness | Nodes / Hex20 cells | Mid-plane support nodes | σyy(D), MPa | Relative reference error |
+|---|---|---|---|---|
+| 4 × 4 × 2 | 245 / 32 | 9 | −5.652871425 | 5.072% |
+| 4 × 4 × 4 | 425 / 64 | 9 | −5.404492888 | 0.4553% |
+| 6 × 6 × 6 | 1225 / 216 | 13 | −5.380306238 | 0.0057% |
+
+`packages/app/test/le10-original.ts`, called by the tutorial's actual replay test, solves
+all three meshes once, requires decreasing error and the unchanged **2%** fine-mesh gate,
+asserts ellipse geometry, connectivity, source hashes and exact all-and-only midline node
+membership. It explicitly checks both upper/lower outer edges have nonzero uz while the
+midline remains fixed; on the fine mesh 120 other outer nodes retain z freedom. The fine
+upper/lower outer displacements are −9.7718/−8.6461 μm. A whole-face clamp fails this physical
+witness even if its coarse stress happens to approach −5.38 MPa. Pressure resultant agrees
+within 1e−4 relative with the analytic quarter-annulus area times pressure,
+`1e6 π/4 (3.25×2.75−2×1) N`, and the midline vertical reaction balances it within 1e−9.
+Measured fine resultant is 5.448646543 MN; relative force balance is 8.90e−15.
+
+These are discrete recovered point-stress refinements against the published benchmark;
+no formal global asymptotic rate is claimed for its singular line restraint. ESRD explicitly
+notes that line support's elasticity limitation and uses D1's different whole-face support.
+The original workflow preserves the requested mathematical model rather than silently
+substituting that variant. Both stay separately named and referenced.
+
 **D6/D7 are built as CSG (#22).** `geometry.add` of a 90° `Revolve` of the rectangle
 r ∈ [0.1, 0.2] m, z ∈ [0, 0.1] m with segment tags `zmin`/`outer`/`zmax`/`inner`, named `tube`,
 tags the body identically to the `lame-3d-revolve-hex20.json` mapped block — `tube.inner`,
