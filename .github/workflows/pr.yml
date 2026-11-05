@@ -130,6 +130,14 @@ jobs:
             native850-source.json
           if-no-files-found: error
           retention-days: 7
+      - name: verify thermal registry contracts
+        run: |
+          set -o pipefail
+          cargo test -p femlab-engine --test registry a_symmetry_plane_guides_a_beam_end_and_an_orientation_along_it_is_refused -- --exact --nocapture 2>&1 | tee native850-registry.log
+          cargo test -p femlab-engine --test registry retained_frames_sample_selection_errors_and_staleness_are_read_only -- --exact --nocapture 2>&1 | tee -a native850-registry.log
+          cargo test -p femlab-engine --test registry thermal_vector_queries_keep_units_mesh_identity_replay_and_frame_limits -- --exact --nocapture 2>&1 | tee -a native850-registry.log
+          cargo test -p femlab-engine --test registry probing_and_walking_a_solved_field -- --exact --nocapture 2>&1 | tee -a native850-registry.log
+          python3 -c "from pathlib import Path; assert Path('native850-registry.log').read_text().count('test result: ok. 1 passed; 0 failed; 0 ignored;') == 4"
       - name: verify independent thermal invariant controls
         run: |
           set -o pipefail
@@ -189,6 +197,7 @@ jobs:
             native850-source.json
             native850-tests.log
             native850-invariants.log
+            native850-registry.log
             gpu850-coverage.log
             gpu850-coverage.json
           if-no-files-found: error

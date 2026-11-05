@@ -195,11 +195,12 @@ pub enum Query {
         field: Option<Field>,
     },
 
-    /// A field value at a point (default: the last solved Step). Nodal and unaveraged
-    /// element-node fields are interpolated within the containing element; no interface
+    /// A field value at a point (default: the last solved Step). Nodal fields and the
+    /// unaveraged thermal-vector element-node fields are interpolated within the containing element; no interface
     /// averaging is applied. errorEstimate returns the containing element's constant value
     /// with interpolated=false. Shared-face ties use the lowest element id. Component
     /// indices: displacement and thermal vectors 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.
+    /// Other element-node fields remain unsupported here; query.field returns their raw arrays.
     /// Optional sample selects a retained primary-field frame; omitted means the final field.
     /// Omitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.
     #[serde(rename = "query.probe", rename_all = "camelCase")]
@@ -220,8 +221,9 @@ pub enum Query {
     },
 
     /// A field sampled at `n` points along the line from `from` to `to`, for a line plot.
-    /// Element-node fields interpolate within one element without interface averaging;
+    /// Thermal-vector element-node fields interpolate within one element without interface averaging;
     /// shared-face ties use the lowest element id, exactly as query.probe does.
+    /// Other element-node fields remain unsupported; query.field returns their raw arrays.
     /// Optional sample selects a retained primary-field frame; omitted means the final field.
     /// Omitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.
     #[serde(rename = "query.path", rename_all = "camelCase")]

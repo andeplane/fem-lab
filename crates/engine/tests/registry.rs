@@ -2929,7 +2929,7 @@ fn probing_and_walking_a_solved_field() {
         at: [Q::text("2 m"), Q::text("50 mm"), Q::text("50 mm")],
     };
     assert_eq!(e.query(off).expect_err("outside").code, ErrorCode::NotFound);
-    // An unaveraged field interpolates the containing element's own values.
+    // Mechanical unaveraged fields retain their existing unsupported sampling contract.
     let per_elem = Query::Probe {
         result_id: None,
         sample: None,
@@ -2938,9 +2938,7 @@ fn probing_and_walking_a_solved_field() {
         component: Some(0),
         at: [Q::text("0 m"), Q::text("50 mm"), Q::text("50 mm")],
     };
-    let QueryResult::Probe(p) = e.query(per_elem).expect("element-node interpolation") else { panic!() };
-    assert!(p.interpolated);
-    assert_eq!(p.element, 0);
+    assert_eq!(e.query(per_elem).expect_err("per element node").code, ErrorCode::Unsupported);
     // a path down the axis rises monotonically to the tip
     let path = Query::Path {
         result_id: None,
@@ -3820,7 +3818,7 @@ fn thermal_vector_queries_keep_units_mesh_identity_replay_and_frame_limits() {
                 < 1e-12
         );
         let mut replayed = Engine::new(None, Box::new(NoClock), 4);
-        pollster::block_on(replayed.replay(&e.export_file().journal.entries, true, true)).unwrap();
+        pollster::block_on(replayed.replay(&e.export_file().journal.entries, false, true)).unwrap();
         for (i, field) in [Field::TemperatureGradient, Field::HeatFlux].into_iter().enumerate() {
             assert_eq!(replayed.field(Some("warm"), field).unwrap(), &vectors[i]);
             let replay_bits: Vec<_> =
@@ -9438,7 +9436,17 @@ fn retained_frames_sample_selection_errors_and_staleness_are_read_only() {
     ] {
         assert_eq!(frame_query(&mut e, q).unwrap_err().code, ErrorCode::NotFound);
     }
-    for field in ["displacement", "reaction", "stress", "stressUnaveraged", "strain", "vonMises", "principal"] {
+    for field in [
+        "displacement",
+        "reaction",
+        "stress",
+        "stressUnaveraged",
+        "strain",
+        "vonMises",
+        "principal",
+        "temperatureGradient",
+        "heatFlux",
+    ] {
         let error = frame_query(&mut e, json!({"query":"query.frame","index":0,"field":field})).unwrap_err();
         assert_eq!(error.code, ErrorCode::Unsupported);
         assert_eq!(error.where_.as_deref(), Some("field"));
@@ -9447,11 +9455,7 @@ fn retained_frames_sample_selection_errors_and_staleness_are_read_only() {
         q["sample"] = json!({"kind":"frame","index":1});
         assert_eq!(frame_query(&mut e, q).unwrap_err().code, ErrorCode::Unsupported);
     }
-    for q in [
-        json!({"query":"query.frame","index":-1}),
-        json!({"query":"query.frame","index":0,"field":"heatFlux"}),
-        json!({"query":"query.frame","index":0,"field":"mode:1"}),
-    ] {
+    for q in [json!({"query":"query.frame","index":-1}), json!({"query":"query.frame","index":0,"field":"mode:1"})] {
         assert_eq!(frame_query(&mut e, q).unwrap_err().code, ErrorCode::Schema);
     }
     assert_eq!(e.journal(), &journal);
@@ -12284,7 +12288,10 @@ fn a_symmetry_plane_guides_a_beam_end_and_an_orientation_along_it_is_refused() {
         sample: None,
         at: [Q::text("1 m"), Q::text("0 m"), Q::text("0 m")],
     });
-    assert_eq!(er.unwrap_err().code, ErrorCode::Unsupported);
+    let er = er.unwrap_err();
+    assert_eq!(er.code, ErrorCode::Unsupported);
+    assert!(er.cause.contains("SectionMoment"));
+    assert!(er.suggestion.is_some());
     let QueryResult::Field(f) =
         e.query(Query::Field { step: None, result_id: None, field: "sectionMoment".into() }).unwrap()
     else {
