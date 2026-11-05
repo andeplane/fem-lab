@@ -44,7 +44,10 @@ console.log(await fem.query.field({ step: 'conduct', field: 'temperatureGradient
 
 Retained transient frames contain nodal temperature only. `query.frame` or sampled
 probe/path requests for either derived vector explicitly reject; omit the frame/sample for
-the final endpoint field. Difference Queries currently accept nodal fields, so these
+the final endpoint field. In the browser, choosing a gradient/flux contour exits playback
+and labels the final endpoint time, including in exported legend text. The playback button
+returns to retained temperature frames; an earlier frame's time never labels an endpoint
+vector. Difference Queries currently accept nodal fields, so these
 element-node vectors cannot be used in that comparison operation. Cost estimates include
 both endpoint fields and intermediate Gauss arrays in `recoveryBytes`; element-local scratch
 and host/allocator overhead remain additional. See [physics](./physics.md) and

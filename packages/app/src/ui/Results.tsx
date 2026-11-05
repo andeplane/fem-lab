@@ -220,8 +220,9 @@ function Sample({ s, query }: { s: UiState; query: Query }) {
   const [probe, setProbe] = useState<ProbeResult | null>(null);
   const [path, setPath] = useState<PathResult | null>(null);
   const [error, setError] = useState('');
-  const field = s.transient?.catalogue.field ?? s.result?.extremes[0]?.field ?? 'vonMises';
   const choice = choiceOf(s.fieldKey);
+  const thermalVector = choice.field === 'temperatureGradient' || choice.field === 'heatFlux';
+  const field = s.transient?.catalogue.field ?? (thermalVector ? choice.field : s.result?.extremes[0]?.field ?? 'vonMises');
   const requested = useRef<{ probe: string[] | null; path: { from: string[]; to: string[] } | null }>({ probe: null, path: null });
   const generation = useRef(0);
   const sampledIdentity = useRef({ probe: '', path: '' });
@@ -230,7 +231,8 @@ function Sample({ s, query }: { s: UiState; query: Query }) {
   if (currentIdentity.current !== identity) { currentIdentity.current = identity; generation.current++; }
   const context = {
     step: s.result?.step, field,
-    ...(s.transient ? { sample: { kind: 'frame', index: s.transient.frame.index }, ...(choice.component === null ? {} : { component: choice.component }) } : {}),
+    ...(s.transient ? { sample: { kind: 'frame', index: s.transient.frame.index } } : {}),
+    ...((s.transient || thermalVector) && choice.component !== null ? { component: choice.component } : {}),
   };
   const parse = (text: string): string[] => text.split(',').map((p) => p.trim());
   const run = (q: Record<string, unknown>, keep: (v: unknown) => void): void => {

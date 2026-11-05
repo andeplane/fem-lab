@@ -136,6 +136,14 @@ export function hasDeformation(result: ResultSummary | null, fieldKey: string): 
   return result !== null && (result.extremes.some((e) => e.field === 'displacement') || (mode !== undefined && mode <= modeCount(result)));
 }
 
+/** Endpoint-only thermal vectors never inherit the time of a previously displayed frame. */
+export function thermalEndpointLabel(result: ResultSummary | null, fieldKey: string): string | null {
+  const field = choiceOf(fieldKey).field;
+  const time = result?.history?.at(-1)?.time;
+  return time && (field === 'temperatureGradient' || field === 'heatFlux')
+    ? `final endpoint ${formatNumber(time.value)} ${time.unit}` : null;
+}
+
 /** The k-th mode shape, contoured by its magnitude and swept by the deformation bar. */
 export function modeChoice(k: number, result?: ModeSpectrum | null): FieldChoice {
   const factor = result?.frequencies?.length ? undefined : result?.bucklingFactors?.[k - 1];

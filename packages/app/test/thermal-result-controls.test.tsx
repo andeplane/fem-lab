@@ -1,10 +1,11 @@
-import type { Extreme, ModelSummary, ResultSummary } from '@femlab/registry';
+import type { EngineTransport, Extreme, FieldData, FrameResult, FramesResult, ModelSummary, Query, QueryResult, ResultSummary } from '@femlab/registry';
 import { render } from 'preact';
 import { act } from 'preact/test-utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Store, type UiState } from '../src/store';
 import { App } from '../src/ui/App';
 import type { Dispatch } from '../src/ui/cmd';
+import { ResultsView } from '../src/results';
 
 const v = (value: number, unit: string) => ({ value, unit });
 const point = [v(0, 'm'), v(0, 'm'), v(0, 'm')] as const;
@@ -28,8 +29,9 @@ function mount(patch: Partial<UiState>) {
   store.set({ ready: true, model, viewMode: 'results', tab: 'results', fieldKey: 'temperature', legend: { min: 0, max: 100, unit: 'K' }, ...patch });
   const root = document.createElement('div'); document.body.append(root); mounted.push(root);
   const dispatch = vi.fn<Dispatch>(async () => undefined);
-  act(() => render(<App store={store} dispatch={dispatch} viewer={{ current: null }} query={async () => ({ value: 1, unit: 'K' })} />, root));
-  return { root, store, dispatch };
+  const query = vi.fn(async () => ({ value: { value: -100, unit: 'W/m^2' }, element: 0, interpolated: true }));
+  act(() => render(<App store={store} dispatch={dispatch} viewer={{ current: null }} query={query} />, root));
+  return { root, store, dispatch, query };
 }
 afterEach(() => { for (const root of mounted.splice(0)) { act(() => render(null, root)); root.remove(); } });
 
@@ -81,5 +83,58 @@ describe('retained Result deformation capabilities', () => {
     expect(root.querySelector('.deform-bar')).toBeNull();
     expect(root.querySelector('.legend-sub')?.textContent).toBe('retained');
     expect(root.querySelector('.result-header')?.textContent).not.toMatch(/drawn|exaggerat|true scale/);
+  });
+
+  it('leaves actual retained playback for endpoint vectors and labels the final time in UI and exports', async () => {
+    const history = [0, 1, 2].map(time => ({ time: v(time, 's'), min: v(300 + 10 * time, 'K'), max: v(300 + 10 * time, 'K') }));
+    const result: ResultSummary = { ...thermal, step: 'warm', history,
+      extremes: [extreme('temperature', 'K'), extreme('temperatureGradient', 'K/m'), extreme('heatFlux', 'W/m^2')] };
+    const catalogue: FramesResult = { resultId: result.resultId, step: result.step, modelHash: 'h', stale: false,
+      field: 'temperature', components: 3, storedComponents: 1, nodeCount: 1, retainedBytes: 48,
+      frames: history.map((row, index) => ({ index, timeSi: row.time.value, time: row.time })) };
+    const frame = (index: number): FrameResult => ({ field: 'temperature', components: 3, nodeCount: 1, unit: 'K',
+      sample: { resultId: result.resultId, step: result.step, modelHash: 'h', frame: catalogue.frames[index]! },
+      values: [300 + index * 10, 0, 0] });
+    const { root, store, query: sampleQuery } = mount({ result });
+    const drawing = { setSurface: vi.fn(), setField: vi.fn(), setDeformed: vi.fn(), setMode: vi.fn(),
+      setDim: vi.fn(), animate: vi.fn(), autoScale: vi.fn(() => 1) };
+    const clock = { now: () => 0, schedule: vi.fn(() => 'owned-timer'), cancel: vi.fn() };
+    const field = vi.fn(async (_step: string | undefined, name: string): Promise<FieldData> => ({
+      values: Float32Array.from([name === 'heatFlux' ? -100 : name === 'temperatureGradient' ? 20 : 320]),
+      min: -100, max: 320, unit: '', per: name === 'temperature' ? 'node' : 'elementNode',
+    }));
+    const transport = {
+      query: vi.fn(async (q: Query): Promise<QueryResult> => {
+        if (q.query === 'query.result') return result;
+        if (q.query === 'query.frames') return catalogue;
+        if (q.query === 'query.frame') return frame(q.index ?? (q.sample?.kind === 'frame' ? q.sample.index : 0));
+        throw new Error(`unexpected query ${q.query}`);
+      }), field,
+      surface: vi.fn(async () => ({ positions: new Float32Array([0, 0, 0]), indices: new Uint32Array(), source: 'mesh' as const })),
+    };
+    const view = new ResultsView(store, transport as unknown as EngineTransport, { current: drawing } as never, clock);
+    // Follow the actual solve-completion path, which initially opens the last temperature frame.
+    await act(async () => view.onAck({ output: { type: 'solve' } }));
+    expect(store.state.transient?.frame.index).toBe(2);
+    await act(async () => view.playTransient({ step: 'warm', playing: true, sample: { kind: 'frame', index: 0 } }));
+    expect(root.querySelector('[aria-label="displayed transient time"]')?.textContent).toBe('0 s');
+    expect(store.state.transient?.playing).toBe(true);
+    await act(async () => view.showField({ field: 'heatFlux', component: 0 }));
+    expect(clock.cancel).toHaveBeenCalledWith('owned-timer');
+    expect(store.state.transient).toBeNull();
+    expect(field).toHaveBeenLastCalledWith('warm', 'heatFlux', 0, result.resultId);
+    expect(drawing.setField).toHaveBeenLastCalledWith(Float32Array.from([-100]), [-100, -100], 'elementNode');
+    expect(root.querySelector('[aria-label="displayed transient time"]')).toBeNull();
+    expect(root.querySelector('.legend-sub')?.textContent).toBe('warm · final endpoint 2 s');
+    expect(view.legendBurn()?.title).toBe('qx · final endpoint 2 s');
+    await act(async () => root.querySelector<HTMLButtonElement>('[data-cmd="query.probe"]')!.click());
+    expect(sampleQuery).toHaveBeenLastCalledWith({ query: 'query.probe', step: 'warm', field: 'heatFlux', component: 0, at: ['0 mm', '0 mm', '0 mm'] });
+    await act(async () => view.showField({ field: 'temperatureGradient', component: 0 }));
+    expect(view.legendBurn()?.title).toBe('∇Tx · final endpoint 2 s');
+    // Re-entering history restores the primary temperature field and its real selected time.
+    await act(async () => view.playTransient({ step: 'warm', playing: false, sample: { kind: 'frame', index: 1 } }));
+    expect(store.state.fieldKey).toBe('temperature');
+    expect(root.querySelector('[aria-label="displayed transient time"]')?.textContent).toBe('1 s');
+    expect(view.legendBurn()?.title).toBe('T · 1 s');
   });
 });

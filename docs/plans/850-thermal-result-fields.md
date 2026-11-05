@@ -16,6 +16,8 @@ and [tutorial umbrella #86](https://github.com/andeplane/fem-lab/issues/86).
   only balances represented divergence components; it is not a full 3D thermal model.
 - Stored transient frames remain primary temperature only. Derived frame/sample requests
   reject explicitly; final derived fields are not theta-stage heat powers/reactions.
+  Browser selection exits playback for final-only fields and labels the final endpoint time,
+  including exported legend text; returning to playback restores primary temperature.
 - Raw field Queries stay SI. Summary/probe/path/contour units have independent
   `temperatureGradient` and `heatFlux` settings. A compound degC/m uses temperature intervals.
 - Probes and paths interpolate within one element; shared-face ties select the lowest

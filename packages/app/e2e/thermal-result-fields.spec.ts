@@ -8,7 +8,7 @@ test('@cpu inspects recovered thermal vectors with signed components and intensi
     await window.fem.dispatch({ cmd: 'model.new', name: 'Fourier vector check' });
     await window.fem.dispatch({ cmd: 'model.setUnits', units: { temperature: 'degC', temperatureGradient: 'K/mm', heatFlux: 'kW/m^2' } });
     await window.fem.dispatch({ cmd: 'geometry.addBox', name: 'bar', size: ['1 m', '0.1 m', '0.1 m'] });
-    await window.fem.dispatch({ cmd: 'material.add', name: 'conductor', k: '5 W/(m K)' });
+    await window.fem.dispatch({ cmd: 'material.add', name: 'conductor', k: '5 W/(m K)', rho: '1 kg/m^3', cp: '1 J/(kg K)' });
     await window.fem.dispatch({ cmd: 'material.assign', material: 'conductor', bodies: ['bar'] });
     await window.fem.dispatch({ cmd: 'constraint.temperature', name: 'cold', on: 'bar.xmin', value: '300 K' });
     await window.fem.dispatch({ cmd: 'constraint.temperature', name: 'hot', on: 'bar.xmax', value: '320 K' });
@@ -43,5 +43,22 @@ test('@cpu inspects recovered thermal vectors with signed components and intensi
   await legend.getByRole('button', { name: 'qz', exact: true }).click();
   await expect(page.locator('.legend-field')).toHaveText('qz');
   await expect(page.locator('.legend-unit')).toHaveText('kW/m^2');
+  await page.evaluate(async () => {
+    await window.fem.dispatch({ cmd: 'step.add', name: 'warm', procedure: 'heat-transient', constraints: ['cold', 'hot'], loads: [], dt: '0.1 s', tEnd: '0.2 s', initial: '300 K' });
+    await window.fem.dispatch({ cmd: 'solve.run', step: 'warm', solver: 'cpu-direct' });
+    await window.fem.dispatch({ cmd: 'view.playTransient', step: 'warm', playing: false, sample: { kind: 'frame', index: 0 } });
+  });
+  await expect(page.getByLabel('displayed transient time')).toHaveText('0 s');
+  await legend.getByRole('button', { name: 'qx', exact: true }).click();
+  await expect(page.locator('.legend-sub')).toHaveText('warm · final endpoint 0.2 s');
+  await expect(page.getByLabel('displayed transient time')).toHaveCount(0);
+  await expect(page.locator('.legend-unit')).toHaveText('kW/m^2');
+  await legend.getByRole('button', { name: '∇Tx', exact: true }).click();
+  await expect(page.locator('.legend-sub')).toHaveText('warm · final endpoint 0.2 s');
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'view.playTransient', step: 'warm', playing: false, sample: { kind: 'frame', index: 1 } }));
+  await expect(page.getByLabel('displayed transient time')).toHaveText('0.1 s');
+  await expect(page.locator('.legend-field')).toHaveText('T');
+  await legend.getByRole('button', { name: 'qx', exact: true }).click();
+  await expect(page.locator('.legend-sub')).toHaveText('warm · final endpoint 0.2 s');
   await page.screenshot({ path: testInfo.outputPath('thermal-vectors.png') });
 });
