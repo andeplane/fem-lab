@@ -130,7 +130,9 @@ jobs:
             native850-source.json
           if-no-files-found: error
           retention-days: 7
-      - run: cargo test --workspace --exclude femlab 2>&1 | tee native850-tests.log
+      - run: |
+          set -o pipefail
+          cargo test --workspace --exclude femlab 2>&1 | tee native850-tests.log
       # This multi-minute physics study belongs to main; relevant operator/oracle PRs
       # also run it explicitly. The cheap fixed-deck/rigid replay test always runs above.
       - if: needs.changes.outputs.fv52 == 'true'
@@ -158,6 +160,7 @@ jobs:
       - name: strict GPU coverage on software Vulkan
         id: thermal850_coverage
         run: |
+          set -o pipefail
           sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers vulkan-tools
           rustup component add llvm-tools-preview
           cargo install cargo-llvm-cov --locked

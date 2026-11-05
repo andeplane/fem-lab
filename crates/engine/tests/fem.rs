@@ -13969,6 +13969,11 @@ fn affine(both: &StepResult, none: &StepResult, one: &StepResult, two: &StepResu
         }
         let got = add(&f.data, &none.fields[field].data);
         let want = add(&one.fields[field].data, &two.fields[field].data);
+        if *field == Field::Temperature || *field == Field::TemperatureGradient || *field == Field::HeatFlux {
+            let scale = want.iter().fold(0.0f64, |a, b| a.max(b.abs()));
+            let delta = got.iter().zip(&want).fold(0.0f64, |a, (b, c)| a.max((b - c).abs()));
+            eprintln!("{label} {field:?}: absolute superposition discrepancy {delta:e}, reference scale {scale:e}");
+        }
         worst = worst.max(gate(&format!("{label} {field:?}"), &got, &want, EXACT_TOL));
     }
     let got = add(&applied_totals(both), &applied_totals(none));
@@ -14140,10 +14145,15 @@ fn a_unit_flux_on_a_warms_b_as_much_as_a_unit_flux_on_b_warms_a() {
 
 /// Every field, applied total, per-Constraint reaction and history frame of two Results that
 /// must be the same numbers; returns the worst relative disagreement.
-fn same_result(a: &StepResult, b: &StepResult, label: &str) -> f64 {
+fn same_result(a: &StepResult, b: &StepResult, r: &[[f64; 3]; 3], label: &str) -> f64 {
     let mut worst = 0.0f64;
     for (field, f) in &a.fields {
-        worst = worst.max(gate(&format!("{label} {field:?}"), &b.fields[field].data, &f.data, EXACT_TOL));
+        let want = if *field == Field::TemperatureGradient || *field == Field::HeatFlux {
+            rotate_field(r, &f.data, f.comps)
+        } else {
+            f.data.clone()
+        };
+        worst = worst.max(gate(&format!("{label} {field:?}"), &b.fields[field].data, &want, EXACT_TOL));
     }
     worst = worst.max(gate(&format!("{label} applied"), &applied_totals(b), &applied_totals(a), EXACT_TOL));
     worst = worst.max(gate(&format!("{label} reactions"), &constraint_totals(b), &constraint_totals(a), EXACT_TOL));
@@ -14186,7 +14196,8 @@ fn transient_step() -> Step {
 
 /// K7: heat frame invariance. Temperature is a scalar, so the model rotated by a general `R`
 /// gives the same nodal temperatures, reaction powers and history, steady and transient, to
-/// round-off.
+/// round-off. Global temperature-gradient and conductive-flux vectors instead transform
+/// covariantly as `R v`; comparing their raw components would assert the wrong physics.
 ///
 /// Fails on a conductivity or film integral that reads a coordinate direction, on a face
 /// measure taken from one component of a normal, and on any axis-dependent capacity term.
@@ -14202,7 +14213,7 @@ fn a_rotated_heat_model_gives_the_same_temperatures() {
         let (p, q) = (heated(&mesh, &sets, &bodies, id.clone()), heated(&rotated, &rsets, &bodies, id.clone()));
         for step in [steady(), transient_step()] {
             let (a, b) = (run_step(&p, &step).expect("conducts"), run_step(&q, &step).expect("rotated conducts"));
-            worst = worst.max(same_result(&a, &b, &format!("{kind:?} {id:?} {}", step.name())));
+            worst = worst.max(same_result(&a, &b, &r, &format!("{kind:?} {id:?} {}", step.name())));
         }
     }
     eprintln!("K7 heat frame invariance: worst relative disagreement {worst:e}");
