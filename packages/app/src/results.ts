@@ -376,7 +376,7 @@ export class ResultsView {
    * A Command's Ack, after the Journal has been re-read: a solve opens the Results tab and the
    * contours (design "Solve completion"), a study keeps its report for the convergence bars.
    */
-  async onAck(ack: unknown): Promise<void> {
+  async onAck(ack: unknown, focusTab = true): Promise<void> {
     const out = (ack as Ack | undefined)?.output;
     if (out?.type === 'study' && out.report) this.store.set({ study: out.report });
     if (out?.type !== 'solve' && out?.type !== 'adapt') return;
@@ -390,7 +390,7 @@ export class ResultsView {
       this.store.set({ fieldKey: 'errorEstimate', adaptation: out.report });
     }
     const warnings = (ack as { warnings?: Warning[] }).warnings ?? [];
-    this.store.set({ tab: 'results', viewMode: 'results', assumptions: warnings });
+    this.store.set({ ...(focusTab ? { tab: 'results' as const } : {}), viewMode: 'results', assumptions: warnings });
     this.viewer.current?.setMode('results');
     // A real displacement is invisible at ×1, so a fresh Result opens exaggerated (design §5) —
     // which `load` does through `requested`, defaulting to `"auto"`.

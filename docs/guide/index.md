@@ -27,3 +27,5 @@ Follow [geometry](./geometry.md), [materials and sections](./materials-sections.
 - [Architecture and extensions](./architecture-extensions.md)
 
 The [generated API reference](./api-reference.md) lists the complete current Command and Query surface, argument schemas, defaults and host availability. These guides explain how to use that surface; a command's existence alone does not establish that every physics, element and host combination is supported.
+
+- [Python and notebooks](python.md): generated binding, optional browser cells, local/server and Jupyter setup.

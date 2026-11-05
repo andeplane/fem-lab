@@ -33,7 +33,9 @@ In finite-deformation continuum analysis, the elastic law uses a St Venant–Kir
 
 ## Establish suitability
 
-Examples, analytical Benchmarks and convergence tests establish specific known-answer cases. They do not certify every model assembled from those capabilities. Check geometry approximation, boundary assumptions, property provenance, mesh/time convergence, equilibrium and relevant failure mechanisms. See [Results and verification](./results-verification.md). Remote FEM solving, Python bindings and arbitrary user plugin loading are not current product capabilities; see [architecture](./architecture-extensions.md).
+Examples, analytical Benchmarks and convergence tests establish specific known-answer cases. They do not certify every model assembled from those capabilities. Check geometry approximation, boundary assumptions, property provenance, mesh/time convergence, equilibrium and relevant failure mechanisms. See [Results and verification](./results-verification.md). The [Python client](./python.md) can drive the single-user CPU Node WASM host locally or
+through an SSH tunnel. A paid remote FEM compute service and arbitrary user plugin loading
+are not provided; see [architecture](./architecture-extensions.md).
 
 ## Modal reference models
 

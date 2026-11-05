@@ -184,3 +184,14 @@ it('refuses a deferred file read after a concurrent model.new inside the same re
   expect(result.error).toContain('this import belongs to a previous project');
   expect(await registry.query({ query: 'query.model' })).toMatchObject({ name: 'newer project', bodies: [] });
 });
+
+
+it('frees a closed private engine only after admitted requests and refuses reuse', async () => {
+  const engine = loadEngine(here);
+  const handle = await engine.acquire();
+  await handle.dispatch({cmd:'model.new',name:'dispose'});
+  await handle.release();
+  await engine.dispose!();
+  await engine.dispose!();
+  await expect(engine.acquire()).rejects.toMatchObject({code:'session.expired'});
+});

@@ -71,7 +71,10 @@ const errorJson = (e: unknown): string =>
 async function callTool(registry: Registry, tool: string, input: unknown, allowed: Set<string>): Promise<unknown> {
   if (!allowed.has(tool)) throw new FemError('unsupported', 'This tool is not permitted in this turn', tool, 'use a tool from this turn\'s API reference');
   const args = (input ?? {}) as Record<string, unknown>;
-  if (tool === RUN_SCRIPT) return registry.dispatch({ ...args, cmd: 'script.run' });
+  if (tool === RUN_SCRIPT) {
+    if (args['language'] !== undefined && args['language'] !== 'typescript') throw new FemError('unsupported', 'Python notebooks require the person to press Run all cells', tool, 'use the TypeScript registry client for AI scripts');
+    return registry.dispatch({ ...args, cmd: 'script.run', language: 'typescript' });
+  }
   const command = commandNameFor(tool, registry);
   if (!command) throw new FemError('not-found', `there is no tool called '${tool}'`, tool, 'call describe or use one of the names in the API reference');
   if (!registry.describe(command).tool) throw new FemError('unsupported', 'This Command requires an explicit user action', command, 'use the corresponding application control');

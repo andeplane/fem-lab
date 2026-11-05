@@ -8,6 +8,7 @@ mod export;
 mod import_inp;
 mod mcp;
 mod run;
+mod serve;
 
 use std::path::PathBuf;
 
@@ -143,7 +144,7 @@ enum Cmd {
         #[arg(long)]
         check: bool,
     },
-    /// Serve the engine over the wire protocol (planned, phase S).
+    /// Serve the registry for Python/notebook clients on loopback (use an SSH tunnel remotely).
     Serve {
         #[arg(long, default_value_t = 7777)]
         port: u16,
@@ -190,12 +191,7 @@ fn main() {
             export::export(&file, out.as_deref(), ExportOptions { format, step, skip_solves, threads, cpu })
         }
         Cmd::Schema { out, check } => run::schema(out.as_deref(), check),
-        Cmd::Serve { port } => {
-            eprintln!(
-                "femlab serve (port {port}) is planned for phase S; the wire protocol is packages/registry/src/transport.ts"
-            );
-            2
-        }
+        Cmd::Serve { port } => serve::serve(port),
         Cmd::Mcp { project } => mcp::mcp(project.as_deref()),
     };
     std::process::exit(code);

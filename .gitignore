@@ -25,3 +25,11 @@ packages/registry/src/generated/script-declarations*.json
 # Producer-verified native CLI copies used by evaluation admission.
 /native/*/femlab
 /native/*/femlab.exe
+
+# Python source/wheel builds and local environments.
+__pycache__/
+*.py[cod]
+python/build/
+python/dist/
+python/*.egg-info/
+python/.venv/

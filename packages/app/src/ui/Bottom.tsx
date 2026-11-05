@@ -11,6 +11,7 @@ import type { Query } from './SchemaForm';
 import { Cmd, type Dispatch } from './cmd';
 import { commandLine } from './schema';
 
+const PythonNotebook = lazy(() => import('./PythonNotebook').then(module => module.PythonNotebook));
 const ScriptEditor = lazy(() => import('./ScriptEditor').then((module) => module.default));
 
 const argText = (cmd: Record<string, unknown>): string => {
@@ -152,10 +153,10 @@ function Journal({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
 
 function Script({ s, store, dispatch }: { s: UiState; store: Store; dispatch: Dispatch }) {
   const editing = s.scriptEditing;
-  const text = editing ? (s.scriptDraft ?? s.script) : s.script;
+  const text = s.scriptLanguage === 'python' ? (s.pythonDraft ?? '# %%\nprint(await fem.query_model())') : editing ? (s.scriptDraft ?? s.script) : s.script;
   return (
     <div class="script">
-      {editing ? (
+      {s.scriptLanguage === 'python' ? <PythonNotebook s={s} store={store} dispatch={dispatch} /> : editing ? (
         <ScriptEditor value={text} onChange={(scriptDraft) => store.set({ scriptDraft })} />
       ) : (
         <div class="script-view">
@@ -168,13 +169,18 @@ function Script({ s, store, dispatch }: { s: UiState; store: Store; dispatch: Di
         </div>
       )}
       <div class="script-rail">
+        <div class="section-label">Language</div>
+        <Cmd dispatch={dispatch} cmd="script.setLanguage" class="tbutton outline" args={{ language: s.scriptLanguage === 'python' ? 'typescript' : 'python' }} disabled={s.scriptRunning}>
+          {s.scriptLanguage === 'python' ? 'Switch to TypeScript' : 'Python notebook'}
+        </Cmd>
         <div class="section-label">Run</div>
-        <Cmd dispatch={dispatch} cmd="script.run" class="apply" args={{ code: text }} disabled={s.scriptRunning}>
-          ▶ Run script
+        <Cmd dispatch={dispatch} cmd="script.run" class="apply" args={{ code: text, language: s.scriptLanguage }} disabled={s.scriptRunning}>
+          ▶ Run {s.scriptLanguage === 'python' ? 'all cells' : 'script'}
         </Cmd>
         <Cmd dispatch={dispatch} cmd="script.stop" class="tbutton outline" disabled={!s.scriptRunning}>
           ■ Stop
         </Cmd>
+        {s.scriptLanguage === 'typescript' ? <>
         <Cmd
           dispatch={dispatch}
           cmd="script.setEditing"
@@ -186,6 +192,7 @@ function Script({ s, store, dispatch }: { s: UiState; store: Store; dispatch: Di
         <Cmd dispatch={dispatch} cmd="script.setSource" class="tbutton outline" args={{ code: editing ? `\n${s.script}` : s.script, ...(editing ? { append: true } : {}) }}>
           insert current Journal
         </Cmd>
+        </> : null}
         <div class="script-out mono">
           {s.scriptOut.map((line, i) => (
             <div key={i} class={line.startsWith('✕') ? 'bad' : ''}>
@@ -193,7 +200,7 @@ function Script({ s, store, dispatch }: { s: UiState; store: Store; dispatch: Di
             </div>
           ))}
         </div>
-        <div class="rule-note">The Journal, typed. Edit a line, run it again, and the Model replays from there.</div>
+        <div class="rule-note">{s.scriptLanguage === 'python' ? 'Source and plots are retained with the project. Run all cells explicitly after reopening.' : 'The Journal, typed. Edit a line, run it again, and the Model replays from there.'}</div>
       </div>
     </div>
   );
@@ -224,7 +231,7 @@ export function Bottom({ s, store, dispatch, query }: { s: UiState; store: Store
   const counts: Record<Tab, string> = {
     journal: String(s.journal?.entries.length ?? 0),
     history: String(s.autosaves.length),
-    script: 'ts',
+    script: s.scriptLanguage === 'python' ? 'py' : 'ts',
     results: s.result ? (s.result.stale ? 'stale' : String(s.result.extremes.length)) : '—',
     checks: String((s.model?.warnings.length ?? 0) || 'ok'),
     console: String(s.console.length),

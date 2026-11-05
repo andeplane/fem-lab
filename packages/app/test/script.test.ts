@@ -130,6 +130,7 @@ describe('ScriptHost', () => {
     const worker = FakeWorker.last!;
     await expect(worker.call('dispatch', { cmd: 'x' })).rejects.toThrow('not-found: no such Set');
     await expect(worker.call('dispatch', { cmd: 'script.run', code: 'return 1' }, 2)).rejects.toThrow('nested script.run');
+    await expect(worker.call('dispatch', { cmd: 'script.run', language: 'python', code: 'from js import fetch' }, 3)).rejects.toThrow('nested script.run');
     worker.finish({ console: [] });
     await run;
   });

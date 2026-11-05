@@ -21,10 +21,14 @@ This internal architecture is not yet an end-user plugin marketplace. `plugin.lo
 | Current | Planned or not provided by the current product |
 |---|---|
 | Local browser geometry, mesh, solves, viewer and exports | A paid remote FEM engine/compute endpoint |
-| Native Rust CLI and Node MCP tools from a checkout | A working `femlab serve` remote server |
-| Optional hosted account-based AI, credits and subscriptions | A shipped Python binding/notebook environment |
+| Native Rust CLI, Node MCP and loopback `femlab serve` from a checkout | Native-GPU or public multiuser FEM server hosting |
+| Generated Python client and owner-run browser notebooks | AI-authored Python execution (Py.5) |
+| Optional hosted account-based AI, credits and subscriptions | — |
 | Browser-local projects, portable Model files and share links | Account-synchronized cloud project storage or multiuser live editing |
 | Built-in extension interfaces and implemented physics | General runtime user-plugin loading |
+
+The [Python guide](./python.md) explains installation, SSH use, publication status,
+notebook persistence and the privilege difference between owner Python and AI TypeScript.
 
 The repository contains research/plans as well as executable code. A planned phase, schema placeholder or intended architecture is not evidence that a user-facing capability works today. This guide describes implemented surfaces and calls out those boundaries.
 

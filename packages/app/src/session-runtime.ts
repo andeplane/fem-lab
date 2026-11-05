@@ -3,7 +3,8 @@ import type { SessionEngine, PreparedEngine } from './generated/wasm/femlab_engi
 import { scientificJson, MAX_MODEL_FILE_BYTES, modelFileEncoder, type ModelFilePublicationPolicy, type BufferSpec, type DocumentSnapshot, type ExecutionContext, type Progress, type Stamp } from '@femlab/registry';
 import type { SessionOptions, SessionRequest, SessionResponse } from './session-protocol';
 import { toStructured } from './engine-error';
-const json = JSON.stringify;
+// Every checked wire request preserves finite IEEE scientific values, including signed zero.
+const json = scientificJson;
 class Publication { constructor(readonly stamp: Stamp, readonly value: unknown) {} }
 interface Bulk { value: unknown; buffers: BufferSpec[]; raw: ArrayBuffer[] }
 function bulk(value: Record<string, unknown>, fields: [string, BufferSpec['dtype']][]): Bulk {

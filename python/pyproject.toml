@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=77.0.3"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "femlab"
+version = "0.1.0"
+description = "Generated FEM Lab Command/Query client for Python and notebooks"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+readme = "README.md"
+authors = [{name = "Anders Hafreager"}]
+
+[project.urls]
+Repository = "https://github.com/andeplane/fem-lab"
+Documentation = "https://andeplane.github.io/fem-lab/docs/python/"
+
+[project.optional-dependencies]
+notebook = ["numpy>=1.24", "matplotlib>=3.7", "jupyterlab>=4"]
+
+[tool.setuptools]
+packages = ["femlab"]
+
+[tool.setuptools.package-data]
+femlab = ["py.typed"]

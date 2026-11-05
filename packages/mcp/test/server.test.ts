@@ -172,6 +172,13 @@ describe('calling a tool', () => {
     expect(engine.seen).toEqual([]);
   });
 
+  it('refuses owner-only Python through both MCP tool and generic registry routes',async()=>{
+    const engine=fakeEngine();const registry=createRegistry({engine});
+    await expect(callTool(registry,RUN_SCRIPT,{code:'from js import fetch',language:'python'})).rejects.toMatchObject({code:'schema'});
+    await expect(registry.dispatch({cmd:'script.run',code:'from js import fetch',language:'python'})).rejects.toMatchObject({code:'schema'});
+    expect(engine.seen).toEqual([]);
+  });
+
   it('runs TypeScript through run_script, with the console and the errors the person wrote', async () => {
     const engine = fakeEngine();
     const registry = createRegistry({ engine });

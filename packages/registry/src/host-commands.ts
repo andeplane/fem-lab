@@ -195,7 +195,8 @@ export interface HostContext {
   };
   script: {
     validate(code: string, timeoutMs?: number): Promise<ScriptValidation>;
-    run(code: string, timeoutMs?: number): Promise<ScriptResult>;
+    run(code: string, timeoutMs?: number, language?: 'typescript' | 'python'): Promise<ScriptResult>;
+    setLanguage?(language: 'typescript' | 'python'): void;
     stop(): void;
     setSource(code: string, append?: boolean): void;
     setEditing(editing: boolean): void;
@@ -478,10 +479,16 @@ export const HOST_COMMANDS: HostDef[] = [
   def('panel.toggle', 'sessionView', 'Open, close or flip a panel by id, including the command palette, examples gallery, report, project folder and export dialog. The signed-in profile popover is `profile`; it closes other dialogs when opened and closes when another dialog opens, preventing competing modal focus traps. Account settings are `account`. Model-tree groups are `tree.geometry` through `tree.plugins`; row menus are `tree.menu.<kind>:<name>`.', z.object({ panel: z.string(), open: z.boolean().optional() }), ({ panel, open }, ctx) => ctx.panels.toggle(panel, open)),
   def('panel.resize', 'workspace', 'Resize one shell panel in CSS pixels. `panel` is `tree`, `properties`, `bottom` or `assistant`; the size is constrained to preserve a usable viewer and is view state, never a Journal entry. During a drag, issue exactly one final Command with the ending size; use the keyboard for accessible step changes.', z.object({ panel: PanelTarget, size: z.number().int().min(120).max(640) }), ({ panel, size }, ctx) => ctx.panels.resize(panel, size)),
   def('report.print', 'sessionView', 'Open Chromium\'s print dialog for the rendered calculation note. Choose Save as PDF there for a paginated PDF of the current report.', none, (_, ctx) => ctx.report.print()),
-  def('script.run', 'producer', 'Validate TypeScript against the generated `fem` types (fem.d.ts) with a separate 10000 ms validation deadline, then run it in the script Worker with a default and maximum 30000 ms execution deadline and a 64000-character source limit. Returns `{ result, console, error?, files? }`; files contains only completed host delivery receipts, including those before a later script error. Commands it issues enter the Journal like any other.', z.object({ code: z.string().max(64000), timeoutMs: z.number().finite().positive().max(30000).optional() }), async ({ code, timeoutMs }, ctx) => {
-    const validation = await ctx.script.validate(code);
-    if (!validation.ok) return { result: null, console: [], error: 'script.validation: correct validation diagnostics before running', diagnostics: validation.diagnostics } satisfies ScriptResult;
-    return ctx.script.run(code, timeoutMs);
+  def('script.run', 'producer', 'Run TypeScript (default) or an explicitly selected Python analysis notebook in a disposable Worker. Python loads Pyodide/numpy lazily from its pinned distribution, with a separate 120000 ms startup deadline. Both languages have a maximum 30000 ms execution deadline and 64000 source characters. Python is a client of the same engine registry; ordinary expanded Commands enter the Journal. Python source and plots are retained in portable project files, never required for engine replay. TypeScript is type-checked against the generated fem.d.ts API with a separate 10000 ms validation deadline before execution.', z.object({ code: z.string().max(64000), language: z.enum(['typescript', 'python']).optional(), timeoutMs: z.number().finite().positive().max(30000).optional() }), async ({ code, timeoutMs, language }, ctx) => {
+    if (language !== 'python') {
+      const validation = await ctx.script.validate(code);
+      if (!validation.ok) return { result: null, console: [], error: 'script.validation: correct validation diagnostics before running', diagnostics: validation.diagnostics } satisfies ScriptResult;
+    }
+    return ctx.script.run(code, timeoutMs, language);
+  }, false),
+  def('script.setLanguage', 'sessionView', 'Select TypeScript or Python in the Script panel. Does not execute code or change the Model.', z.object({ language: z.enum(['typescript', 'python']) }), ({ language }, ctx) => {
+    if (!ctx.script.setLanguage) throw new FemError('unsupported', 'this host has no notebook editor', 'script.setLanguage');
+    return ctx.script.setLanguage(language);
   }, false),
   def('script.stop', 'control', 'Terminate the script that is currently running in the script Worker. Commands it already dispatched stay in the Journal; use journal.undo to take them back.', none, (_, ctx) => ctx.script.stop()),
   def('script.setSource', 'sessionView', 'Put text into the Script editor, replacing its content or appending to it. Use it to hand a script to the person to review and edit rather than running it directly.', z.object({ code: z.string(), append: z.boolean().optional() }), ({ code, append }, ctx) => ctx.script.setSource(code, append)),

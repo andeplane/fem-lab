@@ -365,6 +365,16 @@ it('keeps the single Result metadata fresh without pushing a new solve into comp
   expect(viewer.current.setSurface).toHaveBeenCalled(); expect(transport.field).toHaveBeenCalled();
 });
 
+it('updates notebook solve contours without taking the selected bottom tab',async()=>{
+  const {store,viewer,results}=harness();store.set({tab:'script'});
+  await results.onAck({output:{type:'solve'}},false);
+  expect(store.state.tab).toBe('script');expect(store.state.viewMode).toBe('results');
+  expect(viewer.current.setSurface).toHaveBeenCalled();expect(viewer.current.setMode).toHaveBeenCalledWith('results');
+  store.set({tab:'console'});await results.onAck({output:{type:'solve'}},false);
+  expect(store.state.tab).toBe('console');
+  await results.onAck({output:{type:'solve'}});expect(store.state.tab).toBe('results');
+});
+
 describe('ResultsView', () => {
   it('pairs a dimmed stale Result with its retained mesh and restores current previews on mode changes', async () => {
     const { store, viewer, results, transport } = harness({ ...RESULT, stale: true });

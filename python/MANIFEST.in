@@ -1,0 +1,3 @@
+include LICENSE README.md
+recursive-include femlab *.py py.typed
+recursive-include examples *.py *.ipynb

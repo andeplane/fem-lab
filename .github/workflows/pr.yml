@@ -27,12 +27,28 @@ jobs:
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
       fv52: ${{ steps.filter.outputs.fv52 }}
+      python: ${{ steps.filter.outputs.python }}
+      serve: ${{ steps.filter.outputs.serve }}
     steps:
       # Lists the PR's files through the API; no checkout.
       - uses: dorny/paths-filter@v3
         id: filter
         with:
           filters: |
+            serve:
+              - 'crates/femlab/src/serve.rs'
+              - 'crates/femlab/src/main.rs'
+              - 'crates/femlab/tests/cli.rs'
+              - '.github/workflows/pr.yml'
+            python:
+              - 'python/**'
+              - 'packages/server/**'
+              - 'packages/app/src/python*'
+              - 'packages/app/src/ui/PythonNotebook.tsx'
+              - 'packages/app/e2e/python-notebook.spec.ts'
+              - 'tools/python-codegen.mjs'
+              - 'tools/test-python-host.mjs'
+              - '.github/workflows/pr.yml'
             rust:
               - 'crates/**'
               - 'vendor/**'
@@ -129,6 +145,8 @@ jobs:
           path: |
             fv52-benchmark.json
             fv52-study.log
+      - if: needs.changes.outputs.serve == 'true'
+        run: cargo test -p femlab --test cli serve_launches_the_node_registry_host_and_propagates_its_status
 
   # A cache hit (any PR that does not touch Rust) takes seconds; a miss builds the same optimized
   # bundle main builds.
@@ -155,7 +173,7 @@ jobs:
   # Four parallel slices of what `web` runs on main, each about a minute of work.
   web:
     name: web (${{ matrix.slice }})
-    needs: wasm
+    needs: [wasm, changes]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -183,6 +201,15 @@ jobs:
               node tools/test-service-build.mjs
               npm run test -w packages/mcp
               npm run build -w packages/mcp
+              npm run test -w packages/server
+              npm run build -w packages/server
+              if [ "${{ needs.changes.outputs.python }}" = "true" ]; then
+                python3 -m venv /tmp/femlab-python
+                /tmp/femlab-python/bin/pip wheel ./python --no-deps --wheel-dir /tmp/femlab-wheels
+                /tmp/femlab-python/bin/pip install /tmp/femlab-wheels/femlab-*.whl numpy matplotlib ipython
+                /tmp/femlab-python/bin/python -m unittest discover -s python/tests
+                FEMLAB_PYTHON=/tmp/femlab-python/bin/python node tools/test-python-host.mjs
+              fi
           - slice: app tests
             run: npm run test -w packages/app
           - slice: app build
@@ -215,6 +242,18 @@ jobs:
       - run: chmod +x tools/project-io/*/femlab-project-io
       - run: npm ci
       - run: ${{ matrix.run }}
+      - if: matrix.slice == 'app build' && needs.changes.outputs.python == 'true'
+        run: npx playwright install --with-deps chromium
+        working-directory: packages/app
+      - if: matrix.slice == 'app build' && needs.changes.outputs.python == 'true'
+        run: npm run e2e -w packages/app -- python-notebook.spec.ts --project=cpu
+        env:
+          PW_PORT: 4310
+      - if: always() && matrix.slice == 'app build' && needs.changes.outputs.python == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-browser-evidence
+          path: packages/app/test-results
 
   # The one required check. Skipped Rust jobs (no Rust change) pass; failed or cancelled ones fail.
   gate:
