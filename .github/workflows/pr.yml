@@ -130,6 +130,13 @@ jobs:
             native850-source.json
           if-no-files-found: error
           retention-days: 7
+      - name: verify independent thermal invariant controls
+        run: |
+          set -o pipefail
+          cargo test -p femlab-engine --test fem every_linear_procedure_superposes_its_loads -- --exact --nocapture 2>&1 | tee native850-invariants.log
+          cargo test -p femlab-engine --test fem a_rotated_heat_model_gives_the_same_temperatures -- --exact --nocapture 2>&1 | tee -a native850-invariants.log
+          cargo test -p femlab-engine --test fem thermal_vector_covariance_and_temperature_datum_follow_the_affine_closed_form -- --exact --nocapture 2>&1 | tee -a native850-invariants.log
+          python3 -c "from pathlib import Path; assert Path('native850-invariants.log').read_text().count('test result: ok. 1 passed; 0 failed; 0 ignored;') == 3"
       - run: |
           set -o pipefail
           cargo test --workspace --exclude femlab 2>&1 | tee native850-tests.log
@@ -137,6 +144,7 @@ jobs:
       # also run it explicitly. The cheap fixed-deck/rigid replay test always runs above.
       - if: needs.changes.outputs.fv52 == 'true'
         run: |
+          set -o pipefail
           cargo test -p femlab-engine --test registry modal_fv52::fv52_enlarged_spectra_obey_square_symmetry_and_nested_space_min_max -- --ignored --exact --nocapture | tee fv52-study.log
           python3 -c "from pathlib import Path; assert 'test result: ok. 1 passed; 0 failed; 0 ignored;' in Path('fv52-study.log').read_text()"
       # D3's independently published fixed deck also has to pass actual CLI dispatch.
@@ -180,6 +188,7 @@ jobs:
           path: |
             native850-source.json
             native850-tests.log
+            native850-invariants.log
             gpu850-coverage.log
             gpu850-coverage.json
           if-no-files-found: error

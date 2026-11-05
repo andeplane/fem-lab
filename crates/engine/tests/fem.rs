@@ -13960,20 +13960,21 @@ fn frames(r: &StepResult) -> Vec<f64> {
 
 /// `both + none == one + two` on every field that is linear in the loads, on the applied
 /// totals, the per-Constraint reactions and every retained history frame; returns the worst
-/// relative disagreement. Von Mises and principal stresses are not linear and are skipped.
-fn affine(both: &StepResult, none: &StepResult, one: &StepResult, two: &StepResult, label: &str) -> f64 {
+/// relative disagreement. Von Mises and principal stresses are not linear. The new thermal
+/// derivatives have a separate independent edge oracle below: their conditioning inherits
+/// errors in the solved temperatures, which this original primary-field gate still checks.
+fn affine_primary(both: &StepResult, none: &StepResult, one: &StepResult, two: &StepResult, label: &str) -> f64 {
     let mut worst = 0.0f64;
     for (field, f) in &both.fields {
-        if *field == Field::VonMises || *field == Field::Principal {
+        if *field == Field::VonMises
+            || *field == Field::Principal
+            || *field == Field::TemperatureGradient
+            || *field == Field::HeatFlux
+        {
             continue;
         }
         let got = add(&f.data, &none.fields[field].data);
         let want = add(&one.fields[field].data, &two.fields[field].data);
-        if *field == Field::Temperature || *field == Field::TemperatureGradient || *field == Field::HeatFlux {
-            let scale = want.iter().fold(0.0f64, |a, b| a.max(b.abs()));
-            let delta = got.iter().zip(&want).fold(0.0f64, |a, (b, c)| a.max((b - c).abs()));
-            eprintln!("{label} {field:?}: absolute superposition discrepancy {delta:e}, reference scale {scale:e}");
-        }
         worst = worst.max(gate(&format!("{label} {field:?}"), &got, &want, EXACT_TOL));
     }
     let got = add(&applied_totals(both), &applied_totals(none));
@@ -13998,18 +13999,131 @@ fn superpose(p: &mut Problem<'_>, step: &Step, loads: &[Load], split: usize, lab
         run_step(p, step).expect("every load group solves")
     };
     let (both, none, one, two) = (run(loads), run(&[]), run(&loads[..split]), run(&loads[split..]));
-    affine(&both, &none, &one, &two, label)
+    affine_primary(&both, &none, &one, &two, label)
+}
+
+/// Independent Q1 cube derivative at each corner: the temperature difference along the
+/// parallel edge divided by its signed length. No quadrature, shape kernel or recovery code
+/// is called. K2's h=1/4 m makes the division exact; ||D||∞=2/h=8 m⁻¹.
+fn cube_edge_gradient(mesh: &Mesh, t: &[f64]) -> Vec<f64> {
+    let mut out = Vec::new();
+    for elem in 0..mesh.n_elems() {
+        let nodes = mesh.elem_nodes(elem as u32);
+        assert_eq!(nodes.len(), 8);
+        for &node in nodes {
+            let x = mesh.node(node);
+            for c in 0..3 {
+                let partner = nodes
+                    .iter()
+                    .copied()
+                    .find(|&other| {
+                        let y = mesh.node(other);
+                        y[c] != x[c] && (0..3).all(|j| j == c || x[j] == y[j])
+                    })
+                    .expect("each Q1 cube corner has one parallel edge");
+                let length = mesh.node(partner)[c] - x[c];
+                assert_eq!(length.abs(), 0.25);
+                out.push((t[partner as usize] - t[node as usize]) / length);
+            }
+        }
+    }
+    out
+}
+
+/// Check both the independent recovery accuracy and a linear combination of real solves.
+/// The combinations are K2's (+both,+none,-one,-two), and the physical offset relation
+/// (+T300-300K,-T0). Centering the nodal temperatures removes the DC from the summation;
+/// it does not modify any solve or its returned field.
+fn thermal_vector_combination(mesh: &Mesh, cases: &[(&StepResult, f64, f64)], label: &str) -> f64 {
+    let centered: Vec<Vec<f64>> =
+        cases.iter().map(|(r, _, datum)| temperature_of(r).iter().map(|t| t - datum).collect()).collect();
+    let references: Vec<Vec<f64>> = centered.iter().map(|t| cube_edge_gradient(mesh, t)).collect();
+    let mut combined_t = vec![0.0; mesh.n_nodes()];
+    for ((_, sign, _), t) in cases.iter().zip(&centered) {
+        for (a, b) in combined_t.iter_mut().zip(t) {
+            *a += sign * b;
+        }
+    }
+    let expected_gradient = cube_edge_gradient(mesh, &combined_t);
+    let n = cases.len() as f64;
+    // Standard floating-point summation bound gamma_n=n*eps/(1-n*eps). The extra
+    // four operations cover the final subtraction, edge subtraction and conductivity
+    // multiplication; this is an operation-count bound, not fitted to a failed ratio.
+    let gamma = (n + 4.0) * f64::EPSILON / (1.0 - (n + 4.0) * f64::EPSILON);
+    let t_sum = centered.iter().map(|t| t.iter().fold(0.0f64, |a, b| a.max(b.abs()))).sum::<f64>();
+    let mut worst = 0.0f64;
+    for (field, factor) in [(Field::TemperatureGradient, 1.0), (Field::HeatFlux, -45.0)] {
+        let mut actual = vec![0.0; expected_gradient.len()];
+        let mut accuracy_bound = 0.0;
+        let mut field_sum = 0.0;
+        for (i, ((result, sign, _), reference)) in cases.iter().zip(&references).enumerate() {
+            let want: Vec<f64> = reference.iter().map(|v| factor * v).collect();
+            let got = &result.fields[&field].data;
+            worst =
+                worst.max(gate(&format!("{label} run {i} {field:?} independent cube edges"), got, &want, EXACT_TOL));
+            // Sum the actual independently gated recovery errors, not four full tolerance
+            // allowances. Only the explicit operation-count term covers arithmetic rounding.
+            accuracy_bound += got.iter().zip(&want).fold(0.0f64, |a, (b, c)| a.max((b - c).abs()));
+            field_sum += got.iter().fold(0.0f64, |a, b| a.max(b.abs()));
+            for (a, b) in actual.iter_mut().zip(got) {
+                *a += sign * b;
+            }
+        }
+        let expected: Vec<f64> = expected_gradient.iter().map(|v| factor * v).collect();
+        let discrepancy = actual.iter().zip(&expected).fold(0.0f64, |a, (b, c)| a.max((b - c).abs()));
+        let rounding_bound = gamma * (field_sum + factor.abs() * 8.0 * t_sum);
+        let allowance = accuracy_bound + rounding_bound;
+        assert!(
+            discrepancy <= allowance,
+            "{label} {field:?}: independent defect mismatch {discrepancy:e} exceeds {allowance:e}"
+        );
+        let inherited = expected.iter().fold(0.0f64, |a, b| a.max(b.abs()));
+        eprintln!("{label} {field:?}: inherited solved-T defect {inherited:e}, recovery defect mismatch {discrepancy:e}, allowance {allowance:e}");
+        if field == Field::TemperatureGradient && cases.len() == 4 && cases[0].2 == 300.0 {
+            let (at, delta) = actual
+                .iter()
+                .enumerate()
+                .max_by(|(_, a), (_, b)| a.abs().total_cmp(&b.abs()))
+                .expect("nonempty cube field");
+            let elem = at / 24;
+            let nodes = mesh.elem_nodes(elem as u32);
+            let temperatures: Vec<Vec<f64>> = cases
+                .iter()
+                .map(|(r, _, _)| {
+                    let t = temperature_of(r);
+                    nodes.iter().map(|&n| t[n as usize]).collect()
+                })
+                .collect();
+            eprintln!("{label}: raw affine gradient defect {delta:e} at element {elem}, local node {}, component {}; four nodal-temperature arrays {temperatures:?}", (at / 3) % 8, at % 3);
+        }
+    }
+    worst
 }
 
 /// The same four runs of a heat superposition check: `base` is in every run (a convection
 /// film is part of the operator, so it cannot be a load group), `groups` are the two groups.
-fn superpose_heat(p: &mut Problem<'_>, step: &Step, base: &[HeatLoad], groups: [&[HeatLoad]; 2], label: &str) -> f64 {
+fn superpose_heat(
+    p: &mut Problem<'_>,
+    step: &Step,
+    base: &[HeatLoad],
+    groups: [&[HeatLoad]; 2],
+    datum: f64,
+    label: &str,
+) -> ([StepResult; 4], f64) {
+    assert_eq!(p.materials[0].k, [45.0; 3], "the independent Fourier oracle's conductivity");
+    assert_eq!(p.materials[0].axes, None);
     let mut run = |extra: &[&[HeatLoad]]| {
         p.heat_loads = base.iter().chain(extra.iter().flat_map(|g| g.iter())).cloned().collect();
         run_step(p, step).expect("every heat load group conducts")
     };
-    let (both, none, one, two) = (run(&groups), run(&[]), run(&groups[..1]), run(&groups[1..]));
-    affine(&both, &none, &one, &two, label)
+    let results = [run(&groups), run(&[]), run(&groups[..1]), run(&groups[1..])];
+    let [both, none, one, two] = &results;
+    let worst = affine_primary(both, none, one, two, label).max(thermal_vector_combination(
+        p.mesh,
+        &[(both, 1.0, datum), (none, 1.0, datum), (one, -1.0, datum), (two, -1.0, datum)],
+        label,
+    ));
+    (results, worst)
 }
 
 /// K2: superposition. `u(L₁ ∪ L₂) + u(∅) = u(L₁) + u(L₂)` for every linear procedure — the
@@ -14081,7 +14195,40 @@ fn every_linear_procedure_superposes_its_loads() {
         control: NonlinearControl::default(),
     };
     for step in [steady(), transient] {
-        worst = worst.max(superpose_heat(&mut h, &step, &base, [&flux, &source], step.name()));
+        let (warm, error) = superpose_heat(&mut h, &step, &base, [&flux, &source], 300.0, step.name());
+        worst = worst.max(error);
+        let mut zero = heat_problem(
+            &mesh,
+            &sets,
+            &bodies,
+            Idealisation::Solid3d,
+            conductor(45.0, 7800.0, 460.0),
+            vec![hold("cold", "xmin", 0.0)],
+            vec![],
+        );
+        let zero_base = [HeatLoad::Convection { faces: "xmax".into(), h: 50.0, t_inf: 50.0 }];
+        let mut zero_step = step.clone();
+        if let Step::HeatTransient { initial, .. } = &mut zero_step {
+            *initial = 0.0;
+        }
+        let (zero, error) = superpose_heat(
+            &mut zero,
+            &zero_step,
+            &zero_base,
+            [&flux, &source],
+            0.0,
+            &format!("{} zero datum", step.name()),
+        );
+        worst = worst.max(error);
+        for (i, (warm, zero)) in warm.iter().zip(&zero).enumerate() {
+            let want: Vec<f64> = temperature_of(zero).iter().map(|t| t + 300.0).collect();
+            worst = worst.max(gate("physical 300 K temperature offset", &temperature_of(warm), &want, EXACT_TOL));
+            worst = worst.max(thermal_vector_combination(
+                &mesh,
+                &[(warm, 1.0, 300.0), (zero, -1.0, 0.0)],
+                &format!("{} 300 K offset run {i}", step.name()),
+            ));
+        }
     }
     eprintln!("K2 superposition: worst relative disagreement {worst:e}");
 }
@@ -14145,15 +14292,13 @@ fn a_unit_flux_on_a_warms_b_as_much_as_a_unit_flux_on_b_warms_a() {
 
 /// Every field, applied total, per-Constraint reaction and history frame of two Results that
 /// must be the same numbers; returns the worst relative disagreement.
-fn same_result(a: &StepResult, b: &StepResult, r: &[[f64; 3]; 3], label: &str) -> f64 {
+fn same_primary_heat_result(a: &StepResult, b: &StepResult, label: &str) -> f64 {
     let mut worst = 0.0f64;
     for (field, f) in &a.fields {
-        let want = if *field == Field::TemperatureGradient || *field == Field::HeatFlux {
-            rotate_field(r, &f.data, f.comps)
-        } else {
-            f.data.clone()
-        };
-        worst = worst.max(gate(&format!("{label} {field:?}"), &b.fields[field].data, &want, EXACT_TOL));
+        if *field == Field::TemperatureGradient || *field == Field::HeatFlux {
+            continue; // The independent, analytically controlled vector case follows K7 below.
+        }
+        worst = worst.max(gate(&format!("{label} {field:?}"), &b.fields[field].data, &f.data, EXACT_TOL));
     }
     worst = worst.max(gate(&format!("{label} applied"), &applied_totals(b), &applied_totals(a), EXACT_TOL));
     worst = worst.max(gate(&format!("{label} reactions"), &constraint_totals(b), &constraint_totals(a), EXACT_TOL));
@@ -14196,8 +14341,9 @@ fn transient_step() -> Step {
 
 /// K7: heat frame invariance. Temperature is a scalar, so the model rotated by a general `R`
 /// gives the same nodal temperatures, reaction powers and history, steady and transient, to
-/// round-off. Global temperature-gradient and conductive-flux vectors instead transform
-/// covariantly as `R v`; comparing their raw components would assert the wrong physics.
+/// round-off. This preserves the original free-interior 300 K scalar/history/power cases;
+/// vector covariance has the independent affine control below, avoiding amplification of
+/// tiny solved-temperature differences by differentiation of the short-time solution.
 ///
 /// Fails on a conductivity or film integral that reads a coordinate direction, on a face
 /// measure taken from one component of a normal, and on any axis-dependent capacity term.
@@ -14213,10 +14359,105 @@ fn a_rotated_heat_model_gives_the_same_temperatures() {
         let (p, q) = (heated(&mesh, &sets, &bodies, id.clone()), heated(&rotated, &rsets, &bodies, id.clone()));
         for step in [steady(), transient_step()] {
             let (a, b) = (run_step(&p, &step).expect("conducts"), run_step(&q, &step).expect("rotated conducts"));
-            worst = worst.max(same_result(&a, &b, &r, &format!("{kind:?} {id:?} {}", step.name())));
+            worst = worst.max(same_primary_heat_result(&a, &b, &format!("{kind:?} {id:?} {}", step.name())));
         }
     }
     eprintln!("K7 heat frame invariance: worst relative disagreement {worst:e}");
+}
+
+/// Global vectors transform as Rg and Rq, while changing the absolute temperature datum
+/// leaves them unchanged. The affine patch has an independent literal gradient and flux.
+/// Steady solves prescribe only boundary nodes and retain free interior unknowns. Transient
+/// controls prescribe every node because this procedure's initial temperature is a scalar;
+/// the original K7 and K2 transient cases above retain their actual free-interior solves.
+#[test]
+fn thermal_vector_covariance_and_temperature_datum_follow_the_affine_closed_form() {
+    for (kind, id) in heat_cases() {
+        let mesh = block(kind, [4, 2, 2], [1.0, 0.5, 0.5], 0.0);
+        let r = if kind.dim() == 3 { rotation(0.3, -0.7, 1.1) } else { rotation(0.0, 0.0, 0.9) };
+        let rotated = rotate_mesh(&mesh, &r);
+        let bodies = one_body();
+        let gradient = [2.0, 3.0, if kind.dim() == 3 { 4.0 } else { 0.0 }];
+        for (step, transient) in [(steady(), false), (transient_step(), true)] {
+            let mut datum_results = Vec::new();
+            for origin in [300.0, 0.0] {
+                let mut sets = sets_of(&mesh);
+                let mut held = Vec::new();
+                let expected_t: Vec<f64> = (0..mesh.n_nodes())
+                    .map(|n| {
+                        let x = mesh.node(n as u32);
+                        origin + gradient.iter().zip(x).map(|(a, b)| a * b).sum::<f64>()
+                    })
+                    .collect();
+                for (n, &value) in expected_t.iter().enumerate() {
+                    let x = mesh.node(n as u32);
+                    let boundary = (0..kind.dim()).any(|c| x[c] == 0.0 || x[c] == [1.0, 0.5, 0.5][c]);
+                    if transient || boundary {
+                        let name = format!("affine-{n}");
+                        sets.insert(
+                            name.clone(),
+                            ResolvedSet { kind: SetKind::Node, nodes: vec![n as u32], elems: vec![], faces: vec![] },
+                        );
+                        held.push(hold(&name, &name, value));
+                    }
+                }
+                if transient {
+                    assert_eq!(held.len(), mesh.n_nodes());
+                } else {
+                    assert!(mesh.n_nodes() > held.len(), "{kind:?}: real free interior nodes");
+                }
+                let p = heat_problem(
+                    &mesh,
+                    &sets,
+                    &bodies,
+                    id.clone(),
+                    conductor(45.0, 7800.0, 460.0),
+                    held.clone(),
+                    vec![],
+                );
+                // Matching node ids keep T_i=origin+g·x_i under rotation, so the new global
+                // gradient is Rg; evaluating g against rotated x would change the problem.
+                let q =
+                    heat_problem(&rotated, &sets, &bodies, id.clone(), conductor(45.0, 7800.0, 460.0), held, vec![]);
+                let mut controlled_step = step.clone();
+                if let Step::HeatTransient { initial, .. } = &mut controlled_step {
+                    *initial = origin;
+                }
+                let (a, b) = (
+                    run_step(&p, &controlled_step).expect("affine patch solves"),
+                    run_step(&q, &controlled_step).expect("rotated affine patch solves"),
+                );
+                for (result, g) in [(&a, gradient), (&b, rot_vec(&r, gradient))] {
+                    gate("affine nodal temperatures", &temperature_of(result), &expected_t, EXACT_TOL);
+                    for (field, factor) in [(Field::TemperatureGradient, 1.0), (Field::HeatFlux, -45.0)] {
+                        let got = &result.fields[&field];
+                        let entities = mesh.n_elems() * kind.n_nodes();
+                        assert!(entities > 0);
+                        assert_eq!(got.per, Per::ElemNode);
+                        assert_eq!(got.comps, 3);
+                        assert_eq!(got.data.len(), 3 * entities);
+                        let want: Vec<f64> = (0..3 * entities).map(|i| factor * g[i % 3]).collect();
+                        gate(&format!("{kind:?} {} {origin} K {field:?}", step.name()), &got.data, &want, EXACT_TOL);
+                    }
+                }
+                datum_results.push((a, b));
+            }
+            for (warm, zero) in [(&datum_results[0].0, &datum_results[1].0), (&datum_results[0].1, &datum_results[1].1)]
+            {
+                let delta: Vec<f64> =
+                    temperature_of(warm).iter().zip(temperature_of(zero)).map(|(a, b)| a - b).collect();
+                gate("affine physical temperature datum difference", &delta, &vec![300.0; mesh.n_nodes()], EXACT_TOL);
+                for field in [Field::TemperatureGradient, Field::HeatFlux] {
+                    gate(
+                        "affine vector datum invariance",
+                        &warm.fields[&field].data,
+                        &zero.fields[&field].data,
+                        EXACT_TOL,
+                    );
+                }
+            }
+        }
+    }
 }
 
 /// A Model built by dispatching `cmds` (JSON, one Command each) into a fresh Engine.
