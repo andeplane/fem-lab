@@ -28,7 +28,11 @@ HHT/Newmark increment. `cpu-direct` factors the fixed effective matrix once and 
 it; `cpu-pcg` and `gpu-pcg` solve each right-hand side through the same f64 residual
 refinement used for static analysis. An explicit GPU request without a device fails.
 Solver choice changes algebraic accuracy and cost, not the consistent mass, damping,
-time grid or retained-history convention. For small models, direct factorization usually
+time grid or retained-history convention. Before solving, implicit dynamics checks finite
+assembled inertia at every free displacement and rotation, including an unloaded model.
+A missing density is an error when it leaves a free DOF massless. A fully held massless
+region contributes no unknowns and is allowed. This check applies to every solver;
+zero load does not make an inertia-free dynamic model valid. For small models, direct factorization usually
 avoids the setup and dispatch overhead of iterative solves.
 
 Use `query.cost` first for large models. Its memory accounting is scoped, not a guarantee of fit. A failed iterative solve can justify trying `cpu-direct` on a model small enough for it, after checking constraints and conditioning. Finer meshes can increase direct-solver memory sharply.

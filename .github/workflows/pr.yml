@@ -107,6 +107,34 @@ jobs:
           shared-key: workspace
           save-if: false
       - run: cargo test --workspace --exclude femlab
+      # Temporary #846 runtime proof; removed after receipts before merge.
+      - name: implicit mass admission on software Vulkan
+        run: |
+          sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers
+          ICD=$(find /usr/share/vulkan/icd.d -name '*lvp*' -print -quit)
+          test -n "$ICD"
+          export VK_ICD_FILENAMES="$ICD"
+          export LVP_POISON_MEMORY=true
+          cargo test -p femlab-engine --features gpu-tests --test fem implicit_mass_admission_is_rhs_independent_with_an_actual_gpu -- --exact --nocapture 2>&1 | tee gpu846.log
+          grep -E '846 actual adapter:.*llvmpipe.*Vulkan' gpu846.log
+      - name: mass guard negative control
+        run: |
+          cp crates/engine/src/procedure/implicit.rs /tmp/implicit846.rs
+          python3 - <<'PYCODE'
+          from pathlib import Path
+          p=Path('crates/engine/src/procedure/implicit.rs')
+          s=p.read_text()
+          assert s.count('    validate_assembled_mass(&red0.k_ff)?;') == 1
+          p.write_text(s.replace('    validate_assembled_mass(&red0.k_ff)?;', '    // Intentionally omit the admission guard for the negative control.'))
+          PYCODE
+          set +e
+          cargo test -p femlab-engine --test fem implicit_rejects_zero_and_partial_free_mass_for_zero_and_nonzero_loads -- --exact --nocapture > negative846.log 2>&1
+          RESULT=$?
+          set -e
+          cp /tmp/implicit846.rs crates/engine/src/procedure/implicit.rs
+          test "$RESULT" = 101
+          grep 'every free DOF needs inertia' negative846.log
+          git diff --exit-code -- crates/engine/src/procedure/implicit.rs
       # This multi-minute physics study belongs to main; relevant operator/oracle PRs
       # also run it explicitly. The cheap fixed-deck/rigid replay test always runs above.
       - if: needs.changes.outputs.fv52 == 'true'

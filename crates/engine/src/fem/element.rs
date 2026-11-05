@@ -121,6 +121,10 @@ pub trait Element: Send + Sync {
     /// well-posedness check reports.
     fn stiffness(&self, c: &ElementCtx<'_>, k: &mut [f64]) -> Result<f64, Error>;
     /// Consistent `∫ ρ Nᵀ N dV`, or its HRZ-scaled diagonal when `lumped`.
+    /// A nonzero consistent mass must be positive definite on the active local DOFs;
+    /// zero density gives zero mass. Built-ins use full-rank positive-weight displacement
+    /// Gram integrals, including section rotations/drill inertia. Implicit admission relies
+    /// on this contract; a new reduced/rank-deficient mass needs a different admission proof.
     fn mass(&self, c: &ElementCtx<'_>, m: &mut [f64], lumped: bool) -> Result<(), Error>;
     /// `∫ Nᵀ f dV` for a body force per unit volume evaluated at the Gauss points (gravity is `ρ g`).
     fn body_load(&self, c: &ElementCtx<'_>, f: &dyn Fn([f64; 3]) -> [f64; 3], out: &mut [f64]) -> Result<(), Error>;
