@@ -107,16 +107,29 @@ jobs:
           shared-key: workspace
           save-if: false
       - run: cargo test --workspace --exclude femlab
-      # Temporary #846 runtime proof; removed after receipts before merge.
-      - name: implicit mass admission on software Vulkan
+      # Temporary #846 strict runtime proof; removed after receipts before merge.
+      - name: strict GPU coverage on software Vulkan
         run: |
           sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers
+          rustup component add llvm-tools-preview
+          cargo install cargo-llvm-cov --locked
           ICD=$(find /usr/share/vulkan/icd.d -name '*lvp*' -print -quit)
           test -n "$ICD"
           export VK_ICD_FILENAMES="$ICD"
           export LVP_POISON_MEMORY=true
-          cargo test -p femlab-engine --features gpu-tests --test fem implicit_mass_admission_is_rhs_independent_with_an_actual_gpu -- --exact --nocapture 2>&1 | tee gpu846.log
-          grep -E '846 actual adapter:.*llvmpipe.*Vulkan' gpu846.log
+          CARGO_PROFILE_TEST_OPT_LEVEL=0 cargo llvm-cov -p femlab-engine -p femlab-geometry --features gpu-tests --fail-under-lines 100 --fail-under-functions 100 --fail-under-regions 100 2>&1 | tee strict846.log
+      - name: export strict GPU coverage detail
+        if: always()
+        run: CARGO_PROFILE_TEST_OPT_LEVEL=0 cargo llvm-cov report -p femlab-engine -p femlab-geometry --json --output-path gpu846-coverage.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gpu846-coverage
+          path: |
+            strict846.log
+            gpu846-coverage.json
+          if-no-files-found: error
+          retention-days: 7
       - name: mass guard negative control
         run: |
           cp crates/engine/src/procedure/implicit.rs /tmp/implicit846.rs

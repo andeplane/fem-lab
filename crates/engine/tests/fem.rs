@@ -18318,3 +18318,40 @@ fn implicit_mass_admission_is_rhs_independent_with_an_actual_gpu() {
         }
     }
 }
+
+/// #846/#396: a host must be able to cancel after an actual increment and before recovery.
+/// Solver setup/refinement add progress events, so target the operation instead of an ordinal.
+#[test]
+fn implicit_cancellation_at_time_stepping_and_recovery_returns_a_structured_error() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([1.0, 0.1, 0.1]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let mut p = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::Full,
+        vec![fix("root", "xmin", [true; 3], 0.0)],
+    );
+    p.loads = vec![Load::Traction { faces: "xmax".into(), t: [1e6, 0.0, 0.0] }];
+    for backend in [Solver::CpuDirect, Solver::CpuPcg] {
+        let mut step = implicit_step(1e-5, 2e-5, 0.0, (0.0, 0.0), None, 1);
+        let Step::Implicit { solver, .. } = &mut step else { panic!() };
+        solver.solver = backend;
+        for (phase, message) in [("solve", "stepping in time"), ("post", "recovering fields")] {
+            let mut observed = false;
+            let mut observer = |progress: Progress| {
+                let cancel = progress.phase == phase && progress.message == message;
+                observed |= cancel;
+                !cancel
+            };
+            let error = pollster::block_on(procedure::run(&p, &step, &Pool::new(2), None, None, &mut observer))
+                .expect_err("the host cancels an actual operation phase");
+            assert!(observed, "the {phase} operation was reached");
+            assert_eq!(error, Error::cancelled());
+        }
+        let completed = run_step(&p, &step).expect("a fresh run after cancellation still completes");
+        assert_eq!(completed.history.unwrap().times.len(), 3);
+    }
+}
