@@ -1103,7 +1103,7 @@ fn tangent_and_force_of(
     if mean_dilatation(kind, c) {
         return Err(Error::new(ErrorCode::Unsupported, "mean-dilatation Hex8/Quad4 supports small strain only")
             .at("formulation")
-            .suggest("step.add with procedure static, or mesh.set with formulation full"));
+            .suggest("step.add with procedure static or formulation full"));
     }
     // Incompatible modes are off under finite strain: the enhanced field is derived for
     // infinitesimal strain and hourglasses in compression, so this integrates fully whatever
