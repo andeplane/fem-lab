@@ -94,6 +94,7 @@ jobs:
   # their own); they run on merge with the rest of the workspace.
   rust-test:
     name: rust tests
+    timeout-minutes: 90
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
@@ -106,7 +107,30 @@ jobs:
         with:
           shared-key: workspace
           save-if: false
-      - run: cargo test --workspace --exclude femlab
+      # Temporary #850 bootstrap: authoritative metadata before any WASM bundle is built.
+      - name: emit authoritative native schema
+        env:
+          THERMAL850_PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          cargo run --locked -p femlab -- schema --out engine.schema.json
+          python3 - <<'PY850'
+          import hashlib,json,os,pathlib,subprocess
+          files=subprocess.check_output(['git','ls-files','crates','vendor','Cargo.toml','Cargo.lock','rust-toolchain.toml','.github/workflows/gpu.yml'],text=True).splitlines()
+          proof={'head':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),
+            'pullRequestHead':os.environ['THERMAL850_PR_HEAD'],
+            'schemaSha256':hashlib.sha256(pathlib.Path('engine.schema.json').read_bytes()).hexdigest(),
+            'inputs':{f:hashlib.sha256(pathlib.Path(f).read_bytes()).hexdigest() for f in sorted(files)}}
+          pathlib.Path('native850-source.json').write_text(json.dumps(proof,indent=2)+'\n')
+          PY850
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native850-schema
+          path: |
+            engine.schema.json
+            native850-source.json
+          if-no-files-found: error
+          retention-days: 7
+      - run: cargo test --workspace --exclude femlab 2>&1 | tee native850-tests.log
       # This multi-minute physics study belongs to main; relevant operator/oracle PRs
       # also run it explicitly. The cheap fixed-deck/rigid replay test always runs above.
       - if: needs.changes.outputs.fv52 == 'true'
@@ -130,9 +154,43 @@ jobs:
             fv52-benchmark.json
             fv52-study.log
 
+      # Temporary #850 proof uses the unchanged canonical 100% lavapipe thresholds.
+      - name: strict GPU coverage on software Vulkan
+        id: thermal850_coverage
+        run: |
+          sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers vulkan-tools
+          rustup component add llvm-tools-preview
+          cargo install cargo-llvm-cov --locked
+          THERMAL850_ICD=$(find /usr/share/vulkan/icd.d -name '*lvp*' -print -quit)
+          test -n "$THERMAL850_ICD"
+          export VK_ICD_FILENAMES="$THERMAL850_ICD"
+          export LVP_POISON_MEMORY=true
+          vulkaninfo --summary || true
+          CARGO_PROFILE_TEST_OPT_LEVEL=0 cargo llvm-cov -p femlab-engine -p femlab-geometry --features gpu-tests --fail-under-lines 100 --fail-under-functions 100 --fail-under-regions 100 2>&1 | tee gpu850-coverage.log
+      - name: export strict GPU coverage detail
+        if: always() && (steps.thermal850_coverage.outcome == 'success' || steps.thermal850_coverage.outcome == 'failure')
+        run: CARGO_PROFILE_TEST_OPT_LEVEL=0 cargo llvm-cov report -p femlab-engine -p femlab-geometry --json --output-path gpu850-coverage.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native850-validation
+          path: |
+            native850-source.json
+            native850-tests.log
+            gpu850-coverage.log
+            gpu850-coverage.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: intentionally block bootstrap merge
+        if: always()
+        run: |
+          echo 'The #850 schema/coverage bootstrap is intentionally non-mergeable. Restore canonical pr.yml and generate all references before the final normal gate.'
+          exit 1
+
   # A cache hit (any PR that does not touch Rust) takes seconds; a miss builds the same optimized
   # bundle main builds.
   wasm:
+    if: ${{ false }} # Temporary #850 bootstrap; no stale-schema WASM/web build.
     name: wasm bundle
     runs-on: ubuntu-latest
     steps:
@@ -154,6 +212,7 @@ jobs:
 
   # Four parallel slices of what `web` runs on main, each about a minute of work.
   web:
+    if: ${{ false }} # Temporary #850 bootstrap; no stale-schema WASM/web build.
     name: web (${{ matrix.slice }})
     needs: wasm
     runs-on: ubuntu-latest
