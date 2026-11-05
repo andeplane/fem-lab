@@ -16,6 +16,7 @@ test('@cpu optional Python notebook solves, transfers f64 numpy, plots and prese
   await expect(page.locator('meta[http-equiv="Content-Security-Policy"]')).toHaveAttribute('content',/script-src 'self' 'wasm-unsafe-eval'/);
   await page.locator('.tab',{hasText:'script'}).click();
   await page.getByRole('button',{name:'Python notebook',exact:true}).click();
+  await expect(page.locator('.python-notebook')).toContainText('Run only trusted Python');
   const code = `# %%
 import numpy as np
 import matplotlib.pyplot as plt
@@ -64,11 +65,13 @@ print('E1 Python exact-field checks passed')`;
   const journal=await page.evaluate(()=>window.fem.registry.query({query:'query.journal'}));
   expect(JSON.stringify(journal)).toContain('solve.run');
   expect(JSON.stringify(journal)).not.toContain('import numpy');
+  await page.getByLabel('Python cell 2').fill(await page.getByLabel('Python cell 2').inputValue() + '\n# unexecuted draft retained by Save');
   const saved=await page.evaluate(()=>window.fem.registry.dispatch({cmd:'project.save'})) as {id:string};
   await page.reload(); await page.waitForFunction(()=>!!window.fem,undefined,{timeout:60000});
   await page.evaluate(id=>window.fem.registry.dispatch({cmd:'project.open',id}),saved.id);
   await page.locator('.tab',{hasText:'script'}).click();
   await expect(page.getByLabel('Python cell 2')).toHaveValue(/np.float64/);
+  await expect(page.getByLabel('Python cell 2')).toHaveValue(/unexecuted draft retained by Save/);
   await expect(page.getByAltText('Python matplotlib output 1')).toBeVisible();
 });
 

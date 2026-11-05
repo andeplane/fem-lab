@@ -8,6 +8,7 @@ it('edits numbered cells independently, retains drafts and renders plot outputs'
   const store=new Store();const dispatch=vi.fn(async()=>undefined);
   render(<PythonNotebook s={store.state} store={store} dispatch={dispatch}/>,host);
   expect(host.querySelectorAll('textarea')).toHaveLength(1);
+  expect(host.textContent).toContain('Run only trusted Python: this Worker can access JavaScript and the network.');
   const first=host.querySelector('textarea')!;first.value='print(42)';first.dispatchEvent(new Event('input',{bubbles:true}));
   expect(store.state.pythonDraft).toContain('print(42)');
   store.set({pythonDraft:'# %%\nprint(1)\n# %%\nprint(2)',pythonPlots:['iVBORw0KGgo=']});

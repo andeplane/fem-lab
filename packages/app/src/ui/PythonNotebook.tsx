@@ -9,6 +9,7 @@ export function PythonNotebook({ s, store, dispatch }: { s: UiState; store: Stor
   };
   return <div class="python-notebook" style="overflow:auto;flex:1;padding:12px">
     <p>Python · numpy · matplotlib. Run all cells in order. Only engine Commands enter the Journal; source and plots stay in project files.</p>
+    <p>Run only trusted Python: this Worker can access JavaScript and the network. <a href="docs/python/">Python guide</a></p>
     {cells.map((cell, index) => <label key={index} style="display:block">Cell {index + 1}
       <textarea aria-label={`Python cell ${index + 1}`} data-cmd="script.setSource" value={cell} rows={Math.max(4, cell.split('\n').length)} style="width:100%;font-family:monospace" onInput={event => update(index, event.currentTarget.value)} disabled={s.scriptRunning} />
     </label>)}

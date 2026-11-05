@@ -46,7 +46,9 @@ export its complete project bundle to carry these files. A plain `femlab/1` Mode
 the engine Journal, not notebook source/plots. Reopening a complete project restores source
 and plots; press Run all cells to re-execute deliberately. Opening never executes Python.
 The Journal records only expanded engine Commands, so native and browser replay do not need
-Python installed. Python cells are not rolled back if a later cell fails.
+Python installed. Python cells are not rolled back if a later cell fails. Save also retains the current
+unexecuted Python draft as `notebook-draft.py`; open restores the latest draft while keeping
+plots from the last execution. Saving or opening never executes a draft.
 
 ## CPython and Jupyter
 

@@ -192,10 +192,12 @@ class Bundle {
       this.inventory.replace(restored.artifact.files);
       const notebook = restored.artifact.files.filter(file => file.role === 'input' && file.name === 'notebook.py').at(-1);
       const notebookIndex = notebook ? restored.artifact.files.indexOf(notebook) : -1;
+      const draft = restored.artifact.files.filter(file => file.role === 'input' && file.name === 'notebook-draft.py').at(-1);
+      const notebookSource = draft && restored.artifact.files.indexOf(draft) > notebookIndex ? draft : notebook;
       const output = restored.artifact.files.slice(notebookIndex + 1).find(file => file.role === 'output' && file.name === 'notebook-output.txt');
       if (output) this.store.set({ scriptOut: new TextDecoder().decode(output.data).split('\n') });
       const plots = restored.artifact.files.slice(notebookIndex + 1).filter(file => file.role === 'output' && /^python-plot-/.test(file.name));
-      if (notebook) this.store.set({ scriptLanguage: 'python', scriptEditing: true, pythonDraft: new TextDecoder().decode(notebook.data), pythonPlots: plots.map(file => { let text = ''; for (const byte of file.data) text += String.fromCharCode(byte); return btoa(text); }) });
+      if (notebookSource) this.store.set({ scriptLanguage: 'python', scriptEditing: true, pythonDraft: new TextDecoder().decode(notebookSource.data), pythonPlots: plots.map(file => { let text = ''; for (const byte of file.data) text += String.fromCharCode(byte); return btoa(text); }) });
     }
     if(sourceInputs.has(source!))this.inventory.replace([...this.inventory.snapshot(),...sourceInputs.get(source!)!]);
     this.uiTransport = await this.transport.fork();
@@ -343,6 +345,14 @@ class Bundle {
     // Engine results and the Journal come from one stamped read; never join different revisions.
     const exported=await this.transport.exportProject();
     const snapshot=await this.transport.snapshot();if(snapshot.stamp.stateVersion!==exported.stamp.stateVersion)throw new FemError('session.conflict','project changed while taking its complete snapshot','project','project.save');job=binding.capture(snapshot,Date.now());
+    const draft = this.store.state.pythonDraft;
+    if (typeof draft === 'string') {
+      const previous = this.inventory.snapshot().filter(file => file.role === 'input' && ['notebook.py', 'notebook-draft.py'].includes(file.name)).at(-1);
+      if (!previous || new TextDecoder().decode(previous.data) !== draft) {
+        this.inventory.capture('input', 'notebook-draft.py', 'text/x-python', draft);
+        this.publishFiles();
+      }
+    }
     const files=this.inventory.snapshot();
     job={...job,...await this.archiveSnapshot(exported.project,job.meta,files)};
     const captured=job;
