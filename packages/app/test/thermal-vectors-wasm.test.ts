@@ -28,7 +28,7 @@ it('solves Fourier vectors at three refinements, preserves SI/display units and 
         { cmd: 'mesh.set', mesher: { kind: 'lattice', size: { nx, ny: 1, nz: 1 } }, order },
         { cmd: 'constraint.temperature', name: 'cold', on: 'bar.xmin', value: '300 K' },
         { cmd: 'constraint.temperature', name: 'hot', on: 'bar.xmax', value: '320 K' },
-        { cmd: 'step.add', name: 'heat', procedure: 'heat-steady', constraints: ['cold', 'hot'], loads: [] },
+        { cmd: 'step.add', name: 'heat', procedure: 'heat-steady', constraints: ['cold', 'hot'], loads: [], output: ['temperature', 'temperatureGradient', 'heatFlux'] },
         { cmd: 'solve.run', step: 'heat', solver: 'cpu-direct' },
       ]) await engine.dispatch(JSON.stringify(command));
       const journal = JSON.parse(engine.export_file()).journal.entries as { hashAfter: string }[];

@@ -13,7 +13,7 @@ test('@cpu inspects recovered thermal vectors with signed components and intensi
     await window.fem.dispatch({ cmd: 'constraint.temperature', name: 'cold', on: 'bar.xmin', value: '300 K' });
     await window.fem.dispatch({ cmd: 'constraint.temperature', name: 'hot', on: 'bar.xmax', value: '320 K' });
     await window.fem.dispatch({ cmd: 'mesh.set', mesher: { kind: 'lattice', size: { nx: 4, ny: 1, nz: 1 } } });
-    await window.fem.dispatch({ cmd: 'step.add', name: 'conduct', procedure: 'heat-steady', constraints: ['cold', 'hot'], loads: [] });
+    await window.fem.dispatch({ cmd: 'step.add', name: 'conduct', procedure: 'heat-steady', constraints: ['cold', 'hot'], loads: [], output: ['temperature', 'temperatureGradient', 'heatFlux'] });
     await window.fem.dispatch({ cmd: 'solve.run', step: 'conduct', solver: 'cpu-direct' });
     const gradient = await window.fem.query.field({ step: 'conduct', field: 'temperatureGradient' });
     const flux = await window.fem.query.field({ step: 'conduct', field: 'heatFlux' });
