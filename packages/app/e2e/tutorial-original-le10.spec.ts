@@ -36,6 +36,9 @@ test('@cpu completes original line-supported LE10 visibly and distinguishes the 
         const button = document.querySelector<HTMLButtonElement>('.tutorial-btn.primary');
         return button !== null && !button.disabled && button.textContent !== 'Doing it…';
       }, undefined, { timeout: remaining() });
+      if (step.doIt.cmd === 'mesh.set') {
+        await expect(page.locator('.tree .summary', { hasText: 'imported · hex20 · full' })).toBeVisible();
+      }
       if (step.doIt.cmd === 'solve.run') {
         await page.waitForFunction(async () => {
           try {
@@ -78,7 +81,8 @@ test('@cpu completes original line-supported LE10 visibly and distinguishes the 
 
 test('@cpu renders the original LE10 guide on the public documentation route', async ({ page }) => {
   await page.goto('docs/examples-tutorials/#le10-original-mid-plane-line-support');
-  await expect(page.locator('#le10-original-mid-plane-line-support')).toHaveText('LE10: original mid-plane line support');
+  // Static headings include a visible '#' permalink before their authored title.
+  await expect(page.locator('#le10-original-mid-plane-line-support')).toContainText('LE10: original mid-plane line support');
   await expect(page.locator('main')).toContainText('uz is held only on its z = 0.3 m mid-plane line');
   await expect(page.locator('main a[href="https://www.simscale.com/docs/validation-cases/thick-plate-under-pressure/"]')).toBeVisible();
 });

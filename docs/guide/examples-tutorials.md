@@ -67,7 +67,7 @@ This passes the stated tip-only check under those assumptions, with about 2.59 K
 The closing step explains corresponding Abaqus steady-state heat-transfer, Ansys Steady-State Thermal and Nastran heat-transfer terminology. These describe comparable workflows; the tutorial does not establish equivalent solver implementations or certify a design.
 
 
-## Three verification walkthroughs
+## Verification walkthroughs
 
 These tutorials run locally without an account or hosted AI. Start each in a separate Model: **Do it for me** executes ordinary registered Commands, including the solve. The final **Fit** action only changes the camera; inspect the Result and then choose **Next**. The closing theory explains corresponding Abaqus, Ansys and Nastran terminology and links the original problem source.
 

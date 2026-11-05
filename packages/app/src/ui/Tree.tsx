@@ -239,7 +239,7 @@ export function treeGroups(s: UiState, shapes: { kind: string; hint: string }[] 
     ),
     group(
       'Mesh',
-      'One global size and an element order. Counts and cost are known before you solve.',
+      'Generated meshes use size and order; imported meshes retain their authored element kinds and connectivity.',
       { what: 'mesh', cmd: 'mesh.set' },
       m?.meshSettings
         ? [
@@ -254,7 +254,9 @@ export function treeGroups(s: UiState, shapes: { kind: string; hint: string }[] 
               glyph: '▦',
               glyphClass: 'glyph low',
               name: 'mesh',
-              summary: m.meshSettings.simplices
+              summary: m.meshSettings.mesher.kind === 'imported'
+                ? `imported · ${[...new Set(m.meshSettings.mesher.elements.map(element => element.kind))].sort().join(' + ')} · ${m.meshSettings.formulation}`
+                : m.meshSettings.simplices
                 ? `${m.meshSettings.mesher.kind} · ${m.idealisation === 'solid3d' ? `Tet ${m.meshSettings.order === 1 ? 4 : 10}` : `Tri ${m.meshSettings.order === 1 ? 3 : 6}`} · order ${m.meshSettings.order}`
                 : `${m.meshSettings.mesher.kind} · order ${m.meshSettings.order} · ${m.meshSettings.formulation}`,
               select: {},

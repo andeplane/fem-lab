@@ -25,7 +25,7 @@ console.log(await fem.query.mesh());
 
 Generated order 1 is linear; order 2 is quadratic and often improves bending and curved-boundary accuracy. Default incompatible modes improve generated hex8/quad4 bending. Full-integration linear hexes/quads can lock in bending. Mean-dilatation Hex8 is a separate small-strain formulation, including Abaqus C3D8 import; it is incompatible with finite-deformation analysis.
 
-`simplices: true` splits generated hexes/quads into tetrahedra/triangles. It does not turn a stair-stepped lattice boundary into a freely fitted curved mesh. Choose `tet` for that geometry task. Imported sources use their authored interpolation: their `order: 1` setting means preserve the source, including any quadratic connectivity.
+`simplices: true` splits generated hexes/quads into tetrahedra/triangles. It does not turn a stair-stepped lattice boundary into a freely fitted curved mesh. Choose `tet` for that geometry task. Imported sources use their authored interpolation: their `order: 1` setting means preserve the source, including any quadratic connectivity. The Model tree therefore reports the actual source element kinds (for example `imported · hex20 · full`, or mixed kinds), rather than presenting that preserve-source setting as a linear element order.
 
 ## Check before increasing size
 

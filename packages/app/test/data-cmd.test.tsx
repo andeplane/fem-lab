@@ -866,3 +866,26 @@ it('names simplex element families and preserves the mesh editor arguments', () 
     expect(row.args).toEqual(current.meshSettings);
   }
 });
+
+it('names actual quadratic and mixed imported kinds rather than the preserve-source order setting', () => {
+  for (const [kinds, label] of [
+    [['hex20', 'hex20'], 'hex20'],
+    [['tet4', 'hex20', 'tet4'], 'hex20 + tet4'],
+  ] as const) {
+    const store = new Store();
+    const current = model();
+    current.meshSettings = {
+      mesher: {
+        kind: 'imported', body: 'plate', nodes: [],
+        elements: kinds.map((kind, index) => ({ label: index + 1, kind, nodes: [] })),
+      },
+      order: 1, formulation: 'full',
+    };
+    store.set({ model: current });
+    const row = treeGroups(store.state).find(group => group.label === 'Mesh')!.items[0]!;
+    expect(row.summary).toBe(`imported · ${label} · full`);
+    expect(row.summary).not.toContain('order 1');
+    expect(row.cmd).toBe('form.edit');
+    expect(row.args).toEqual({ kind: 'body', name: 'plate' });
+  }
+});
