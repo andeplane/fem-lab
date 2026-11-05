@@ -21,6 +21,7 @@ const passes = (value, check) => typeof check.expect === 'number'
 try {
   for (const name of ['c3-bbar-axisymmetric-quad4', 'c3-bbar-plane-strain-quad4']) {
     const original = JSON.parse(readFileSync(path.join(root, 'crates/femlab/benches/cases', `${name}.json`), 'utf8'));
+    assert.equal(original.checks.length, 4, 'three independent physical probes and a freshness check are required');
     let meshBbar;
     for (const mode of ['mesh-bbar', 'full-control', 'step-bbar']) {
       const input = structuredClone(original);
