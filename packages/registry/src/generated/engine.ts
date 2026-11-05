@@ -1970,10 +1970,7 @@ export type Command =
        */
       on: string;
       /**
-       * Total components, split equally over the Set, each with torque units. In linear
-       * procedures these are physical right-handed moments about global x/y/z. In
-       * corotational static-nonlinear beams they are generalized forces conjugate to
-       * total global rotation-vector coordinates; arbitrary physical 3D torque is unsupported.
+       * Total right-handed moment about global x/y/z, split equally over the Set, each component with torque units.
        *
        * @minItems 3
        * @maxItems 3
@@ -6460,10 +6457,7 @@ export type QueryResult_Command =
        */
       on: string;
       /**
-       * Total components, split equally over the Set, each with torque units. In linear
-       * procedures these are physical right-handed moments about global x/y/z. In
-       * corotational static-nonlinear beams they are generalized forces conjugate to
-       * total global rotation-vector coordinates; arbitrary physical 3D torque is unsupported.
+       * Total right-handed moment about global x/y/z, split equally over the Set, each component with torque units.
        *
        * @minItems 3
        * @maxItems 3
@@ -9319,10 +9313,7 @@ export type ModelFile_Command =
        */
       on: string;
       /**
-       * Total components, split equally over the Set, each with torque units. In linear
-       * procedures these are physical right-handed moments about global x/y/z. In
-       * corotational static-nonlinear beams they are generalized forces conjugate to
-       * total global rotation-vector coordinates; arbitrary physical 3D torque is unsupported.
+       * Total right-handed moment about global x/y/z, split equally over the Set, each component with torque units.
        *
        * @minItems 3
        * @maxItems 3
@@ -12272,10 +12263,7 @@ export type PortableProject_Command =
        */
       on: string;
       /**
-       * Total components, split equally over the Set, each with torque units. In linear
-       * procedures these are physical right-handed moments about global x/y/z. In
-       * corotational static-nonlinear beams they are generalized forces conjugate to
-       * total global rotation-vector coordinates; arbitrary physical 3D torque is unsupported.
+       * Total right-handed moment about global x/y/z, split equally over the Set, each component with torque units.
        *
        * @minItems 3
        * @maxItems 3
@@ -15249,10 +15237,7 @@ export type ReadReply_Command =
        */
       on: string;
       /**
-       * Total components, split equally over the Set, each with torque units. In linear
-       * procedures these are physical right-handed moments about global x/y/z. In
-       * corotational static-nonlinear beams they are generalized forces conjugate to
-       * total global rotation-vector coordinates; arbitrary physical 3D torque is unsupported.
+       * Total right-handed moment about global x/y/z, split equally over the Set, each component with torque units.
        *
        * @minItems 3
        * @maxItems 3
@@ -17988,10 +17973,7 @@ export type DocumentSnapshot_Command =
        */
       on: string;
       /**
-       * Total components, split equally over the Set, each with torque units. In linear
-       * procedures these are physical right-handed moments about global x/y/z. In
-       * corotational static-nonlinear beams they are generalized forces conjugate to
-       * total global rotation-vector coordinates; arbitrary physical 3D torque is unsupported.
+       * Total right-handed moment about global x/y/z, split equally over the Set, each component with torque units.
        *
        * @minItems 3
        * @maxItems 3
