@@ -22,12 +22,15 @@ type Mesh = {
 };
 const here = path.dirname(fileURLToPath(import.meta.url));
 
-/** One fine tutorial replay also owns the independent three-mesh physical check. */
+/** Replay the bounded visible mesh inside the unchanged three-mesh physical study. */
 export async function checkOriginalLe10(Engine: new (threads: number) => Engine, commands: TutorialCommand[]) {
+  const visible = commands.find(c => c.cmd === 'mesh.set') as unknown as Mesh;
+  const middle = JSON.parse(readFileSync(path.join(here, 'fixtures/le10-original/4x4x4.mesh.json'), 'utf8')) as Mesh;
+  expect(visible).toEqual(middle);
   const errors: number[] = [];
   for (const [n, layers] of [[4, 2], [4, 4], [6, 6]] as const) {
     const size = `${n}x${n}x${layers}`;
-    const mesh = (n === 6 ? commands.find(c => c.cmd === 'mesh.set') : JSON.parse(readFileSync(path.join(here, 'fixtures', 'le10-original', `${size}.mesh.json`), 'utf8'))) as Mesh;
+    const mesh = n === 4 && layers === 4 ? visible : JSON.parse(readFileSync(path.join(here, 'fixtures', 'le10-original', `${size}.mesh.json`), 'utf8')) as Mesh;
     const deck = readFileSync(path.resolve(here, '../../../tools/fixtures/le10-original', `${size}.inp`), 'utf8');
     expect(createHash('sha256').update(deck).digest('hex')).toBe(mesh.mesher.provenance.sha256);
     expect(mesh.mesher.elements).toHaveLength(n * n * layers);
@@ -81,6 +84,7 @@ export async function checkOriginalLe10(Engine: new (threads: number) => Engine,
     } finally { engine.free(); }
   }
   expect(errors[1]).toBeLessThan(errors[0]!);
+  expect(errors[1]).toBeLessThan(0.02); // The actual visible mesh meets the same reference gate.
   expect(errors[2]).toBeLessThan(errors[1]!);
   expect(errors[2]).toBeLessThan(0.02);
 }

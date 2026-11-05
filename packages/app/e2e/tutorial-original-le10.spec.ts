@@ -60,6 +60,11 @@ test('@cpu completes original line-supported LE10 visibly and distinguishes the 
   const commands = tutorial.steps.flatMap(s => s.doIt && !s.doIt.cmd.startsWith('view.') ? [s.doIt] : []);
   const journal = await page.evaluate(() => window.fem.query.journal());
   expect(journal.entries.map(e => e.cmd)).toEqual(commands);
+  const model = await page.evaluate(() => window.fem.query.model());
+  if (model.meshSettings?.mesher.kind !== 'imported') throw new Error('The guide must retain authored Hex20 connectivity');
+  expect(model.meshSettings.mesher.nodes).toHaveLength(425);
+  expect(model.meshSettings.mesher.elements).toHaveLength(64);
+  expect(model.meshSettings.mesher.nodeSets?.['outer-midline']).toHaveLength(9);
   const stress = await page.evaluate(() => window.fem.query.probe({ step: 'static', field: 'stress', component: 1, at: ['2 m', '0 m', '0.6 m'] }));
   expect(stress.value.unit).toBe('MPa');
   expect(Math.abs(stress.value.value - -5.38) / 5.38).toBeLessThan(0.02);

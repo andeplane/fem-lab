@@ -792,7 +792,7 @@
       "url": "https://www.simscale.com/docs/validation-cases/thick-plate-under-pressure/",
       "status_written": "can-do",
       "needs": [],
-      "note": "Original mid-plane-line LE10 is reproduced by le10-original (#86), with exact imported support Sets and three refinements against −5.38 MPa. The separately labelled nafems-le10-plate / le10-full-face variant retains ESRD’s −5.25 MPa reference. No missing #432 capability is required."
+      "note": "Original mid-plane-line LE10 is reproduced by le10-original (#86), with exact imported support Sets, a bounded 64-cell visible mesh and three refinements through 216 cells against −5.38 MPa. The separately labelled nafems-le10-plate / le10-full-face variant retains ESRD’s −5.25 MPa reference. No missing #432 capability is required."
     },
     {
       "id": 73,
