@@ -5061,6 +5061,48 @@ fn thermal_result_vectors_keep_tilted_anisotropic_flux_and_axisymmetric_basis() 
     }
 }
 
+/// An actual 3D solve with affine temperatures on the whole boundary and free interior
+/// nodes: div(q)=0 for the constant tilted tensor, including its nonzero z flux.
+#[test]
+fn thermal_result_vectors_solve_the_tilted_anisotropic_patch() {
+    let s = std::f64::consts::FRAC_1_SQRT_2;
+    for n in [2, 3, 4] {
+        let mesh = Structured { kind: ElementKind::Hex20, n: [n, n, n] }.box_([1.0; 3]);
+        let mut sets = sets_of(&mesh);
+        let bodies = one_body();
+        for origin in [0.0, 273.15] {
+            let mut held = Vec::new();
+            for node in 0..mesh.n_nodes() as u32 {
+                let x = mesh.node(node);
+                if x.iter().any(|v| *v == 0.0 || *v == 1.0) {
+                    let name = format!("boundary{node}");
+                    sets.insert(
+                        name.clone(),
+                        ResolvedSet { kind: SetKind::Node, nodes: vec![node], faces: Vec::new(), elems: Vec::new() },
+                    );
+                    held.push(hold(&name, &name, origin + 2.0 * x[0] + 3.0 * x[1]));
+                }
+            }
+            assert!(held.len() < mesh.n_nodes(), "the interior temperature is solved");
+            let mut material = conductor(1.0, 1.0, 1.0);
+            material.k = [2.0, 3.0, 10.0];
+            material.axes = Some([[s, 0.0, -s], [0.0, 1.0, 0.0], [s, 0.0, s]]);
+            let p = heat_problem(&mesh, &sets, &bodies, Idealisation::Solid3d, material, held, Vec::new());
+            let result = run_step(&p, &steady()).expect("the rotated anisotropic patch solves");
+            for (field, expected) in
+                [(Field::TemperatureGradient, [2.0, 3.0, 0.0]), (Field::HeatFlux, [-12.0, -9.0, -8.0])]
+            {
+                for row in result.fields[&field].data.chunks_exact(3) {
+                    for (actual, want) in row.iter().zip(expected) {
+                        assert!((actual - want).abs() < 1e-7, "n={n}, origin={origin}, {field:?}: {row:?}");
+                    }
+                }
+            }
+            assert!(result.reactions.iter().map(|(_, q)| q[0]).sum::<f64>().abs() < 1e-9);
+        }
+    }
+}
+
 /// T=300+10x(1-x), k=5, source=100 has qx=100x-50 and equal removal
 /// at both ends. Linear elements converge in gradient L2 at order one; quadratic
 /// elements recover this polynomial exactly. Neither oracle calls the heat kernel.
