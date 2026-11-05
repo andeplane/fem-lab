@@ -61,7 +61,10 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('operator alarms on real Postgre
   const codes = async () => (await operationalSnapshot(reader,now)).alarms.map(alarm=>alarm.code);
   function cli(args=['--operations'],extra: NodeJS.ProcessEnv={}) {
     const url = new URL(process.env.TEST_DATABASE_URL!);
-    const result = spawnSync(process.execPath,['dist/main.mjs',...args],{
+    // Fail on SDK module loading, not merely constructor side effects. The read-only
+    // host must run even when provider/Auth/payment SDKs cannot initialize.
+    const isolated='data:text/javascript,'+encodeURIComponent(`import {registerHooks} from 'node:module';registerHooks({resolve(name,context,next){if(/^(firebase-admin|@google-cloud\\/|openai|stripe)/.test(name))throw new Error('SDK imported by read-only host');return next(name,context);}});`);
+    const result = spawnSync(process.execPath,['--import',isolated,'dist/main.mjs',...args],{
       cwd:directory,encoding:'utf8',timeout:15000,
       env:{...process.env,PGHOST:url.hostname,PGPORT:url.port||'5432',PGDATABASE:url.pathname.slice(1),PGUSER:decodeURIComponent(url.username),PGPASSWORD:decodeURIComponent(url.password),
         PGOPTIONS:`-c search_path=${schema} -c role=${role} -c default_transaction_read_only=on`,

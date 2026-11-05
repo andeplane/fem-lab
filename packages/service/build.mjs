@@ -2,7 +2,7 @@ import { build } from 'esbuild';
 import { cp } from 'node:fs/promises';
 
 await build({
-  entryPoints: ['src/main.ts'], outfile: 'dist/main.mjs',
+  entryPoints: ['src/main.ts'], outdir: 'dist', splitting: true, outExtension: {'.js':'.mjs'},
   bundle: true, platform: 'node', format: 'esm', target: 'node22',
   // Bundle the shared source seam; deployed host SDKs stay ordinary Node dependencies.
   external: ['firebase-admin', 'firebase-admin/*', 'pg', 'stripe', '@google-cloud/*', 'openai'],

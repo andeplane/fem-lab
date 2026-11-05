@@ -28,6 +28,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('authenticated completion HTTP p
       await observations.providerId('resp_pipeline');
       yield {type:'text_delta',text:'hello'};
       if(mode==='waiting') { if(!_request.signal?.aborted) await new Promise<void>(resolve=>_request.signal!.addEventListener('abort',()=>resolve(),{once:true})); return; }
+      if(mode==='drain-finish')await new Promise(resolve=>setTimeout(resolve,30));
       if(mode==='interrupted')throw new Error('network private error');
       if(mode==='missing-usage'){yield {type:'done',stopReason:'end_turn'};return;}
       const usage={input:1000,cacheRead:0,output:100};await observations.usage(usage);
@@ -144,6 +145,39 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('authenticated completion HTTP p
     await response.body!.getReader().read();abort.abort();
     await expect.poll(async()=>(await db.query("SELECT state FROM ai_requests WHERE idempotency_key='cancel'")).rows[0].state).toBe('pending_reconciliation');
     expect((await db.query('SELECT * FROM usage_receipts')).rows).toHaveLength(0);
+  });
+  it('finishes a short stream and its exactly-once receipt within the drain grace',async()=>{
+    mode='drain-finish';
+    const draining=serviceServer({now,newId:randomUUID,ready:async()=>true,account,completions});
+    draining.listen(0,'127.0.0.1');await once(draining,'listening');
+    const origin=`http://127.0.0.1:${(draining.address() as AddressInfo).port}`;
+    try {
+      const response=await fetch(origin+'/v1/ai/completions',{method:'POST',headers:{authorization:'Bearer finish-owner','content-type':'application/json','idempotency-key':'finish-drain'},body:JSON.stringify(body)});
+      const received=response.text().then(text=>({text,error:null}),error=>({text:'',error}));await draining.drain(1000);
+      const result=await received;expect(result.error).toBeNull();expect(result.text).toContain('"outcome":"confirmed"');
+      expect((await db.query("SELECT state FROM ai_requests WHERE idempotency_key='finish-drain'")).rows).toEqual([{state:'settled'}]);
+      expect((await db.query('SELECT * FROM usage_receipts')).rows).toHaveLength(1);
+      const count=generated;
+      expect(await(await send('finish-drain',body,'Bearer finish-owner')).json()).toMatchObject({replay:true,state:'settled'});
+      expect(generated).toBe(count);
+    } finally { draining.closeAllConnections();draining.close(); }
+  });
+  it('drains quiet streams into durable pending state before shutdown completes',async()=>{
+    mode='waiting';
+    const draining=serviceServer({now,newId:randomUUID,ready:async()=>true,account,completions});
+    draining.listen(0,'127.0.0.1');await once(draining,'listening');
+    const origin=`http://127.0.0.1:${(draining.address() as AddressInfo).port}`;
+    try {
+      const response=await fetch(origin+'/v1/ai/completions',{method:'POST',headers:{authorization:'Bearer drain-owner','content-type':'application/json','idempotency-key':'drain'},body:JSON.stringify(body)});
+      await response.body!.getReader().read();
+      await draining.drain(20);
+      expect((await db.query("SELECT state FROM ai_requests WHERE idempotency_key='drain'")).rows).toEqual([{state:'pending_reconciliation'}]);
+      expect((await db.query('SELECT * FROM usage_receipts')).rows).toHaveLength(0);
+      expect((await db.query('SELECT * FROM credit_holds')).rows).not.toHaveLength(0);
+      const count=generated;
+      expect(await(await send('drain',body,'Bearer drain-owner')).json()).toMatchObject({replay:true,state:'pending_reconciliation'});
+      expect(generated).toBe(count);
+    } finally { draining.closeAllConnections();draining.close(); }
   });
   it('accepts bounded real image bytes and rejects excessive dimensions/count before admission',async()=>{
     const base64='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jZI0AAAAASUVORK5CYII=';

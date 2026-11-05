@@ -52,7 +52,9 @@ function failure(res:ServerResponse,error:unknown,requestId:string) {
 
 /** Node host only. No engine construction, browser globals, implicit clock or randomness. */
 export function serviceServer(deps: HttpDependencies) {
-  return createServer(async (req: IncomingMessage, res: ServerResponse) => {
+  let draining=false;
+  const active=new Set<Promise<void>>();
+  const handle=async (req: IncomingMessage, res: ServerResponse) => {
     const requestId = deps.newId();
     res.setHeader('x-request-id', requestId);
     res.setHeader('date', deps.now().toUTCString());
@@ -72,11 +74,12 @@ export function serviceServer(deps: HttpDependencies) {
     }
     if (req.method === 'GET' && ['/ready','/readyz'].includes(req.url??'')) {
       let ready = false;
-      try { ready = await deps.ready(); } catch { /* dependency failure is not readiness */ }
+      try { ready = !draining && await deps.ready(); } catch { /* dependency failure is not readiness */ }
       res.statusCode = ready ? 200 : 503;
       res.end(JSON.stringify({ status: ready ? 'ready' : 'unavailable' }));
       return;
     }
+    if(draining){failure(res,new ServiceFailure(503,'service-draining','The service is restarting. Retry with the same request key.','http'),requestId);return;}
     let creditUnit:PublicCreditUnit|undefined;
     try{creditUnit=requestedCreditUnit(req.headers['x-femlab-credit-unit']);}catch(error){failure(res,error,requestId);return;}
     if((req.url??'').startsWith('/v1/projects')){
@@ -152,5 +155,23 @@ export function serviceServer(deps: HttpDependencies) {
     }
     res.statusCode = 404;
     res.end(JSON.stringify({ code: 'not-found', cause: 'This route is not available.', where: 'http', suggestion: null, requestId }));
+  };
+  const server=createServer((req,res)=>{
+    const work=handle(req,res);active.add(work);
+    void work.then(()=>active.delete(work),()=>active.delete(work));
+  });
+  return Object.assign(server,{
+    /** Stop admission, allow short streams to finish, then cancel quiet upstreams.
+     * Await their durable settlement/pending writes before closing the database.
+     * The host chooses a grace shorter than its platform's termination deadline.
+     */
+    async drain(graceMs:number):Promise<void>{
+      draining=true;
+      const deadline=setTimeout(()=>server.closeAllConnections(),graceMs);
+      try {
+        await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()));
+        await Promise.allSettled([...active]);
+      } finally { clearTimeout(deadline); }
+    },
   });
 }

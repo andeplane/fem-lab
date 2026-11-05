@@ -47,3 +47,12 @@ Use [verification](./results-verification.md), mesh/time studies and independent
 The [twenty-problem evaluation](https://github.com/andeplane/fem-lab/blob/main/docs/evaluations/assistant-20-problems-results-2026-10-16.md) records Sol 6.1 on a frozen build: 18/20 cases passed on each of the browser and MCP hosts. All numerical values passed; two material-catalogue application checks failed on each host because available properties were omitted. Review the saved Material fields when applying catalogue data.
 
 This benchmark checks Model, Results and tool workflows on those fixed problems. It does not establish every model's accuracy, validate hosted account/payment flows or automatically grade written explanations. Use its recorded source, limitations and individual failures when comparing results.
+
+
+### Requests interrupted by deployment
+
+A hosted-service deployment can end a running stream. Keep its request key and use
+request-status recovery or retry with that same key. Confirmed usage replays its
+existing receipt; dispatched usage without final metering remains pending until
+recovery resolves it. A restarting service can return `service-draining` with a
+suggestion to retry using the same request key.

@@ -5,5 +5,5 @@
     "noUncheckedIndexedAccess": true, "noUnusedLocals": true, "noUnusedParameters": true,
     "noEmit": true, "skipLibCheck": true, "resolveJsonModule": true
   },
-  "include": ["src", "test", "vitest.config.ts"]
+  "include": ["src", "test", "tools", "vitest.config.ts"]
 }
