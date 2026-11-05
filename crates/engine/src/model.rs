@@ -521,7 +521,7 @@ pub struct InitialVelocity {
     pub value: [f64; 3],
 }
 
-/// A Step. Everything after `output` belongs to one procedure each and is `None` for the rest;
+/// A Step with optional procedure settings and a structural formulation override.
 /// `after` names the Step whose Result this one continues (plan B §2.2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
