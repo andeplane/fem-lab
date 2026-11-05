@@ -678,6 +678,7 @@ impl Analysis {
 
 fn step_command(name: &str, constraint_names: Vec<String>, load_names: Vec<String>) -> Command {
     Command::StepAdd {
+        formulation: None,
         name: name.to_owned(),
         procedure: Procedure::Static,
         constraints: constraint_names,

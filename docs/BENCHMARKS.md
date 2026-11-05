@@ -702,7 +702,7 @@ not ramp it.
 | C1 | Kirsch plate with a hole, plane stress | K_t = 3.00 (infinite plate); 3.018 for the Ansys VM142 finite geometry | 2 % at p=2 after Richardson | stress concentration, local refinement, symmetry (quarter model equals full) | green |
 | C1b | Finite-width VM142 square plate with a hole, plane stress | σxx(0, 0.5 in) = 3018 psi, Kt = 3.018; original 12 in square, 1 in hole | 2% on each of the three finest meshes | independent finite-geometry stress reference, five-level refinement, force balance and freshness (#626) | engine test + CLI case |
 | C2 | Lamé thick cylinder, plane strain, axisymmetric and 3D | σθθ(a) = 100 MPa, σrr(a) = −60 MPa; u_r(a) = 5.72e-5 m with ε_z = 0 and 5.90e-5 m with free ends (SimScale/SSLV04's number) | 1 % disp, 2 % stress at p=2 | axisymmetric and 3D agree | green |
-| C3 | Near-incompressible cylinder, ν = 0.49, 0.499, 0.4999 | regenerated from Lamé | < 2 % on u_r for a locking-free element; the hoop stress recorded | volumetric locking exposed and cured | green |
+| C3 | Near-incompressible cylinder, ν = 0.49, 0.499, 0.4999 | regenerated from Lamé | < 2 % on u_r and both bore stresses with small-strain Quad4 B-bar; successive radial/angular refinement | volumetric locking and boundary stress convergence | engine test + CLI cases |
 | C4 | Cook's membrane, plane stress **and** plane strain | 23.97 (plane stress, Cook 1974's 23.9) and 21.53 (plane strain, arXiv 1806.07500's 21.520) — resolved | 1 % against the extrapolated value | bending-dominated distorted mesh | green |
 | C5 | NAFEMS LE1 elliptic membrane, plane stress | σyy(D) = 92.7 MPa | 2 % (p=2), 5 % (p=1) | curved boundaries, pressure load | green |
 | C6 | NAFEMS FV32 cantilevered tapered membrane, modal | 44.623, 130.03, 162.70, 246.05, 379.90, 391.44 Hz | 1 % | 2D eigen | engine test |
@@ -3548,3 +3548,17 @@ spring counterexample records the rounding mechanism repaired.
 
 
 Engine/geometry coverage reached **100% of 74,991 regions, 3,977 functions and 35,411 lines**, with zero misses and no exclusions. The full suite passed; a final library rerun added the caller-level metadata-error propagation witness using preserved profiles. This final change is test-only: all production code is byte-identical to the source accepted by the Metal, M1 and browser runs above. Fresh native lavapipe CI remains required before merge.
+
+## Quad4 mean dilatation and near-incompressible stress (#343, #8)
+
+`mean-dilatation` extends the existing Hex8 B-bar formulation to Quad4 in plane strain and axisymmetry, including twist. All deviatoric/shear components keep full quadrature. The mechanical trace is averaged over physical volume; the axisymmetric weight includes `2πr`. Thermal eigenstrain receives the same linear projection, so a temperature gradient cannot introduce a fictitious bulk pressure. Plane-stress Quad4 and other element kinds retain full integration. Hex8/Quad4 finite-deformation B-bar remains unsupported.
+
+`mean_dilatation_quad4_has_independent_polynomial_and_weighted_axisymmetric_oracles` uses `u=(xy,0)` on `[-1,1]^2`: B-bar strain is `(2y/3,-y/3,-y/3,x,0,0)` and integrated energy is `14μ/9`. On `r in [1,3], z in [-1,1]`, `u_z=r z` has divergence `r` and ring-volume mean `13/6`, distinct from the centroid/unweighted value `2`. The test checks each normal strain/stress and the independent circumferential shear when twist is present.
+
+Distorted constant-strain patches continue to run through every Formulation. At `ν=0.4999`, the Quad4 stiffness eigenvalue test requires exactly three planar rigid modes, one axisymmetric rigid mode, or two with twist; every remaining mode is positive. No uncondensed pressure degree of freedom or unstabilized zero-energy mode is introduced.
+
+For the thermal polynomial, `α=1/3`, `T=y` and `u=(xy,0,0)` on the reference cube (or its plane-strain square) have zero mean thermal dilatation. The stress is exactly `(4μy/3,-2μy/3,-2μy/3,μx,0,0)`, with zero bulk pressure, even at `ν=0.4999`. Projecting displacement alone would add a spurious bulk-modulus-scaled temperature term.
+
+The C3 test solves both the plane-strain quarter annulus and axisymmetric radial strip at `ν=.49,.499,.4999`, with 4/8/16/32 radial subdivisions (twice as many angular subdivisions for the annulus), and compares one/four-worker results exactly. With `a=.1 m`, `b=.2 m`, `p=60 MPa`, `E=200 GPa`, the independent Lamé constants are `A=pa²/(b²-a²)`, `B=Ab²`; `σrr=A-B/r²`, `σθθ=A+B/r²` and `u_r=(1+ν)[A(1-2ν)r+B/r]/E`. The bore stresses are −60 and +100 MPa, and at `ν=.4999` the bore displacement is `5.99989998e−5 m`. Displacement and both bore stress errors must decrease at each refinement and all finish below 2%. The finest meshes are also shipped as `c3-bbar-plane-strain-quad4` and `c3-bbar-axisymmetric-quad4` CLI cases, using these analytical values rather than recorded FE results.
+
+The registry regression compares actual operators selected by the mesh default and explicit structural Step override, retains explicit choices across default changes, and checks definition regeneration, saved Models and native one/four-worker Journal replay. Heat Step overrides and unimplemented finite-strain B-bar fail explicitly.

@@ -17557,6 +17557,9 @@ fn mean_dilatation_does_not_alias_other_element_kinds_or_finite_strain() {
         }
         let coords = distorted(kind);
         for id in idealisations(kind) {
+            if kind == ElementKind::Quad4 && !matches!(id, Idealisation::PlaneStress { .. }) {
+                continue;
+            }
             let el = element_for(kind);
             let nd = el.n_dof();
             let (mut full, mut mean) = (vec![0.0; nd * nd], vec![0.0; nd * nd]);
@@ -18354,4 +18357,218 @@ fn implicit_cancellation_at_time_stepping_and_recovery_returns_a_structured_erro
         let completed = run_step(&p, &step).expect("a fresh run after cancellation still completes");
         assert_eq!(completed.history.unwrap().times.len(), 3);
     }
+}
+
+
+/// #343: full deviatoric quadrature survives; only the physical-volume mean trace changes.
+#[test]
+fn mean_dilatation_quad4_has_independent_polynomial_and_weighted_axisymmetric_oracles() {
+    let kind = ElementKind::Quad4;
+    let el = element_for(kind);
+    let mut mat = steel();
+    mat.props = vec![120.0, 0.25]; // lambda = mu = 48.
+    let coords: Vec<f64> = node_xi(kind).iter().flatten().copied().collect();
+    let u: Vec<f64> = node_xi(kind).iter().flat_map(|x| [x[0] * x[1], 0.0]).collect();
+    let c = ctx(&coords, &mat, Idealisation::PlaneStrain, Formulation::MeanDilatation);
+    let mut k = vec![0.0; 64];
+    el.stiffness(&c, &mut k).unwrap();
+    let ku = mat_vec(&k, 8, &u);
+    let energy = u.iter().zip(ku).map(|(a, b)| a * b).sum::<f64>() / 2.0;
+    assert!((energy - 48.0 * 14.0 / 9.0).abs() < 1e-11);
+    let (mut stress, mut strain) = (vec![0.0; 24], vec![0.0; 24]);
+    el.recover(&c, &u, &mut stress, &mut strain).unwrap();
+    for g in 0..4 {
+        let [x, y, _] = el.gp_xi(g);
+        close(&strain[g * 6..g * 6 + 6], &[2.0 * y / 3.0, -y / 3.0, -y / 3.0, x, 0.0, 0.0], 1e-13);
+        close(&stress[g * 6..g * 6 + 6], &[64.0 * y, -32.0 * y, -32.0 * y, 48.0 * x, 0.0, 0.0], 1e-13);
+    }
+    // r in [1,3], z in [-1,1], u_z=r z: div u=r and <r>_(2pi r)=13/6,
+    // whereas evaluating at the centroid or averaging without r would give 2.
+    let coords: Vec<f64> = node_xi(kind).iter().flat_map(|x| [2.0 + x[0], x[1], 0.0]).collect();
+    for twist in [false, true] {
+        let mut u = Vec::new();
+        for x in coords.chunks_exact(3) {
+            u.extend_from_slice(&[0.0, x[0] * x[1]]);
+            if twist {
+                u.push(x[0] * x[1]);
+            }
+        }
+        let c = ctx(&coords, &mat, Idealisation::Axisymmetric { twist }, Formulation::MeanDilatation);
+        el.recover(&c, &u, &mut stress, &mut strain).unwrap();
+        for g in 0..4 {
+            let [xi, z, _] = el.gp_xi(g);
+            let r = 2.0 + xi;
+            let correction = (13.0 / 6.0 - r) / 3.0;
+            let gamma_theta_z = if twist { r } else { 0.0 };
+            let expected = [correction, r + correction, correction, z, 0.0, gamma_theta_z];
+            close(&strain[g * 6..g * 6 + 6], &expected, 1e-13);
+            let expected_stress = [
+                96.0 * correction + 104.0,
+                96.0 * (r + correction) + 104.0,
+                96.0 * correction + 104.0,
+                48.0 * z,
+                0.0,
+                48.0 * gamma_theta_z,
+            ];
+            close(&stress[g * 6..g * 6 + 6], &expected_stress, 1e-13);
+        }
+    }
+}
+
+#[test]
+fn mean_dilatation_quad4_has_only_physical_rigid_modes_at_near_incompressibility() {
+    let mut mat = steel();
+    mat.props = vec![120.0, 0.4999];
+    let kind = ElementKind::Quad4;
+    let el = element_for(kind);
+    let coords = distorted(kind);
+    for (id, zero_modes, dofs) in [
+        (Idealisation::PlaneStrain, 3, 2),
+        (Idealisation::Axisymmetric { twist: false }, 1, 2),
+        (Idealisation::Axisymmetric { twist: true }, 2, 3),
+    ] {
+        let nd = 4 * dofs;
+        let c = ctx(&coords, &mat, id.clone(), Formulation::MeanDilatation);
+        let mut k = vec![0.0; nd * nd];
+        el.stiffness(&c, &mut k).unwrap();
+        let mut eigenvalues = jacobi_eigenvalues(&k, nd);
+        eigenvalues.sort_by(f64::total_cmp);
+        let scale = eigenvalues[nd - 1];
+        assert_eq!(
+            eigenvalues.iter().filter(|v| v.abs() <= 1e-10 * scale).count(),
+            zero_modes,
+            "{id:?}: {eigenvalues:?}"
+        );
+        assert_eq!(
+            eigenvalues.iter().filter(|&&v| v > 1e-8 * scale).count(),
+            nd - zero_modes,
+            "{id:?}: {eigenvalues:?}"
+        );
+    }
+}
+
+/// Project eigenstrain with the same volumetric map as displacement strain. Otherwise a
+/// temperature gradient produces a fictitious, bulk-modulus-scaled pressure oscillation.
+#[test]
+fn mean_dilatation_thermal_gradient_has_no_spurious_bulk_pressure() {
+    let mut mat = steel();
+    mat.props = vec![120.0, 0.4999];
+    mat.alpha = [1.0 / 3.0; 3];
+    let mu = 120.0 / (2.0 * 1.4999);
+    for (kind, id) in [(ElementKind::Hex8, Idealisation::Solid3d), (ElementKind::Quad4, Idealisation::PlaneStrain)] {
+        let el = element_for(kind);
+        let coords: Vec<f64> = node_xi(kind).iter().flatten().copied().collect();
+        let dim = kind.dim();
+        let u: Vec<f64> = node_xi(kind).iter().flat_map(|x| [x[0] * x[1], 0.0, 0.0][..dim].to_vec()).collect();
+        let temperature: Vec<f64> = node_xi(kind).iter().map(|x| x[1]).collect();
+        let mut c = ctx(&coords, &mat, id, Formulation::MeanDilatation);
+        c.temperature = Some(&temperature);
+        c.t_ref = 0.0;
+        let (mut stress, mut strain) = (vec![0.0; el.n_gp() * 6], vec![0.0; el.n_gp() * 6]);
+        el.recover(&c, &u, &mut stress, &mut strain).unwrap();
+        for g in 0..el.n_gp() {
+            let [x, y, _] = el.gp_xi(g);
+            close(
+                &stress[g * 6..g * 6 + 6],
+                &[4.0 * mu * y / 3.0, -2.0 * mu * y / 3.0, -2.0 * mu * y / 3.0, mu * x, 0.0, 0.0],
+                1e-11,
+            );
+        }
+        let mut load = vec![0.0; u.len()];
+        el.thermal_load(&c, &mut load).unwrap();
+        assert!(inf_norm(&load) < 1e-9, "zero mean isotropic eigenstrain: {load:?}");
+    }
+}
+
+/// C3: independent Lame displacement and both bore stresses, not a recorded FE value.
+#[test]
+fn mean_dilatation_c3_near_incompressible_cylinder_converges_in_displacement_and_stress() {
+    let (a, b, pressure, young) = (0.1_f64, 0.2_f64, 60e6, 200e9);
+    let aa = pressure * a * a / (b * b - a * a);
+    let bb = aa * b * b;
+    for nu in [0.49, 0.499, 0.4999] {
+        for axisymmetric in [false, true] {
+            let exact_u = (1.0 + nu) / young * (aa * (1.0 - 2.0 * nu) * a + bb / a);
+            let mut errors = Vec::new();
+            for n in [4, 8, 16, 32] {
+                let (mesh, id, constraints, at, hoop) = if axisymmetric {
+                    (
+                        annulus_strip(ElementKind::Quad4, [n, 2]),
+                        Idealisation::Axisymmetric { twist: false },
+                        vec![
+                            fix("bottom", "zmin", [false, true, false], 0.0),
+                            fix("top", "zmax", [false, true, false], 0.0),
+                        ],
+                        [a, 0.05, 0.0],
+                        2,
+                    )
+                } else {
+                    (
+                        annulus(ElementKind::Quad4, n, n * 2, a, b, [0.0, PI / 2.0]),
+                        Idealisation::PlaneStrain,
+                        vec![
+                            fix("sym_y", "theta0", [false, true, false], 0.0),
+                            fix("sym_x", "theta1", [true, false, false], 0.0),
+                        ],
+                        [a, 0.0, 0.0],
+                        1,
+                    )
+                };
+                let sets = sets_of(&mesh);
+                let bodies = one_body();
+                let mut p = problem(&mesh, &sets, &bodies, id, Formulation::MeanDilatation, constraints);
+                p.materials[0].props = vec![young, nu];
+                p.loads = vec![Load::Pressure { faces: "inner".into(), p: pressure }];
+                let step = static_step(SolveOptions::default());
+                let mut identity = None;
+                for threads in [1, 4] {
+                    let result =
+                        pollster::block_on(procedure::run(&p, &step, &Pool::new(threads), None, None, &mut nop))
+                            .unwrap();
+                    let displacement = &result.fields[&Field::Displacement];
+                    let stress = &result.fields[&Field::Stress];
+                    let u = probe(&mesh, displacement, at).unwrap().1[0];
+                    let sig = probe(&mesh, stress, at).unwrap().1;
+                    let error =
+                        [(u / exact_u - 1.0).abs(), (sig[hoop] / 100e6 - 1.0).abs(), (sig[0] / -60e6 - 1.0).abs()];
+                    eprintln!("C3 Bbar nu={nu} axisym={axisymmetric} n={n} threads={threads}: u={u:.12e} hoop={:.9e} radial={:.9e} errors={error:?}", sig[hoop], sig[0]);
+                    if n == 32 {
+                        assert!(
+                            error.into_iter().all(|e| e < 0.02),
+                            "C3 displacement and both bore stresses: {error:?}"
+                        );
+                    }
+                    if let Some(previous) = &identity {
+                        assert_eq!(displacement, previous);
+                    }
+                    identity = Some(displacement.clone());
+                    if threads == 1 {
+                        errors.push(error);
+                    }
+                    assert!(result.solver.rel_residual < 1e-8);
+                }
+            }
+            for pair in errors.windows(2) {
+                for component in 0..3 {
+                    assert!(
+                        pair[1][component] < pair[0][component],
+                        "C3 nu={nu} axisym={axisymmetric} must converge: {errors:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn mean_dilatation_quad4_refuses_unimplemented_finite_strain() {
+    let mat = steel();
+    let coords = distorted(ElementKind::Quad4);
+    let c = ctx(&coords, &mat, Idealisation::PlaneStrain, Formulation::MeanDilatation);
+    let (mut k, mut f, mut stress, mut strain, mut state) =
+        (vec![0.0; 64], vec![0.0; 8], vec![0.0; 24], vec![0.0; 24], Vec::new());
+    let out = TangentOut { k: &mut k, f: &mut f, stress: &mut stress, strain: &mut strain, state: &mut state };
+    let error = element_for(ElementKind::Quad4).tangent_and_force(&c, &[0.0; 8], &[], out).unwrap_err();
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert!(error.cause.contains("small strain"));
 }

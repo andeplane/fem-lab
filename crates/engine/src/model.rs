@@ -526,6 +526,8 @@ pub struct InitialVelocity {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Step {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub formulation: Option<Formulation>,
     pub name: String,
     pub procedure: Procedure,
     pub constraints: Vec<String>,
@@ -1024,6 +1026,7 @@ mod tests {
         m.loads.push(Load { name: "p".into(), kind: LoadKind::Pressure { on: "beam.xmax".into(), value: 1.0 } });
         m.loads.push(Load { name: "g".into(), kind: LoadKind::Gravity { g: [0.0, 0.0, -9.81] } });
         m.steps.push(Step {
+            formulation: None,
             name: "st".into(),
             procedure: Procedure::Static,
             constraints: vec![],

@@ -67,3 +67,9 @@ or explicitly select a supported solver after assessing its memory needs.
 These bounds do not guarantee that the host has enough free memory. Hardware
 acceptance of the 780,300-equation cantilever does not establish capacity or
 convergence for a different model or for a browser host.
+
+## Compare structural formulations
+
+A structural Step may override the mesh's `formulation` with `full`, `incompatible-modes` or `mean-dilatation`. Omit the setting to inherit the current mesh default. This changes the structural operator and stress recovery for that Step without rebuilding geometry or connectivity; it is retained by save/open, Journal replay and `query.definition`.
+
+Mean dilatation is small-strain B-bar for Hex8 and plane-strain/axisymmetric Quad4. Plane-stress Quad4 and other kinds use full integration under that choice. Heat Steps reject this structural setting, and finite-deformation B-bar remains unsupported. See [meshing](./meshing.md#size-order-and-formulation) for selection and convergence guidance.

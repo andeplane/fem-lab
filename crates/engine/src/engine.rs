@@ -1541,6 +1541,7 @@ impl Engine {
                 Ok(Output::None)
             }
             Command::StepAdd {
+                formulation,
                 name,
                 procedure,
                 constraints,
@@ -1573,6 +1574,11 @@ impl Engine {
                 initial_velocity,
             } => {
                 check_name(name)?;
+                if formulation.is_some() && matches!(procedure, Procedure::HeatSteady | Procedure::HeatTransient) {
+                    return Err(Error::schema("formulation is a structural Step setting")
+                        .at("formulation")
+                        .suggest("step.add without formulation for a heat procedure"));
+                }
                 if let Some(tol) = nonlinear_tolerance {
                     if !(*tol > 0.0 && tol.is_finite()) {
                         return Err(Error::schema(format!(
@@ -1643,6 +1649,7 @@ impl Engine {
                         .ok_or_else(|| Error::not_found("step", prev, &self.model.names(ObjectKind::Step)))?;
                 }
                 let s = Step {
+                    formulation: *formulation,
                     name: name.clone(),
                     procedure: *procedure,
                     constraints: constraints.clone(),

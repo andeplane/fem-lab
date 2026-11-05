@@ -336,6 +336,7 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
         ObjectKind::Step => {
             let x = m.step(name).ok_or_else(missing)?;
             Command::StepAdd {
+                formulation: x.formulation,
                 name: x.name.clone(),
                 procedure: x.procedure,
                 constraints: x.constraints.clone(),
