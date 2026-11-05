@@ -51,5 +51,11 @@ class HTTP:
         return self.request('/rpc', {'id': self.seq, 'op': op, 'payload': wire(payload)})['value']
     def close(self):
         if self.session:
-            self.request('/close', {})
-            self.session = None
+            try:
+                self.request('/close', {})
+            except FemError as error:
+                # Inactivity expiry already released this server-side owner.
+                if error.error.get('code') != 'session.expired':
+                    raise
+            finally:
+                self.session = None

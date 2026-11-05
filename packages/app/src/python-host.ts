@@ -1,6 +1,9 @@
 // Typed, bounded RPC between the owning registry Producer and a disposable Python worker.
 import { FemError, type ScriptResult } from '@femlab/registry';
 import type { Call } from './script-host';
+import schema from '../../registry/src/generated/runtime-schema';
+const engineCommands = new Set<string>(schema.commands.oneOf.map(variant => variant.properties.cmd.const));
+const engineQueries = new Set<string>(schema.queries.oneOf.map(variant => variant.properties.query.const));
 export interface PythonResult extends ScriptResult { plots?: string[] }
 export class PythonHost {
   private worker: Worker | null = null;
@@ -41,10 +44,11 @@ export class PythonHost {
           const payload = msg.payload;
           const name = payload[msg.op === 'query' ? 'query' : 'cmd'];
           // Python is an analysis client, not a route into credentials, account changes or scripts.
-          if (typeof name !== 'string' || /^(account\.|billing\.|script\.|ai\.)/.test(name) || name === 'query.account') {
+          if (typeof name !== 'string' || !(msg.op === 'query' ? engineQueries : engineCommands).has(name)) {
             worker.postMessage({ kind: 'reply', id: msg.id, error: 'Python may only call engine Commands and Queries' }); return;
           }
           try {
+            if (new TextEncoder().encode(JSON.stringify(payload)).byteLength > 1024 * 1024) throw new FemError('unsupported', 'Python RPC request exceeds 1 MiB', 'script.run');
             const value = await (msg.op === 'query' ? this.query : this.dispatch)(payload);
             if (!active) return;
             const data = value as Record<string, unknown>;

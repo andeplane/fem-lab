@@ -1,0 +1,22 @@
+import { render } from 'preact';
+import { afterEach, expect, it, vi } from 'vitest';
+import { Store } from '../src/store';
+import { PythonNotebook } from '../src/ui/PythonNotebook';
+const host=document.createElement('div');document.body.append(host);
+afterEach(()=>render(null,host));
+it('edits numbered cells independently, retains drafts and renders plot outputs',()=>{
+  const store=new Store();const dispatch=vi.fn(async()=>undefined);
+  render(<PythonNotebook s={store.state} store={store} dispatch={dispatch}/>,host);
+  expect(host.querySelectorAll('textarea')).toHaveLength(1);
+  const first=host.querySelector('textarea')!;first.value='print(42)';first.dispatchEvent(new Event('input',{bubbles:true}));
+  expect(store.state.pythonDraft).toContain('print(42)');
+  store.set({pythonDraft:'# %%\nprint(1)\n# %%\nprint(2)',pythonPlots:['iVBORw0KGgo=']});
+  render(<PythonNotebook s={store.state} store={store} dispatch={dispatch}/>,host);
+  expect(host.querySelectorAll('textarea')).toHaveLength(2);
+  expect(host.querySelector('img')!.getAttribute('src')).toBe('data:image/png;base64,iVBORw0KGgo=');
+  host.querySelector('button')!.click();
+  expect(dispatch).toHaveBeenCalledWith({cmd:'script.setSource',code:expect.stringContaining('# %%')});
+  store.set({scriptRunning:true});render(<PythonNotebook s={store.state} store={store} dispatch={dispatch}/>,host);
+  expect(host.querySelector('textarea')!.disabled).toBe(true);
+  expect(host.querySelector('button')!.disabled).toBe(true);
+});

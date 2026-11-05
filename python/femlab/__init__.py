@@ -14,8 +14,15 @@ class Client(API):
             self._call.close()
     def __enter__(self):
         return self
-    def __exit__(self, *args):
-        self.close()
+    def __exit__(self, error_type, error, traceback):
+        if error_type is None:
+            self.close()
+        else:
+            try:
+                self.close()
+            except Exception:
+                # A cleanup/connection failure must not replace the analysis failure.
+                pass
     def dispatch(self, command):
         return self._call('dispatch', command.wire() if isinstance(command, Command) else command)
     def query(self, query):

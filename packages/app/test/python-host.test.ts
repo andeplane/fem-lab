@@ -25,6 +25,8 @@ it('bounds initialization/execution, transfers scientific f64 and discards late 
   expect(reply.transfers).toEqual([reply.value.value.values.buffer]);
   await worker.emit({kind:'rpc',id:2,op:'dispatch',payload:{cmd:'billing.checkout'}});
   expect(worker.sent.at(-1).value.error).toContain('engine Commands');
+  await worker.emit({kind:'rpc',id:4,op:'dispatch',payload:{cmd:'chat.send',text:'start spending'}});
+  expect(worker.sent.at(-1).value.error).toContain('engine Commands');
   const pending=worker.emit({kind:'rpc',id:3,op:'query',payload:{query:'query.model'}});
   host.stop(); const count=worker.sent.length; release({name:'old'}); await pending;
   expect(worker.sent).toHaveLength(count);

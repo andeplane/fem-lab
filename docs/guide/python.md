@@ -29,7 +29,7 @@ scientific f64 values in SI units, independently of display units, with its reta
 identity and component count. Its values are a numpy view of the transferred numeric buffer.
 The Script run has a maximum 30000 ms execution deadline after a separate maximum 120000 ms
 runtime startup deadline. Source is limited to 64000 characters; console plus plot output is
-limited to 8 MiB. Stop terminates the disposable worker; already-applied Commands stay in the
+limited to 8 MiB. Each browser registry request is limited to 1 MiB. Stop terminates the disposable worker; already-applied Commands stay in the
 Journal. Infinite loops cannot freeze the editor. Arbitrary untrusted Python is unsupported:
 Pyodide can access JavaScript APIs within its Worker. Account/billing/credential operations
 must use the ordinary explicit account controls.
@@ -43,6 +43,12 @@ The Journal records only expanded engine Commands, so native and browser replay 
 Python installed. Python cells are not rolled back if a later cell fails.
 
 ## CPython and Jupyter
+
+For a published client release, install with `python3 -m pip install femlab`; the optional
+notebook dependencies are `python3 -m pip install 'femlab[notebook]'`. The client needs a
+running FEM Lab compute host: it does not embed another engine or contact the hosted AI
+service. This server uses the CPU Node WASM engine with one worker; native server GPU
+execution is not provided by this host. Existing `query.cost` planning limits still apply. Package publication is separate from source installation and is tracked in #31.
 
 Prerequisites: Python 3.10 or newer, Node 22 or newer, a FEM Lab checkout and its Node WASM
 engine build. From the checkout:

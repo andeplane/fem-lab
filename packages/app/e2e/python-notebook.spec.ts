@@ -45,3 +45,17 @@ print('E1 Python exact-field checks passed')`;
   await expect(page.getByLabel('Python cell 2')).toHaveValue(/np.float64/);
   await expect(page.getByAltText('Python matplotlib output 1')).toBeVisible();
 });
+
+
+test('@cpu Python documentation is discoverable independent HTML with the registered notebook API',async({page})=>{
+  const requests:string[]=[];page.on('request',request=>requests.push(request.url()));
+  await page.goto('docs/');
+  await page.getByRole('link',{name:'Python and notebooks',exact:true}).first().click();
+  await expect(page).toHaveURL(/\/docs\/python\/$/);
+  await expect(page.locator('article h1')).toHaveText('Python and notebooks');
+  await expect(page.locator('article')).toContainText('loopback');
+  await expect(page.locator('article')).toContainText('Run all cells');
+  expect(requests.filter(url=>/pyodide|wasm_bg|session\.worker/.test(url))).toEqual([]);
+  await page.getByRole('link',{name:'API reference',exact:true}).first().click();
+  await expect(page.locator('[data-api-entry="command:host:script.setLanguage"]')).toContainText('Select TypeScript or Python');
+});

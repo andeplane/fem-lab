@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import unittest
 from femlab import AsyncClient, Client
-from femlab.client import FemError, wire
+from femlab.client import FemError, HTTP, wire
 from femlab.generated import GeometryAddBoxArgs, ModelDuplicateArgs
 
 class ClientTest(unittest.TestCase):
@@ -36,5 +36,39 @@ class ClientTest(unittest.TestCase):
         error = FemError({'code':'schema','cause':'bad unit','where':'size'})
         self.assertEqual(error.error['where'], 'size')
         self.assertIn('schema: bad unit', str(error))
+class ClientLifetimeTest(unittest.TestCase):
+    def test_context_cleanup_preserves_original_analysis_failure(self):
+        class BrokenClose:
+            def __call__(self, op, payload):
+                return None
+            def close(self):
+                raise RuntimeError('connection lost during close')
+        with self.assertRaisesRegex(ValueError, 'independent numerical check failed'):
+            with Client(transport=BrokenClose()):
+                raise ValueError('independent numerical check failed')
+        with self.assertRaisesRegex(RuntimeError, 'connection lost during close'):
+            with Client(transport=BrokenClose()):
+                pass
+
+    def test_expired_close_is_idempotent_and_other_failures_surface(self):
+        transport = object.__new__(HTTP)
+        calls = []
+        def expired(path, body):
+            calls.append(path)
+            raise FemError({'code':'session.expired','cause':'open a new client'})
+        transport.request = expired
+        transport.session = 'expired capability'
+        transport.close()
+        transport.close()
+        self.assertEqual(calls, ['/close'])
+        self.assertIsNone(transport.session)
+        def unavailable(path, body):
+            raise FemError({'code':'internal','cause':'database unavailable'})
+        transport.request = unavailable
+        transport.session = 'live capability'
+        with self.assertRaises(FemError):
+            transport.close()
+        self.assertIsNone(transport.session)
+
 if __name__ == '__main__':
     unittest.main()

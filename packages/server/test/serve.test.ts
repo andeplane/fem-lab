@@ -2,6 +2,7 @@ import { afterEach, expect, it } from 'vitest';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { request as httpRequest, type Server } from 'node:http';
+import { scientificJson } from '@femlab/registry';
 import { listen } from '../src/serve';
 import { loadEngine } from '../../mcp/src/engine';
 const servers: Server[] = [];
@@ -13,7 +14,7 @@ async function open(maxSessions = 16) {
   const base = `http://127.0.0.1:${port}`;
   const request = async (route: string, payload: unknown = {}, session?: string, headers: Record<string, string> = {}) => {
     return new Promise<{status:number;body:Record<string,any>}>((resolve,reject)=> {
-      const bytes=Buffer.from(JSON.stringify(payload));
+      const bytes=Buffer.from(scientificJson(payload));
       const req=httpRequest(base+route,{method:'POST',headers:{'Content-Type':'application/json','Content-Length':bytes.length,...(session?{'X-Femlab-Session':session}:{}),...headers}},res=>{
         const chunks:Buffer[]=[];res.on('data',chunk=>chunks.push(chunk));res.on('end',()=>resolve({status:res.statusCode!,body:JSON.parse(Buffer.concat(chunks).toString())}));
       });req.on('error',reject);req.end(bytes);
@@ -21,13 +22,16 @@ async function open(maxSessions = 16) {
   };
   return { request, advance: () => { time += 101; }, base };
 }
-it('isolates actual WASM owners and preserves structured errors and replay hashes', async () => {
+it('isolates actual WASM owners and preserves structured errors, scientific signed zero and replay hashes', async () => {
   const { request } = await open();
   const a = (await request('/session')).body.session;
   const b = (await request('/session')).body.session;
   const rpc = (session: string, op: string, payload: unknown) => request('/rpc', {id:1,op,payload}, session);
   await rpc(a, 'dispatch', {cmd:'model.new',name:'alpha'});
   await rpc(b, 'dispatch', {cmd:'model.new',name:'beta'});
+  await rpc(a, 'dispatch', {cmd:'geometry.addBox',name:'signed-zero',size:['1 m','1 m','1 m'],at:[{value:-0,unit:'m'},'0 m','0 m']});
+  const document=(await rpc(a,'query',{query:'query.document'})).body.value;
+  expect(Object.is(document.file.journal.entries.at(-1).cmd.at[0].value,-0)).toBe(true);
   expect((await rpc(a,'query',{query:'query.model'})).body.value.name).toBe('alpha');
   expect((await rpc(b,'query',{query:'query.model'})).body.value.name).toBe('beta');
   const before = (await rpc(a,'query',{query:'query.journal'})).body.value;
