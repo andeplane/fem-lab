@@ -8,7 +8,7 @@ import type { CommandDef, EngineSchema, JsonSchema, Registry, Valued } from '@fe
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import schema from '../../../registry/src/generated/runtime-schema';
 import { engineChip } from '../capabilities';
-import { choiceOf, fieldChoices, formatNumber, hasDeformation, legendTicks, showFieldArgs } from '../fields';
+import { choiceOf, fieldChoices, formatNumber, hasDeformation, legendTicks, showFieldArgs, thermalEndpointLabel } from '../fields';
 import type { ViewerRef } from '../host';
 import type { StartupHost } from '../startup';
 import type { ResultComparison } from '../result-comparison';
@@ -332,13 +332,14 @@ function Legend({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   const choices = fieldChoices(s.result?.extremes.map((e) => e.field) ?? [], s.result, s.yieldStress !== null);
   const ticks = legendTicks(l.min, l.max);
   const deforms = hasDeformation(s.result, s.fieldKey);
+  const endpoint = s.transient ? null : thermalEndpointLabel(s.result, s.fieldKey);
   return (
     <div class="legend">
       <div class="legend-head">
         <span class="legend-field mono">{choiceOf(s.fieldKey, s.result).label}</span>
         <span class="legend-unit mono">{l.unit}</span>
         <span class="legend-sub mono" title={deforms ? exaggerationHelp(s.deformScale) : undefined}>
-          {s.result?.step}{s.transient ? ` · ${formatNumber(s.transient.frame.time.value)} ${s.transient.frame.time.unit}` : ''}{deforms ? ` · ${s.deformScale === 1 ? 'true scale' : `exaggerated ×${formatNumber(s.deformScale)}`}` : ''}
+          {s.result?.step}{s.transient ? ` · ${formatNumber(s.transient.frame.time.value)} ${s.transient.frame.time.unit}` : endpoint ? ` · ${endpoint}` : ''}{deforms ? ` · ${s.deformScale === 1 ? 'true scale' : `exaggerated ×${formatNumber(s.deformScale)}`}` : ''}
         </span>
       </div>
       <div class="legend-body">

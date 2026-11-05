@@ -2424,6 +2424,20 @@ const commands = {
             "null"
           ]
         },
+        "temperatureGradient": {
+          "description": "Temperature difference per length; defaults to K/m. In degC/m the temperature is an\ninterval: compound units never apply an absolute-temperature offset.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "heatFlux": {
+          "description": "Conductive flux density display unit; defaults to W/m^2, independently of total power.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "acceleration": {
           "type": [
             "string",
@@ -4921,6 +4935,16 @@ const commands = {
           "description": "Dimensionless local ZZ energy-error contribution per element. Sum of squares\nequals the squared global relative estimate. Available when requested in\nstep.add.output on supported linear simplex static/heat Steps, or after study.adapt.",
           "type": "string",
           "const": "errorEstimate"
+        },
+        {
+          "description": "Endpoint temperature gradient in K/m, three components, recovered at thermal Gauss\npoints and corner-shape extrapolated per element node without interface averaging.\nGlobal x/y/z in 3D; x/y/0 in planar models and radial/axial/0 in axisymmetry.\nAvailable on heat Results only; retained frames contain temperature, not this field.",
+          "type": "string",
+          "const": "temperatureGradient"
+        },
+        {
+          "description": "Endpoint conductive flux q = -K grad(T), in W/m^2, with the same location and axes as\ntemperatureGradient. Uses the full material conductivity tensor. Current 2D Models\nallow only in-plane material axes, giving zero omitted gradient/flux. Tilted axes in\n3D can couple all components. This is flux density, not applied inward flux or total W.",
+          "type": "string",
+          "const": "heatFlux"
         }
       ]
     },
@@ -5381,7 +5405,7 @@ const queries = {
       "x-returns": "ResultSurface"
     },
     {
-      "description": "A final field in SI with explicit entity layout, selected by solve instance or the current per-Step default.\nField names include mode:k for one-based modal/buckling shapes owned by the Result\n(`1 <= k <= query.result.modeCount`) and stressPly:k:bottom/top\nfor laminate ply faces (k starts at 1, bottom to top within each Section). Ply stresses\nare global xx, yy, zz, xy, xz, yz in Pa, unaveraged per element node; elements without\nthat ply carry zeros. Both sides of an interface remain distinct. Explicit ids use solved metadata;\nomitted ids refuse stale Results. Retained samples use query.frame's existing protocol.",
+      "description": "A final field in SI with explicit entity layout, selected by solve instance or the current per-Step default.\nField names include mode:k for one-based modal/buckling shapes owned by the Result\n(`1 <= k <= query.result.modeCount`) and stressPly:k:bottom/top\nfor laminate ply faces (k starts at 1, bottom to top within each Section). Ply stresses\nare global xx, yy, zz, xy, xz, yz in Pa, unaveraged per element node; elements without\nthat ply carry zeros. Both sides of an interface remain distinct. Explicit ids use solved metadata;\ntemperatureGradient (K/m) and heatFlux (W/m^2) are final heat endpoint vectors,\nrecovered per element node without averaging. They are not retained frame fields.\nomitted ids refuse stale Results. Retained samples use query.frame's existing protocol.",
       "type": "object",
       "properties": {
         "step": {
@@ -5523,7 +5547,7 @@ const queries = {
       "x-returns": "FrameResult"
     },
     {
-      "description": "A field value at a point (default: the last solved Step). Nodal fields are\ninterpolated; errorEstimate returns the containing element's constant value\nwith interpolated=false. Shared-face ties use the lowest element id. Component\nindices: displacement 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.\nOptional sample selects a retained primary-field frame; omitted means the final field.\nOmitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.",
+      "description": "A field value at a point (default: the last solved Step). Nodal and unaveraged\nelement-node fields are interpolated within the containing element; no interface\naveraging is applied. errorEstimate returns the containing element's constant value\nwith interpolated=false. Shared-face ties use the lowest element id. Component\nindices: displacement and thermal vectors 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.\nOptional sample selects a retained primary-field frame; omitted means the final field.\nOmitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.",
       "type": "object",
       "properties": {
         "resultId": {
@@ -5583,7 +5607,7 @@ const queries = {
       "x-returns": "ProbeResult"
     },
     {
-      "description": "A field sampled at `n` points along the line from `from` to `to`, for a line plot.\nOptional sample selects a retained primary-field frame; omitted means the final field.\nOmitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.",
+      "description": "A field sampled at `n` points along the line from `from` to `to`, for a line plot.\nElement-node fields interpolate within one element without interface averaging;\nshared-face ties use the lowest element id, exactly as query.probe does.\nOptional sample selects a retained primary-field frame; omitted means the final field.\nOmitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.",
       "type": "object",
       "properties": {
         "resultId": {

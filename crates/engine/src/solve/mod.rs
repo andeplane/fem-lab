@@ -264,7 +264,7 @@ pub fn cost_estimate(mesh: &Mesh, dofs_per_node: usize, solver: Solver) -> CostE
     // Device availability and constraints are not known here; Auto reports its CPU choice.
     let chosen = solver_name(resolve_solver(solver, usize::try_from(dofs).unwrap_or(usize::MAX), false));
     CostEstimate {
-        dofs, nnz, nnz_lower, bytes, assembly_bytes, resident_result_bytes: 0, result_mesh_bytes: 0, retained_frames: 0,
+        dofs, nnz, nnz_lower, bytes, assembly_bytes, recovery_bytes: 0, resident_result_bytes: 0, result_mesh_bytes: 0, retained_frames: 0,
         retained_bytes: 0, transient_work_bytes: 0, transport_staging_bytes: 0,
         wasm_transport_staging_bytes: 0, wasm_transport_staging_complete: true,
         budget_bytes: PLANNING_BUDGET, feasible,
@@ -352,7 +352,8 @@ pub(crate) fn enforce_transient_budget(
         return Ok(());
     }
     let frame_bytes = cost.retained_bytes / cost.retained_frames;
-    let resident = cost.resident_result_bytes.saturating_add(cost.result_mesh_bytes);
+    let resident =
+        cost.resident_result_bytes.saturating_add(cost.result_mesh_bytes).saturating_add(cost.recovery_bytes);
     let solve_fixed = cost.assembly_bytes.saturating_add(cost.transient_work_bytes).saturating_add(resident);
     let max_solve = cost.budget_bytes.saturating_sub(solve_fixed) / frame_bytes;
     let max_transport =
@@ -420,6 +421,7 @@ mod transient_cost_tests {
             nnz_lower: 0,
             bytes: assembly_bytes,
             assembly_bytes,
+            recovery_bytes: 0,
             resident_result_bytes: 0,
             result_mesh_bytes: 0,
             retained_frames: 0,
