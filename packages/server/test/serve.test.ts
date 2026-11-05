@@ -54,7 +54,9 @@ it('rejects browser/rebinding origins, invalid protocols and expired/overflow se
   expect((await request('/session',{},undefined,{'Content-Type':'text/plain'})).status).toBe(400);
   const session = (await request('/session')).body.session;
   expect((await request('/session')).status).toBe(400);
-  expect((await request('/rpc',{id:1,op:'script',payload:{}},session)).status).toBe(400);
+  const invalid=await request('/rpc',{id:1,op:'script',payload:{}},session);
+  expect(invalid.status).toBe(400);
+  expect(invalid.body.error).toEqual({code:'schema',cause:'invalid registry request',where:'rpc',suggestion:null});
   expect((await request('/rpc',{id:1,op:'query',payload:[]},session)).status).toBe(400);
   expect((await request('/rpc',{id:1,op:'replaceCommands',payload:{}},session)).status).toBe(400);
   expect((await request('/missing',{},session)).status).toBe(404);

@@ -19,6 +19,9 @@ test('@cpu optional Python notebook solves, transfers f64 numpy, plots and prese
   const code = `# %%
 import numpy as np
 import matplotlib.pyplot as plt
+await fem.geometry_add_box(name='bar',size=['1 m','100 mm','100 mm'],at=[{'value':-0.0,'unit':'m'},'0 m','0 m'])
+original = await fem.query_journal()
+assert np.signbit(original['entries'][-1]['cmd']['at'][0]['value'])
 await fem.material_add(name='steel', E='210 GPa', nu=0.3, rho='7850 kg/m^3', k='45 W/(m K)', cp='460 J/(kg K)')
 await fem.material_assign(material='steel', bodies=['bar'])
 await fem.mesh_set(mesher={'kind':'lattice','size':'100 mm'})
@@ -29,9 +32,14 @@ await fem.solve_run(step='conduct')
 # %%
 field = await fem.query_field(field='temperature', step='conduct')
 assert field['values'].dtype == np.float64
-assert abs(np.min(field['values'])-273.15)<1e-8
-assert abs(np.max(field['values'])-373.15)<1e-8
-plt.plot(np.sort(field['values'])-273.15)
+temperature = field['values'].reshape((-1,field['components']))[:,0]
+assert abs(np.min(temperature)-273.15)<1e-8
+assert abs(np.max(temperature)-373.15)<1e-8
+surface = await fem.query_surface(step='conduct')
+assert surface['resultId'] == field['resultId']
+x = np.asarray(surface['positions']).reshape((-1,3))[:,0]
+np.testing.assert_allclose(temperature,273.15+100*x,rtol=0,atol=1e-8)
+plt.plot(np.sort(temperature)-273.15)
 plt.ylabel('Temperature (degC)')
 _saved_rpc = rpc
 for _primitive in [None, 7, 'ok']:
@@ -44,8 +52,8 @@ print('E1 Python exact-field checks passed')`;
   await page.evaluate(code => window.fem.registry.dispatch({cmd:'script.setSource',code}), code);
   await expect(page.getByLabel('Python cell 2')).toBeVisible();
   await page.getByRole('button',{name:'Run all cells'}).click();
-  await expect(page.getByRole('button',{name:'Stop',exact:true})).toBeEnabled({timeout:10000});
-  await expect(page.getByRole('button',{name:'Stop',exact:true})).toBeDisabled({timeout:180000});
+  await expect(page.locator('[data-cmd="script.stop"]')).toBeEnabled({timeout:10000});
+  await expect(page.locator('[data-cmd="script.stop"]')).toBeDisabled({timeout:180000});
   await expect(page.locator('.script-out')).toContainText('E1 Python exact-field checks passed');
   await expect(page.getByAltText('Python matplotlib output 1')).toBeVisible();
   expect(workerPolicies).toHaveLength(1);

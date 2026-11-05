@@ -9,7 +9,10 @@ Issue #31 requires notebook analysis and a server without another numerical impl
 Rust's committed schema remains authoritative. `tools/codegen.mjs` now emits Python
 keyword-only dataclass envelopes and named synchronous/asynchronous methods for every engine
 Command and Query. Parameters omitted in Python stay absent on the wire; unit strings and
-structured engine errors keep their existing meaning. Hosts validate with the same engine.
+structured engine errors keep their existing meaning. Checked browser/Node requests use
+scientific JSON to preserve signed zero. Canonical Model/Journal reads also cross the
+Pyodide FFI as scientific JSON because its ordinary JS-number conversion normalizes
+integer-valued numbers to Python ints; large Result fields retain the binary path. Hosts validate with the same engine.
 
 CPython uses a dependency-free HTTP client; Pyodide uses an injected asynchronous RPC. A
 TypeScript Node host reuses the MCP host's checked WASM SessionEngine, with one private owner

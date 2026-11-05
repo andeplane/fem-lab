@@ -93,7 +93,7 @@ it('transfers independent retained meshes and f64 fields repeatedly without expo
     await expect(transport.surface({})).rejects.toMatchObject({ code: 'not-found' });
     for (const command of [
       { cmd: 'model.setName', name: 'retained transfer' },
-      { cmd: 'geometry.addBox', name: 'bar', size: ['1 m', '0.1 m', '0.1 m'] },
+      { cmd: 'geometry.addBox', name: 'bar', size: ['1 m', '0.1 m', '0.1 m'], at: [{value:-0,unit:'m'},'0 m','0 m'] },
       { cmd: 'material.add', name: 'steel', E: '210 GPa', nu: 0.3, k: '45 W/(m K)' },
       { cmd: 'material.assign', material: 'steel', bodies: ['bar'] },
       { cmd: 'mesh.set', mesher: { kind: 'lattice', size: { nx: 3, ny: 1, nz: 1 } } },
@@ -102,6 +102,9 @@ it('transfers independent retained meshes and f64 fields repeatedly without expo
       { cmd: 'step.add', name: 'heat', procedure: 'heat-steady', constraints: ['cold'], loads: ['hot'] },
       { cmd: 'solve.run', step: 'heat', solver: 'cpu-direct' },
     ]) await dispatch(command);
+    const document=await transport.query({query:'query.document'}) as {file:{journal:{entries:{cmd:{cmd:string;at?:{value:number}[]}}[]}}};
+    const original=document.file.journal.entries.find(entry=>entry.cmd.cmd==='geometry.addBox')!;
+    expect(Object.is(original.cmd.at![0]!.value,-0)).toBe(true);
     const first = direct({ query: 'query.result', step: 'heat' }).resultId as string;
     const sq = { query: 'query.surface', resultId: first } as const;
     const fq = { query: 'query.field', resultId: first, field: 'temperature' } as const;

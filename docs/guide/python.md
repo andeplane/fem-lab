@@ -21,13 +21,15 @@ print(await fem.query_model())
 # %%
 import matplotlib.pyplot as plt
 field = await fem.query_field(step='conduct', field='temperature')
-print(field['unit'], np.min(field['values']), np.max(field['values']))
-plt.plot(np.sort(field['values']))
+temperature = field['values'].reshape((-1, field['components']))[:, 0]
+print(field['unit'], np.min(temperature), np.max(temperature))
+plt.plot(np.sort(temperature))
 ```
 
 The example's `conduct` Step must already have a solved thermal Result. `query_field` returns
 scientific f64 values in SI units, independently of display units, with its retained Result
-identity and component count. Its f64 buffer is transferred to the Python Worker, copied into Pyodide memory and
+identity and component count. Reshape by `components` before selecting a component;
+temperature uses component zero and may retain unused vector-storage components. Its f64 buffer is transferred to the Python Worker, copied into Pyodide memory and
 viewed by numpy through a memoryview, following the [Pyodide buffer conversion](https://pyodide.org/en/0.29.3/usage/type-conversions.html#using-javascript-typed-arrays-from-python).
 There is no additional JSON encoding or renderer f32 conversion at this analysis boundary.
 The Script run has a maximum 30000 ms execution deadline after a separate maximum 120000 ms
@@ -95,3 +97,29 @@ plots the result and exports its replay Journal. Open `python/examples/heat_bar.
 JupyterLab for the same benchmark. The source package builds a normal wheel and installs
 with pip; this repository does not imply that a public PyPI release has been published.
 Generated Python API freshness is checked by `npm run codegen:check`.
+
+
+## Loopback registry protocol
+
+The host prints `{ "url": "http://127.0.0.1:<port>", "protocol": "femlab-rpc/1" }`
+after listening. A non-browser client opens a private engine with `POST /session`,
+`Content-Type: application/json` and `{}`. Its JSON reply contains `session`, an opaque
+capability used as the `X-Femlab-Session` header for subsequent requests. Keep it private.
+
+`POST /rpc` takes an integer correlation `id`, an operation and its schema-owned payload:
+
+```json
+{"id": 1, "op": "dispatch", "payload": {"cmd": "model.new", "name": "notebook model"}}
+```
+
+`op: "query"` takes a Query object. `op: "replaceCommands"` takes an array of engine Commands,
+prepares them in a private candidate and publishes only after complete validation; it returns
+the normalized Journal. Successful replies contain `{ id, ok: true, value }`. Errors contain
+`{ error: { code, cause, ... } }`; invalid input returns HTTP 400, an absent/expired session
+401, a browser Origin or non-loopback Host header 403, and a non-POST method 405. Requests
+within one session are serialized. Different sessions have separate Models and Journals.
+
+`POST /close` with `{}` ends the capability and releases the engine after admitted work ends.
+The host provides no CORS browser API, arbitrary script execution, file-path access or
+account/billing route. The Python client implements this protocol, finite-number JSON and
+structured engine errors; ordinary registry Commands/Queries remain the authoritative API.

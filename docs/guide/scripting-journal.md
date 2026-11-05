@@ -18,9 +18,9 @@ This snippet assumes a compatible existing Model with a Step named `static`. Rea
 
 ## Validate before execution
 
-`query.validateScript` checks source against generated API declarations without running it. `script.run` validates automatically before starting execution. Diagnostics identify a code, cause, source location and hint. Types do not establish physical correctness, object existence, termination or a converged solution.
+`query.validateScript` checks source against generated API declarations without running it. `script.run` validates TypeScript automatically before starting execution. Diagnostics identify a code, cause, source location and hint. Types do not establish physical correctness, object existence, termination or a converged solution.
 
-Scripts run in an isolated QuickJS runtime with registry access, supported console methods and timers. They do not have ordinary browser/Node filesystem, network, module-loader or environment access. Host file Commands are explicit capabilities, not ambient disk access. Account operations, secrets and consent are not delegated through Assistant scripts.
+TypeScript scripts, including Assistant scripts, run in an isolated QuickJS runtime with registry access, supported console methods and timers. They do not have ordinary browser/Node filesystem, network, module-loader or environment access. Host file Commands are explicit capabilities, not ambient disk access. Account operations, secrets and consent are not delegated through Assistant scripts.
 
 A timeout stops future script calls and terminates its runtime. Commands already admitted can finish and remain in the Journal; a timeout is not a transaction rollback. `script.stop` and `solve.cancel` have different scopes. Start a separate project or save a baseline before experimenting with a script that changes many definitions.
 
@@ -35,3 +35,13 @@ await fem.journal.redo({ steps: 1 });
 A saved `femlab/1` file contains the Model definition and Journal. Replaying restores engineering state; Results with session-local retained IDs must not be treated as portable stored simulation output. A Journal containing `solve.run` performs that solve during replay. A definition-only Journal remains unsolved until asked.
 
 Exporting a Script gives a readable/reusable sequence. A Script export is different from a JSON Model file and is not opened through the same file picker. For reproducible comparisons, keep the Model, exact inputs, relevant mesh/procedure settings, reference result and exports together. See [projects](./projects-storage.md), [import/export](./import-export.md) and [CLI/MCP](./cli-mcp.md).
+
+
+## Owner Python notebooks
+
+The Script panel also offers explicit owner-run Python cells through a lazy Pyodide Worker.
+Python has Worker JavaScript/network privileges and is not the QuickJS environment. AI
+`run_script` remains TypeScript-only; it cannot select or nest Python execution. Expanded
+engine Commands remain the Journal, while Python source/text output/plots are retained in
+complete project artifacts. Opening never executes Python. See [Python and notebooks](./python.md)
+for cells, NumPy field components, Matplotlib, limits and the server/Jupyter workflow.

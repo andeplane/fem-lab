@@ -73,7 +73,7 @@ async function callTool(registry: Registry, tool: string, input: unknown, allowe
   const args = (input ?? {}) as Record<string, unknown>;
   if (tool === RUN_SCRIPT) {
     if (args['language'] !== undefined && args['language'] !== 'typescript') throw new FemError('unsupported', 'Python notebooks require the person to press Run all cells', tool, 'use the TypeScript registry client for AI scripts');
-    return registry.dispatch({ ...args, cmd: 'script.run' });
+    return registry.dispatch({ ...args, cmd: 'script.run', language: 'typescript' });
   }
   const command = commandNameFor(tool, registry);
   if (!command) throw new FemError('not-found', `there is no tool called '${tool}'`, tool, 'call describe or use one of the names in the API reference');

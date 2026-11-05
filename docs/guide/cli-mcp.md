@@ -41,7 +41,10 @@ Engine tools are generated from the schema, with names such as `geometry_addBox`
 
 The MCP sandbox has no ambient network/filesystem or Node globals. Timeouts stop future admission, not Commands already completed. Host-specific view, file-picker, account and camera operations are not universally available in a headless process. Use the generated [reference](./api-reference.md) and [script guide](./scripting-journal.md) rather than assume every browser control maps to a working Node capability.
 
-`femlab serve` is still a planned/stubbed remote-host entry point. There is no shipped Python binding/environment in the current workspace. See [architecture and extensions](./architecture-extensions.md).
+`femlab serve` now launches the single-user loopback Node WASM registry host. The generated
+Python client can use it locally or through an SSH tunnel; optional owner-run Python
+notebooks also run in the browser. See [Python and notebooks](./python.md) for setup,
+publication status and supported host limits.
 
 ## Hosted AI HTTP integration
 

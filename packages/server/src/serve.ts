@@ -15,10 +15,15 @@ export interface ServeOptions {
   sessionMs?: number;
 }
 const normalized = (error: unknown) => {
-  const value = error as { code?: string; cause?: string; where?: string; suggestedCommand?: string; message?: string };
-  // WASM errors may arrive as a serialized engine Error.
-  if (typeof error === 'string') { try { return JSON.parse(error) as unknown; } catch { /* plain failure */ } }
-  return { code: value?.code ?? 'internal', cause: value?.cause ?? value?.message ?? String(error), ...(value?.where ? { where: value.where } : {}) };
+  let parsed = error;
+  if (typeof error === 'string') { try { parsed = JSON.parse(error) as unknown; } catch { /* ordinary text error */ } }
+  const value = parsed as { code?: string; cause?: string; where?: string; suggestion?: string; message?: string } | null;
+  return {
+    code: typeof value?.code === 'string' ? value.code : 'internal',
+    cause: typeof value?.cause === 'string' ? value.cause : value?.message ?? String(error),
+    where: value?.where ?? null,
+    suggestion: value?.suggestion ?? null,
+  };
 };
 export function registryServer(options: ServeOptions) {
   const sessions = new Map<string, { provider: EngineProvider; at: number; tail: Promise<unknown> }>();
@@ -42,8 +47,8 @@ export function registryServer(options: ServeOptions) {
     // A website cannot acquire a notebook engine by using a CORS/preflight or form request.
     // Also reject rebinding Host headers even though the listener is loopback-only.
     const host = req.headers.host ?? '';
-    if (req.headers.origin || !/^(127\.0\.0\.1|localhost|\[::1\])(?::[0-9]+)?$/.test(host)) { json(res, 403, { error: { code: 'unsupported', cause: 'loopback client required' } }); return; }
-    if (req.method !== 'POST') { json(res, 405, { error: { code: 'unsupported', cause: 'use POST' } }); return; }
+    if (req.headers.origin || !/^(127\.0\.0\.1|localhost|\[::1\])(?::[0-9]+)?$/.test(host)) { json(res, 403, { error: { code: 'unsupported', cause: 'loopback client required', where: 'request', suggestion: 'use a CPython client or an SSH tunnel' } }); return; }
+    if (req.method !== 'POST') { json(res, 405, { error: { code: 'unsupported', cause: 'use POST', where: 'method', suggestion: 'POST /session or /rpc' } }); return; }
     try {
       const value = await body(req);
       const now = options.now();
@@ -56,10 +61,10 @@ export function registryServer(options: ServeOptions) {
       }
       const key = req.headers['x-femlab-session'];
       const session = typeof key === 'string' ? sessions.get(key) : undefined;
-      if (!session) { json(res, 401, { error: { code: 'session.expired', cause: 'open a new notebook Client' } }); return; }
+      if (!session) { json(res, 401, { error: { code: 'session.expired', cause: 'open a new notebook Client', where: 'session', suggestion: 'create a new Client' } }); return; }
       session.at = now;
       if (req.url === '/close') { await drop(key as string); json(res, 200, { closed: true }); return; }
-      if (req.url !== '/rpc') { json(res, 404, { error: { code: 'not-found', cause: 'no such route' } }); return; }
+      if (req.url !== '/rpc') { json(res, 404, { error: { code: 'not-found', cause: 'no such route', where: 'route', suggestion: 'use /session, /rpc or /close' } }); return; }
       const { id, op, payload } = value;
       if (!Number.isSafeInteger(id) || (id as number) < 0 || !['dispatch', 'query', 'replaceCommands'].includes(String(op))) throw new FemError('schema', 'invalid registry request', 'rpc');
       if (!payload || typeof payload !== 'object') throw new FemError('schema', 'payload must be an object or command list', 'payload');

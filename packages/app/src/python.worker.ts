@@ -1,5 +1,6 @@
 // Python is optional and only loaded after an explicit Python run. It never holds the engine.
 // Version pinned to the documented Pyodide release, separate from the landing bundle.
+import { scientificJson } from '../../registry/src/scientific-json';
 import client from '../../../python/femlab/client.py?raw';
 import generated from '../../../python/femlab/generated.py?raw';
 import init from '../../../python/femlab/__init__.py?raw';
@@ -15,10 +16,17 @@ interface Pyodide {
 let python: Pyodide;
 let seq = 0;
 const pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
-const rpc = (op: string, proxy: { toJs(options: unknown): Record<string, unknown> }) => new Promise((resolve, reject) => {
-  const id = ++seq; pending.set(id, { resolve, reject });
-  self.postMessage({ kind: 'rpc', id, op, payload: proxy.toJs({ dict_converter: Object.fromEntries }) });
-});
+const rpc = (op: string, proxy: { toJs(options: unknown): Record<string, unknown> }) => {
+  const payload = proxy.toJs({ dict_converter: Object.fromEntries });
+  // Pyodide turns integer-valued JS numbers into Python ints, including -0. Preserve the
+  // canonical Model/Journal formats as scientific JSON; large result fields stay binary.
+  const canonical = op === 'query' && ['query.journal', 'query.document'].includes(String(payload['query']));
+  return new Promise((resolve, reject) => {
+    const id = ++seq;
+    pending.set(id, { resolve: value => { try { resolve(canonical ? scientificJson(value) : value); } catch (error) { reject(error); } }, reject });
+    self.postMessage({ kind: 'rpc', id, op, payload });
+  });
+};
 const post = (kind: string, value?: unknown) => self.postMessage({ kind, value });
 self.onmessage = async (event: MessageEvent<{ kind: string; id?: number; value?: unknown; error?: string; code?: string }>) => {
   const msg = event.data;
@@ -37,10 +45,12 @@ self.onmessage = async (event: MessageEvent<{ kind: string; id?: number; value?:
       python.registerJsModule('_femlab_bridge', { rpc, plot: (image: string) => post('plot', image) });
       python.setStdout({ batched: value => post('log', value) }); python.setStderr({ batched: value => post('log', value) });
       await python.loadPackage('numpy');
-      await python.runPythonAsync(`import femlab, numpy as np
+      await python.runPythonAsync(`import femlab, numpy as np, json
 from _femlab_bridge import rpc
 async def _registry(op, payload):
     value = await rpc(op, payload)
+    if op == 'query' and payload.get('query') in ('query.journal', 'query.document'):
+        return json.loads(value)
     result = value.to_py() if hasattr(value, 'to_py') else value
     if op == 'query' and payload.get('query') == 'query.field':
         # to_py copies the typed buffer into Python memory; numpy views that memoryview.

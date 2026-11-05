@@ -127,6 +127,21 @@ describe('the agent loop', () => {
     expect(transport.dispatch).not.toHaveBeenCalled();
   });
 
+  it('pins omitted AI script language to TypeScript after the owner selects Python', async () => {
+    const transport = fakeTransport();
+    transport.query = vi.fn(async () => ({ entries: [], revision: 0, canUndo: false, canRedo: false })) as never;
+    const host = fakeHost(transport);
+    let ownerLanguage = 'typescript';
+    host.script.setLanguage = language => { ownerLanguage = language; };
+    const registry = new Registry({ schema: schema as unknown as EngineSchema, host });
+    await registry.dispatch({ cmd: 'script.setLanguage', language: 'python' });
+    expect(ownerLanguage).toBe('python');
+    const { provider } = fakeProvider([[{ type: 'tool_use', id: 'default', name: 'run_script', input: { code: 'fem.model.new({})' } }], FINAL_ROUND]);
+    await drain(runTurn({ provider, registry, model: 'test', system: '', tools: toToolDefinitions(registry), messages: [] }));
+    expect(host.script.run).toHaveBeenCalledWith('fem.model.new({})', undefined, 'typescript');
+    expect(ownerLanguage).toBe('python');
+  });
+
   it('cannot reach owner Python via a forged host tool or an overridden engine Command',async()=>{
     const {registry,dispatched}=fixture();const spy=vi.spyOn(registry,'dispatch');
     const {provider}=fakeProvider([[{type:'tool_use',id:'alias',name:'script_run',input:{code:'from js import fetch',language:'python'}},{type:'tool_use',id:'private',name:'script_setLanguage',input:{language:'python'}},{type:'tool_use',id:'injected',name:'geometry_addBox',input:{cmd:'script.run',language:'python',code:'from js import fetch',name:'safe',size:['1 m','1 m','1 m']}}],FINAL_ROUND]);
