@@ -18359,7 +18359,6 @@ fn implicit_cancellation_at_time_stepping_and_recovery_returns_a_structured_erro
     }
 }
 
-
 /// #343: full deviatoric quadrature survives; only the physical-volume mean trace changes.
 #[test]
 fn mean_dilatation_quad4_has_independent_polynomial_and_weighted_axisymmetric_oracles() {

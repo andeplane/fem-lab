@@ -2246,12 +2246,6 @@ export type Command =
     }
   | {
       /**
-       * Structural element formulation for this Step; omitted inherits mesh.set. Mean-dilatation
-       * uses small-strain Hex8/Quad4 B-bar in solid3d, planeStrain and axisymmetric; plane-stress
-       * Quad4 and other kinds retain full integration. Finite-deformation B-bar is unsupported.
-       */
-      formulation?: Formulation | null;
-      /**
        * Analysis Step name; reusing it replaces the Step definition.
        */
       name: string;
@@ -2288,6 +2282,13 @@ export type Command =
        * modal basis.
        */
       after?: string | null;
+      /**
+       * Structural element formulation for this Step; omitted inherits mesh.set. Mean-dilatation
+       * uses small-strain Hex8/Quad4 B-bar in solid3d, planeStrain and axisymmetric; plane-stress
+       * Quad4 and other kinds retain full integration. Finite-deformation B-bar is unsupported.
+       * This structural setting has no effect on heat Steps.
+       */
+      formulation?: Formulation | null;
       /**
        * Number of requested modes or buckling factors; omitted means six for modal or one for buckling.
        */
@@ -6729,12 +6730,6 @@ export type QueryResult_Command =
     }
   | {
       /**
-       * Structural element formulation for this Step; omitted inherits mesh.set. Mean-dilatation
-       * uses small-strain Hex8/Quad4 B-bar in solid3d, planeStrain and axisymmetric; plane-stress
-       * Quad4 and other kinds retain full integration. Finite-deformation B-bar is unsupported.
-       */
-      formulation?: Formulation | null;
-      /**
        * Analysis Step name; reusing it replaces the Step definition.
        */
       name: string;
@@ -6773,6 +6768,13 @@ export type QueryResult_Command =
        * modal basis.
        */
       after?: string | null;
+      /**
+       * Structural element formulation for this Step; omitted inherits mesh.set. Mean-dilatation
+       * uses small-strain Hex8/Quad4 B-bar in solid3d, planeStrain and axisymmetric; plane-stress
+       * Quad4 and other kinds retain full integration. Finite-deformation B-bar is unsupported.
+       * This structural setting has no effect on heat Steps.
+       */
+      formulation?: Formulation | null;
       /**
        * Number of requested modes or buckling factors; omitted means six for modal or one for buckling.
        */
@@ -9584,12 +9586,6 @@ export type ModelFile_Command =
     }
   | {
       /**
-       * Structural element formulation for this Step; omitted inherits mesh.set. Mean-dilatation
-       * uses small-strain Hex8/Quad4 B-bar in solid3d, planeStrain and axisymmetric; plane-stress
-       * Quad4 and other kinds retain full integration. Finite-deformation B-bar is unsupported.
-       */
-      formulation?: Formulation | null;
-      /**
        * Analysis Step name; reusing it replaces the Step definition.
        */
       name: string;
@@ -9628,6 +9624,13 @@ export type ModelFile_Command =
        * modal basis.
        */
       after?: string | null;
+      /**
+       * Structural element formulation for this Step; omitted inherits mesh.set. Mean-dilatation
+       * uses small-strain Hex8/Quad4 B-bar in solid3d, planeStrain and axisymmetric; plane-stress
+       * Quad4 and other kinds retain full integration. Finite-deformation B-bar is unsupported.
+       * This structural setting has no effect on heat Steps.
+       */
+      formulation?: Formulation | null;
       /**
        * Number of requested modes or buckling factors; omitted means six for modal or one for buckling.
        */
@@ -12533,12 +12536,6 @@ export type PortableProject_Command =
     }
   | {
       /**
-       * Structural element formulation for this Step; omitted inherits mesh.set. Mean-dilatation
-       * uses small-strain Hex8/Quad4 B-bar in solid3d, planeStrain and axisymmetric; plane-stress
-       * Quad4 and other kinds retain full integration. Finite-deformation B-bar is unsupported.
-       */
-      formulation?: Formulation | null;
-      /**
        * Analysis Step name; reusing it replaces the Step definition.
        */
       name: string;
@@ -12577,6 +12574,13 @@ export type PortableProject_Command =
        * modal basis.
        */
       after?: string | null;
+      /**
+       * Structural element formulation for this Step; omitted inherits mesh.set. Mean-dilatation
+       * uses small-strain Hex8/Quad4 B-bar in solid3d, planeStrain and axisymmetric; plane-stress
+       * Quad4 and other kinds retain full integration. Finite-deformation B-bar is unsupported.
+       * This structural setting has no effect on heat Steps.
+       */
+      formulation?: Formulation | null;
       /**
        * Number of requested modes or buckling factors; omitted means six for modal or one for buckling.
        */
@@ -15506,12 +15510,6 @@ export type ReadReply_Command =
     }
   | {
       /**
-       * Structural element formulation for this Step; omitted inherits mesh.set. Mean-dilatation
-       * uses small-strain Hex8/Quad4 B-bar in solid3d, planeStrain and axisymmetric; plane-stress
-       * Quad4 and other kinds retain full integration. Finite-deformation B-bar is unsupported.
-       */
-      formulation?: Formulation | null;
-      /**
        * Analysis Step name; reusing it replaces the Step definition.
        */
       name: string;
@@ -15550,6 +15548,13 @@ export type ReadReply_Command =
        * modal basis.
        */
       after?: string | null;
+      /**
+       * Structural element formulation for this Step; omitted inherits mesh.set. Mean-dilatation
+       * uses small-strain Hex8/Quad4 B-bar in solid3d, planeStrain and axisymmetric; plane-stress
+       * Quad4 and other kinds retain full integration. Finite-deformation B-bar is unsupported.
+       * This structural setting has no effect on heat Steps.
+       */
+      formulation?: Formulation | null;
       /**
        * Number of requested modes or buckling factors; omitted means six for modal or one for buckling.
        */
@@ -18241,12 +18246,6 @@ export type DocumentSnapshot_Command =
     }
   | {
       /**
-       * Structural element formulation for this Step; omitted inherits mesh.set. Mean-dilatation
-       * uses small-strain Hex8/Quad4 B-bar in solid3d, planeStrain and axisymmetric; plane-stress
-       * Quad4 and other kinds retain full integration. Finite-deformation B-bar is unsupported.
-       */
-      formulation?: Formulation | null;
-      /**
        * Analysis Step name; reusing it replaces the Step definition.
        */
       name: string;
@@ -18285,6 +18284,13 @@ export type DocumentSnapshot_Command =
        * modal basis.
        */
       after?: string | null;
+      /**
+       * Structural element formulation for this Step; omitted inherits mesh.set. Mean-dilatation
+       * uses small-strain Hex8/Quad4 B-bar in solid3d, planeStrain and axisymmetric; plane-stress
+       * Quad4 and other kinds retain full integration. Finite-deformation B-bar is unsupported.
+       * This structural setting has no effect on heat Steps.
+       */
+      formulation?: Formulation | null;
       /**
        * Number of requested modes or buckling factors; omitted means six for modal or one for buckling.
        */
@@ -20352,17 +20358,17 @@ export interface ShellPly {
   angle: number;
 }
 /**
- * A Step. Everything after `output` belongs to one procedure each and is `None` for the rest;
+ * A Step with optional procedure settings and a structural formulation override.
  * `after` names the Step whose Result this one continues (plan B §2.2).
  */
 export interface Step {
-  formulation?: Formulation | null;
   name: string;
   procedure: Procedure;
   constraints: string[];
   loads: string[];
   output: Field[];
   after?: string | null;
+  formulation?: Formulation | null;
   nModes?: number | null;
   shift?: number | null;
   dt?: number | null;
