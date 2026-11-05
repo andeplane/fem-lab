@@ -57,7 +57,8 @@ service. This server uses the CPU Node WASM engine with one worker; native serve
 execution is not provided by this host. Existing `query.cost` planning limits still apply. Package publication is separate from source installation and is tracked in #31.
 
 Prerequisites: Python 3.10 or newer, Node 22 or newer, a FEM Lab checkout and its Node WASM
-engine build. From the checkout:
+engine build. The `femlab serve` launcher also needs the [native CLI](./cli-mcp.md) installed;
+the direct Node command below does not. From the checkout:
 
 ```sh
 npm ci
@@ -75,6 +76,11 @@ allows at most 16 sessions, expires inactive sessions after 30 minutes, and reje
 over 64 MiB. There is no public bind option or account/payment endpoint. Do not reverse-proxy
 this single-user host publicly. For a remote machine use an SSH tunnel, for example
 `ssh -L 7777:127.0.0.1:7777 home-mini`, with the host running on that machine.
+The client has a 120-second HTTP timeout by default (`Client(url, timeout=...)`). A timeout
+or notebook interrupt does not preempt an in-progress synchronous Node WASM solve. Closing
+a session waits for its current request before releasing the engine; stopping the owned
+server process terminates compute. Use the browser notebook Stop action for its disposable
+Python Worker, not as cancellation of a separate CPython server request.
 
 ```python
 from femlab import Client
