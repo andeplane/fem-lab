@@ -174,6 +174,25 @@ fn energy(m: &Csr, k: &Csr, st: &mut State) -> f64 {
     kinetic + strain
 }
 
+/// Check free inertia for a built-in consistently assembled mass, not an arbitrary CSR.
+///
+/// Nonzero built-in element masses are full-rank positive-weight displacement Gram matrices
+/// on their active local DOFs; validated nodal masses add nonnegative diagonals. Implicit
+/// permits only prescribed/inert DOF removal, not MPC transforms. A null vector can therefore
+/// live only on unsupported DOFs: a positive finite diagonal at every free DOF certifies that
+/// support. This linear scan must precede solver zero-residual shortcuts, even at zero load.
+pub fn validate_assembled_mass(mass: &Csr) -> Result<(), Error> {
+    if mass.vals.iter().any(|value| !value.is_finite()) || mass.diag().iter().any(|value| *value <= 0.0) {
+        return Err(Error::new(
+            ErrorCode::ModelIllPosed,
+            "the mass matrix is singular or nonfinite on the free DOFs: every free displacement or rotation needs positive finite inertia",
+        )
+        .at("materials")
+        .suggest("material.add with rho on the active Bodies, or constraint.fix the massless DOFs"));
+    }
+    Ok(())
+}
+
 /// Integrate one implicit dynamics Step.
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
@@ -272,19 +291,8 @@ pub async fn run(
         *qi = g(0.0) * fi - *qi;
     }
     let red0 = reduce(&m, &q, &rc0, &[]);
-    let (mut sol_f, mut solver, _) =
-        solve_reusable(&red0.k_ff, &red0.f_f, opts, pool, gpu, &mut progress).await.map_err(|error| {
-            if error.code == ErrorCode::SolveNotPositiveDefinite {
-                Error::new(
-                    ErrorCode::ModelIllPosed,
-                    "the mass matrix is singular on the free DOFs: every Body with a free DOF needs a density",
-                )
-                .at("materials")
-                .suggest("material.add with rho, e.g. \"7850 kg/m^3\", then material.assign")
-            } else {
-                error
-            }
-        })?;
+    validate_assembled_mass(&red0.k_ff)?;
+    let (mut sol_f, mut solver, _) = solve_reusable(&red0.k_ff, &red0.f_f, opts, pool, gpu, &mut progress).await?;
     st.a = expand(&red0, &sol_f);
     drop(red0);
     let e0 = energy(&m, &a.k, &mut st);

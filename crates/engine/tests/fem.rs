@@ -18113,3 +18113,245 @@ fn implicit_gpu_backend_matches_direct_and_cpu_pcg_for_dynamic_cases() {
         }
     }
 }
+// ----------------------------------------------------- implicit inertia admission (#846)
+
+/// #846: positive consistent element Gram matrices justify the support check. A positive
+/// diagonal alone would not certify an arbitrary PSD matrix; these are the actual kernels.
+#[test]
+fn consistent_builtin_mass_is_positive_definite_on_every_active_local_dof() {
+    let mat = steel();
+    for kind in ALL_KINDS {
+        for coords in [simple(kind).0, distorted(kind)] {
+            let mut ids = idealisations(kind);
+            if kind.dim() == 2 {
+                ids.push(Idealisation::Axisymmetric { twist: true });
+            }
+            for id in ids {
+                let dpn = if id == (Idealisation::Axisymmetric { twist: true }) { 3 } else { kind.dim() };
+                let nd = kind.n_nodes() * dpn;
+                let c = ctx(&coords, &mat, id.clone(), Formulation::Full);
+                let mut m = vec![0.0; nd * nd];
+                element_for(kind).mass(&c, &mut m, false).expect("valid positive-density mass");
+                assert!(is_spd(&m, nd), "{kind:?}, {id:?}: full-rank consistent mass");
+            }
+        }
+    }
+    let coords = truss_coords();
+    let section = truss_section();
+    let context = truss_ctx(&coords, &mat, Some(&section), None);
+    let mut mass = vec![0.0; 36];
+    element_for(ElementKind::Truss2).mass(&context, &mut mass, false).unwrap();
+    assert!(is_spd(&mass, 6));
+    // Beam2 and Shell4's full consistent (rotational/drill included) SPD gates are existing
+    // a_beam_element_has_exactly_six_zero_energy_modes / shell_element_has_six_rigid_modes_and_positive_mass.
+}
+
+/// Every backend must reject zero or partly missing inertia before any solver shortcut or device setup.
+#[test]
+fn implicit_rejects_zero_and_partial_free_mass_for_zero_and_nonzero_loads() {
+    let mesh = two_blocks(ElementKind::Hex8, [1, 1, 1], [1, 1, 1], [1.0, 0.1, 0.1], 0.1);
+    let sets = sets_of(&mesh);
+    let bodies = two_bodies();
+    for partial in [false, true] {
+        for loaded in [false, true] {
+            let mut p = problem(
+                &mesh,
+                &sets,
+                &bodies,
+                Idealisation::Solid3d,
+                Formulation::Full,
+                vec![fix("a-root", "a.xmin", [true; 3], 0.0), fix("b-root", "b.xmin", [true; 3], 0.0)],
+            );
+            let mut massless = steel();
+            massless.rho = 0.0;
+            p.materials = vec![massless, steel()];
+            p.material_of_block = vec![Some(0), Some(usize::from(partial))];
+            if loaded {
+                p.loads = vec![Load::Traction { faces: "b.xmax".into(), t: [1e6, 0.0, 0.0] }];
+            }
+            for backend in [Solver::CpuPcg, Solver::CpuDirect, Solver::GpuPcg] {
+                let mut step = implicit_step(1e-5, 2e-5, 0.0, (0.0, 0.0), None, 1);
+                let Step::Implicit { solver, .. } = &mut step else { panic!() };
+                solver.solver = backend;
+                let error = run_step(&p, &step).expect_err("every free DOF needs inertia even at zero load");
+                assert_eq!((error.code, error.where_.as_deref()), (ErrorCode::ModelIllPosed, Some("materials")));
+                assert!(error.cause.contains("mass matrix"));
+            }
+        }
+    }
+    // Finite positive density can overflow its assembled measure. An invalid matrix is
+    // refused before zero RHS can hide it or put nonfinite state into a history.
+    let huge = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([10.0; 3]);
+    let huge_sets = sets_of(&huge);
+    let body = one_body();
+    let mut p = problem(
+        &huge,
+        &huge_sets,
+        &body,
+        Idealisation::Solid3d,
+        Formulation::Full,
+        vec![fix("root", "xmin", [true; 3], 0.0)],
+    );
+    p.materials[0].rho = f64::MAX;
+    assert_eq!(
+        run_step(&p, &implicit_step(1e-5, 2e-5, 0.0, (0.0, 0.0), None, 1)).unwrap_err().code,
+        ErrorCode::ModelIllPosed
+    );
+}
+
+/// Admission follows free assembled inertia, not a blanket rule that every Body needs rho.
+#[test]
+fn implicit_allows_a_fully_held_massless_body_beside_a_massive_body() {
+    let mesh = two_blocks(ElementKind::Hex8, [1, 1, 1], [1, 1, 1], [1.0, 0.1, 0.1], 0.1);
+    let mut sets = sets_of(&mesh);
+    sets.insert(
+        "massless".into(),
+        ResolvedSet { kind: SetKind::Node, nodes: (0..8).collect(), faces: vec![], elems: vec![] },
+    );
+    let bodies = two_bodies();
+    let mut p = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::Full,
+        vec![fix("hold", "massless", [true; 3], 0.0), fix("root", "b.xmin", [true; 3], 0.0)],
+    );
+    let mut zero = steel();
+    zero.rho = 0.0;
+    p.materials = vec![zero, steel()];
+    p.material_of_block = vec![Some(0), Some(1)];
+    for loaded in [false, true] {
+        p.loads = if loaded { vec![Load::Traction { faces: "b.xmax".into(), t: [1e6, 0.0, 0.0] }] } else { vec![] };
+        for backend in [Solver::CpuDirect, Solver::CpuPcg] {
+            let mut step = implicit_step(1e-5, 2e-5, 0.0, (0.0, 0.0), None, 1);
+            let Step::Implicit { solver, .. } = &mut step else { panic!() };
+            solver.solver = backend;
+            let result = run_step(&p, &step).expect("held zero-mass rows are not unknowns");
+            assert_eq!(result.solver.solver, solver_name(backend));
+            assert_eq!(result.history.unwrap().times.len(), 3);
+        }
+    }
+}
+
+/// Real assembler point-mass contributions can supply otherwise absent free inertia. This
+/// tests mass admission itself; implicit coupling support is a separate, unchanged limit.
+#[test]
+fn assembled_nodal_mass_supplies_zero_density_free_dofs() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([1.0, 0.1, 0.1]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let mut p = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::Full,
+        vec![fix("root", "xmin", [true; 3], 0.0)],
+    );
+    p.materials[0].rho = 0.0;
+    p.points =
+        (0..mesh.n_nodes()).map(|node| PointMass { name: format!("m{node}"), node: node as u32, mass: 2.0 }).collect();
+    let rc = resolve(&p).unwrap();
+    let pat = pattern(&mesh, 3);
+    let mass = assemble_mass(&p, &pat, false).unwrap();
+    let reduced = reduce(&mass, &vec![0.0; mass.n], &rc, &[]);
+    femlab_engine::procedure::implicit::validate_assembled_mass(&reduced.k_ff)
+        .expect("actual point masses supply inertia");
+    for backend in [Solver::CpuDirect, Solver::CpuPcg] {
+        let rhs = vec![4.0; reduced.k_ff.n];
+        let options = SolveOptions { solver: backend, ..SolveOptions::default() };
+        let (acceleration, _) =
+            pollster::block_on(solve(&reduced.k_ff, &rhs, &options, &Pool::new(2), None, &mut nop)).unwrap();
+        assert!(acceleration.iter().all(|a| (*a - 2.0).abs() < 1e-12));
+    }
+    // One absent nodal mass leaves exactly those active DOFs without inertia.
+    let unsupported = sets["xmax"].nodes[0];
+    p.points.retain(|point| point.node != unsupported);
+    let mass = assemble_mass(&p, &pat, false).unwrap();
+    let reduced = reduce(&mass, &vec![0.0; mass.n], &rc, &[]);
+    assert_eq!(
+        femlab_engine::procedure::implicit::validate_assembled_mass(&reduced.k_ff).unwrap_err().code,
+        ErrorCode::ModelIllPosed
+    );
+}
+
+#[cfg(feature = "gpu-tests")]
+#[test]
+fn implicit_mass_admission_is_rhs_independent_with_an_actual_gpu() {
+    #[cfg(target_os = "linux")]
+    let backends = wgpu::Backends::VULKAN;
+    #[cfg(not(target_os = "linux"))]
+    let backends = femlab_engine::gpu::Gpu::default_backends();
+    let gpu = pollster::block_on(femlab_engine::gpu::Gpu::request(backends)).unwrap();
+    println!("846 actual adapter: {}", gpu.adapter);
+    let mesh = two_blocks(ElementKind::Hex8, [1, 1, 1], [1, 1, 1], [1.0, 0.1, 0.1], 0.1);
+    let sets = sets_of(&mesh);
+    let bodies = two_bodies();
+    let mut step = implicit_step(1e-5, 2e-5, 0.0, (0.0, 0.0), None, 1);
+    let Step::Implicit { solver, .. } = &mut step else { panic!() };
+    solver.solver = Solver::GpuPcg;
+    for partial in [false, true] {
+        for loaded in [false, true] {
+            let mut p = problem(
+                &mesh,
+                &sets,
+                &bodies,
+                Idealisation::Solid3d,
+                Formulation::Full,
+                vec![fix("a-root", "a.xmin", [true; 3], 0.0), fix("b-root", "b.xmin", [true; 3], 0.0)],
+            );
+            let mut zero = steel();
+            zero.rho = 0.0;
+            p.materials = vec![zero, steel()];
+            p.material_of_block = vec![Some(0), Some(usize::from(partial))];
+            if loaded {
+                p.loads = vec![Load::Traction { faces: "b.xmax".into(), t: [1e6, 0.0, 0.0] }];
+            }
+            let error =
+                pollster::block_on(procedure::run(&p, &step, &Pool::new(2), Some(&gpu), None, &mut nop)).unwrap_err();
+            assert_eq!((error.code, error.where_.as_deref()), (ErrorCode::ModelIllPosed, Some("materials")));
+            p.materials[0].rho = DENSITY;
+            let result =
+                pollster::block_on(procedure::run(&p, &step, &Pool::new(2), Some(&gpu), None, &mut nop)).unwrap();
+            assert_eq!(result.solver.solver, "gpu-pcg");
+        }
+    }
+}
+
+/// #846/#396: a host must be able to cancel after an actual increment and before recovery.
+/// Solver setup/refinement add progress events, so target the operation instead of an ordinal.
+#[test]
+fn implicit_cancellation_at_time_stepping_and_recovery_returns_a_structured_error() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([1.0, 0.1, 0.1]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let mut p = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::Full,
+        vec![fix("root", "xmin", [true; 3], 0.0)],
+    );
+    p.loads = vec![Load::Traction { faces: "xmax".into(), t: [1e6, 0.0, 0.0] }];
+    for backend in [Solver::CpuDirect, Solver::CpuPcg] {
+        let mut step = implicit_step(1e-5, 2e-5, 0.0, (0.0, 0.0), None, 1);
+        let Step::Implicit { solver, .. } = &mut step else { panic!() };
+        solver.solver = backend;
+        for (phase, message) in [("solve", "stepping in time"), ("post", "recovering fields")] {
+            let mut observed = false;
+            let mut observer = |progress: Progress| {
+                let cancel = progress.phase == phase && progress.message == message;
+                observed |= cancel;
+                !cancel
+            };
+            let error = pollster::block_on(procedure::run(&p, &step, &Pool::new(2), None, None, &mut observer))
+                .expect_err("the host cancels an actual operation phase");
+            assert!(observed, "the {phase} operation was reached");
+            assert_eq!(error, Error::cancelled());
+        }
+        let completed = run_step(&p, &step).expect("a fresh run after cancellation still completes");
+        assert_eq!(completed.history.unwrap().times.len(), 3);
+    }
+}
