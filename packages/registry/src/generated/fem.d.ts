@@ -388,12 +388,21 @@ export interface Fem {
      * joints of beam Bodies have: on any other node it has nothing to act on and the Step
      * fails with model.ill-posed naming the Load. Right-handed about each axis, in the
      * Model's torque unit ("5 kN m").
+     *
+     * In elastic corotational `static-nonlinear` beams these are constant generalized
+     * coefficients conjugate to the total global rotation vector: virtual work is
+     * `total · delta(rotationVector)`. A fixed-axis planar end moment has the ordinary
+     * physical moment interpretation. Arbitrary three-dimensional physical global dead
+     * torques and follower torques are unsupported: their SO(3) rotation-Jacobian pullback
+     * is not implemented. Do not pass physical spatial torque components as though they
+     * were these generalized coefficients.
      */
     moment(args: Omit<Extract<Command, { cmd: 'load.moment' }>, 'cmd'>): Promise<Ack>;
     /**
      * Gravity (or any uniform acceleration) as a body force on every Body whose Material has
      * a density; Bodies without one are skipped and listed in the warnings. Explicit Steps
      * apply gravity with their lumped inertia (m_i g); static Steps use consistent body forces.
+     * Elastic corotational beam2 members in static-nonlinear explicitly reject this Load.
      */
     gravity(args: Omit<Extract<Command, { cmd: 'load.gravity' }>, 'cmd'>): Promise<Ack>;
     /**

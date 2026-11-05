@@ -230,7 +230,6 @@ jobs:
             packages/app/src/generated/wasm-threads
             tools/wasm-node
             tools/project-io
-            engine.schema.json
 
   # Four parallel slices of what `web` runs on main, each about a minute of work.
   web:

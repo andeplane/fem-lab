@@ -19194,7 +19194,7 @@ fn corotational_beam_rigid_rotation_translation_and_coordinate_frame_are_objecti
         let cross = [axis[1] * v[2] - axis[2] * v[1], axis[2] * v[0] - axis[0] * v[2], axis[0] * v[1] - axis[1] * v[0]];
         let dot: f64 = axis.iter().zip(v).map(|(a, b)| a * b).sum();
         std::array::from_fn::<_, 3, _>(|i| {
-            angle.cos() * v[i] + angle.sin() * cross[i] + (1.0 - angle.cos()) * dot * axis[i]
+            libm::cos(angle) * v[i] + libm::sin(angle) * cross[i] + (1.0 - libm::cos(angle)) * dot * axis[i]
         })
     };
     let mut rigid = [0.0; 12];
@@ -19236,20 +19236,20 @@ fn corotational_beam_rigid_rotation_translation_and_coordinate_frame_are_objecti
     // Superpose a rigid motion on the deformed beam, keeping the reference geometry fixed.
     // Independent unit-quaternion composition supplies the transformed total rotations.
     let qs = [
-        (angle / 2.0).cos(),
-        axis[0] * (angle / 2.0).sin(),
-        axis[1] * (angle / 2.0).sin(),
-        axis[2] * (angle / 2.0).sin(),
+        libm::cos(angle / 2.0),
+        axis[0] * libm::sin(angle / 2.0),
+        axis[1] * libm::sin(angle / 2.0),
+        axis[2] * libm::sin(angle / 2.0),
     ];
     let mut superposed = [0.0; 12];
     for node in 0..2 {
         let r = [u[node * 6 + 3], u[node * 6 + 4], u[node * 6 + 5]];
         let norm = r.iter().map(|v| v * v).sum::<f64>().sqrt();
         let qr = [
-            (norm / 2.0).cos(),
-            r[0] * (norm / 2.0).sin() / norm,
-            r[1] * (norm / 2.0).sin() / norm,
-            r[2] * (norm / 2.0).sin() / norm,
+            libm::cos(norm / 2.0),
+            r[0] * libm::sin(norm / 2.0) / norm,
+            r[1] * libm::sin(norm / 2.0) / norm,
+            r[2] * libm::sin(norm / 2.0) / norm,
         ];
         let q = [
             qs[0] * qr[0] - qs[1] * qr[1] - qs[2] * qr[2] - qs[3] * qr[3],
@@ -19258,7 +19258,7 @@ fn corotational_beam_rigid_rotation_translation_and_coordinate_frame_are_objecti
             qs[0] * qr[3] + qs[1] * qr[2] - qs[2] * qr[1] + qs[3] * qr[0],
         ];
         let norm = (q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
-        let theta = 2.0 * norm.atan2(q[0]);
+        let theta = 2.0 * libm::atan2(norm, q[0]);
         let current = [
             coords[node * 3] + u[node * 6],
             coords[node * 3 + 1] + u[node * 6 + 1],
@@ -19353,11 +19353,14 @@ fn corotational_beam_end_moment_converges_to_circular_elastica_at_finite_angles(
             assert_eq!(solutions[0], solutions[1], "worker count must not alter the numerical answer");
             let res = &solutions[0];
             let u = &res.history.as_ref().unwrap().values.last().unwrap();
-            let expected = [theta.sin() / theta, (1.0 - theta.cos()) / theta];
+            let expected = [libm::sin(theta) / theta, (1.0 - libm::cos(theta)) / theta];
             let tip = [1.0 + u[6], u[7]];
             let error = ((tip[0] - expected[0]).powi(2) + (tip[1] - expected[1]).powi(2)).sqrt();
             errors.push(error);
-            assert!(error < 0.01, "n={n} theta={theta} tip={tip:?} exact={expected:?} error={error}");
+            assert!(
+                error < 0.01 * (expected[0] * expected[0] + expected[1] * expected[1]).sqrt(),
+                "n={n} theta={theta} tip={tip:?} exact={expected:?} error={error}"
+            );
             assert!((u[11] - theta).abs() < 1e-8, "tip rotation {} vs {theta}", u[11]);
             // Every section has kappa=M/EI. Original endpoints are nodes 0/1;
             // the mesher appends interior nodes, so use each node's reference coordinate.
