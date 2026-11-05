@@ -56,3 +56,9 @@ request-status recovery or retry with that same key. Confirmed usage replays its
 existing receipt; dispatched usage without final metering remains pending until
 recovery resolves it. A restarting service can return `service-draining` with a
 suggestion to retry using the same request key.
+
+Stopping a local stream requests cancellation. An intervening hosted proxy can keep
+an upstream response running, so stopping the reader does not guarantee immediate
+supplier cancellation. Later confirmed usage can still settle against the original
+reservation. Pending usage keeps its hold until authoritative recovery; retrying
+with the same key retrieves that outcome without creating another generation.
