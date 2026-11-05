@@ -6,7 +6,6 @@ test('@cpu inspects recovered thermal vectors with signed components and intensi
   await page.waitForFunction(() => typeof window.fem !== 'undefined');
   const result = await page.evaluate(async () => {
     await window.fem.dispatch({ cmd: 'model.new', name: 'Fourier vector check' });
-    await window.fem.dispatch({ cmd: 'model.setUnits', units: { temperature: 'degC', temperatureGradient: 'K/mm', heatFlux: 'kW/m^2' } });
     await window.fem.dispatch({ cmd: 'geometry.addBox', name: 'bar', size: ['1 m', '0.1 m', '0.1 m'] });
     await window.fem.dispatch({ cmd: 'material.add', name: 'conductor', k: '5 W/(m K)', rho: '1 kg/m^3', cp: '1 J/(kg K)' });
     await window.fem.dispatch({ cmd: 'material.assign', material: 'conductor', bodies: ['bar'] });
@@ -14,10 +13,12 @@ test('@cpu inspects recovered thermal vectors with signed components and intensi
     await window.fem.dispatch({ cmd: 'constraint.temperature', name: 'hot', on: 'bar.xmax', value: '320 K' });
     await window.fem.dispatch({ cmd: 'mesh.set', mesher: { kind: 'lattice', size: { nx: 4, ny: 1, nz: 1 } } });
     await window.fem.dispatch({ cmd: 'step.add', name: 'conduct', procedure: 'heat-steady', constraints: ['cold', 'hot'], loads: [], output: ['temperature', 'temperatureGradient', 'heatFlux'] });
+    // Exercise the guide's order: units on the configured Step, then a fresh solve and Queries.
+    await window.fem.dispatch({ cmd: 'model.setUnits', units: { temperature: 'degC', temperatureGradient: 'K/mm', heatFlux: 'kW/m^2' } });
     await window.fem.dispatch({ cmd: 'solve.run', step: 'conduct', solver: 'cpu-direct' });
     const gradient = await window.fem.query.field({ step: 'conduct', field: 'temperatureGradient' });
     const flux = await window.fem.query.field({ step: 'conduct', field: 'heatFlux' });
-    const probe = await window.fem.query.probe({ step: 'conduct', field: 'heatFlux', component: 0, at: ['0.37 m', '0.05 m', '0.05 m'] });
+    const probe = await window.fem.query.probe({ step: 'conduct', field: 'heatFlux', component: 0, at: ['0.5 m', '50 mm', '50 mm'] });
     return { gradient, flux, probe };
   });
   expect(result.gradient.per).toBe('elementNode');
