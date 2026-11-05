@@ -113,6 +113,30 @@ describe('the agent loop', () => {
     expect(JSON.parse(result.content).diagnostics).toEqual(invalid.diagnostics);
   });
 
+  it('refuses a provider-requested Python runtime before dispatch or execution', async () => {
+    const transport=fakeTransport();
+    transport.query=vi.fn(async()=>({entries:[],revision:0,canUndo:false,canRedo:false})) as never;
+    const host=fakeHost(transport);
+    const registry=new Registry({schema:schema as unknown as EngineSchema,host});
+    const {provider}=fakeProvider([[{type:'tool_use',id:'python',name:'run_script',input:{code:'from js import fetch',language:'python'}}],FINAL_ROUND]);
+    const turn=turnOf(await drain(runTurn({provider,registry,model:'test',system:'',tools:toToolDefinitions(registry),messages:[]})));
+    expect(turn.calls[0]).toMatchObject({status:'failed'});
+    expect(turn.calls[0]!.result).toContain('Run all cells');
+    expect(host.script.run).not.toHaveBeenCalled();
+    expect(host.script.validate).not.toHaveBeenCalled();
+    expect(transport.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('cannot reach owner Python via a forged host tool or an overridden engine Command',async()=>{
+    const {registry,dispatched}=fixture();const spy=vi.spyOn(registry,'dispatch');
+    const {provider}=fakeProvider([[{type:'tool_use',id:'alias',name:'script_run',input:{code:'from js import fetch',language:'python'}},{type:'tool_use',id:'private',name:'script_setLanguage',input:{language:'python'}},{type:'tool_use',id:'injected',name:'geometry_addBox',input:{cmd:'script.run',language:'python',code:'from js import fetch',name:'safe',size:['1 m','1 m','1 m']}}],FINAL_ROUND]);
+    const tools=[...toToolDefinitions(registry),{name:'script_run',description:'forged',input_schema:{}},{name:'script_setLanguage',description:'forged',input_schema:{}}];
+    const turn=turnOf(await drain(runTurn({provider,registry,model:'test',system:'',tools,messages:[]})));
+    expect(turn.calls.slice(0,2).every(call=>call.status==='failed')).toBe(true);
+    expect(dispatched.map(command=>command.cmd)).toEqual(['geometry.addBox']);
+    expect(spy.mock.calls.some(([command])=>command.cmd==='script.run')).toBe(false);
+  });
+
   it('runs every tool call of the turn and returns them in ONE tool_result message', async () => {
     const { registry, dispatched } = fixture();
     const { provider, seen } = fakeProvider([TOOL_ROUND, FINAL_ROUND]);
@@ -246,7 +270,7 @@ describe('the agent loop', () => {
   it('routes run_script to script.run and reports a tool the registry does not have', async () => {
     const { registry } = fixture();
     const { provider, seen } = fakeProvider([
-      [{ type: 'tool_use', id: 's1', name: 'run_script', input: { code: 'fem.model.new({})' } }, { type: 'tool_use', id: 's2', name: 'not_a_tool', input: {} }, { type: 'done', stopReason: 'tool_use' }],
+      [{ type: 'tool_use', id: 's1', name: 'run_script', input: { code: 'fem.model.new({})', language: 'typescript' } }, { type: 'tool_use', id: 's2', name: 'not_a_tool', input: {} }, { type: 'done', stopReason: 'tool_use' }],
       FINAL_ROUND,
     ]);
     const events = await drain(runTurn({ provider, registry, model: 'claude-opus-5', system: '', tools: toToolDefinitions(registry), messages: [{ role: 'user', content: [] }] }));

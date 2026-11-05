@@ -34,7 +34,7 @@ export class PythonHost {
         if (msg.kind === 'ready') { clearTimeout(timer); timer = setTimeout(() => fail(`Python did not finish within ${timeoutMs} ms`), timeoutMs); worker.postMessage({ kind: 'run', code }); }
         else if (msg.kind === 'log' || msg.kind === 'plot') {
           if (typeof msg.value !== 'string') { fail('invalid Python output'); return; }
-          bytes += msg.value.length;
+          bytes += new TextEncoder().encode(msg.value).byteLength;
           if (bytes > 8 * 1024 * 1024) { fail('Python output exceeds 8 MiB'); return; }
           if (msg.kind === 'plot') plots.push(msg.value); else lines.push(msg.value);
         } else if (msg.kind === 'done') settle({ result: null, console: lines });

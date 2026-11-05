@@ -70,6 +70,7 @@ describe('toToolDefinitions', () => {
     const run = tools.find((t) => t.name === RUN_SCRIPT)!;
     expect(run.input_schema['required']).toEqual(['code']);
     expect(run.description).toContain('fem.d.ts');
+    expect((run.input_schema['properties'] as Record<string, unknown>)['language']).toEqual({type:'string',enum:['typescript']});
     const bare = new Registry({ schema: engineSchema, host: fakeHost(), hostCommands: [], hostQueries: [] });
     expect(toToolDefinitions(bare).find((t) => t.name === RUN_SCRIPT)).toBeUndefined();
   });

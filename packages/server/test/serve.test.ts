@@ -34,6 +34,10 @@ it('isolates actual WASM owners and preserves structured errors, scientific sign
   expect(Object.is(document.file.journal.entries.at(-1).cmd.at[0].value,-0)).toBe(true);
   expect((await rpc(a,'query',{query:'query.model'})).body.value.name).toBe('alpha');
   expect((await rpc(b,'query',{query:'query.model'})).body.value.name).toBe('beta');
+  for (const cmd of ['script.run','chat.send','billing.checkout']) {
+    const refused=await rpc(a,'dispatch',{cmd,code:'from js import fetch',language:'python'});
+    expect(refused.status).toBe(400); expect(refused.body.error.code).toBe('schema');
+  }
   const before = (await rpc(a,'query',{query:'query.journal'})).body.value;
   const replay = await rpc(b,'replaceCommands',before.entries.map((entry: any) => entry.cmd));
   expect(replay.body.value.entries.map((entry: any) => entry.hashAfter)).toEqual(before.entries.map((entry: any) => entry.hashAfter));

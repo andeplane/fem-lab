@@ -1,6 +1,6 @@
 // One checked owner, with host serialization around wasm's exclusive mutable borrow. A new
 // MCP request explicitly acquires a lease; nested calls retain it across their own replacement.
-import { FemError, MAX_MODEL_FILE_BYTES, modelFileEncoder, type DocumentSnapshot, type QueryResult, type ReadReply, type RunLease, type Stamp, type WriteReply } from '@femlab/registry';
+import { FemError, MAX_MODEL_FILE_BYTES, modelFileEncoder, scientificJson, type DocumentSnapshot, type QueryResult, type ReadReply, type RunLease, type Stamp, type WriteReply } from '@femlab/registry';
 import type { PreparedEngine, SessionEngine } from '../../app/src/generated/wasm/femlab_engine_wasm';
 import type { EngineHandle, EngineProvider } from './engine';
 
@@ -34,7 +34,7 @@ export function sessionEngine(wasm: CheckedModule, threads: number, epoch: strin
         let consumed = false;
         try {
           candidate = await wasm.PreparedEngine.create(ticket, { threads, gpu: false });
-          await candidate.commands(JSON.stringify(commands));
+          await candidate.commands(scientificJson(commands));
           candidate.finish(modelFileEncoder(true), MAX_MODEL_FILE_BYTES);
           context(); // cancellation during candidate preparation cannot publish it
           consumed = true;
@@ -54,7 +54,7 @@ export function sessionEngine(wasm: CheckedModule, threads: number, epoch: strin
         const query = structuredClone(input);
         return ordered(() => {
           captured?.();
-          const reply = JSON.parse(owner.query(JSON.stringify({ context: context(), query }))) as ReadReply;
+          const reply = JSON.parse(owner.query(scientificJson({ context: context(), query }))) as ReadReply;
           lease = { ...lease, stamp: reply.stamp };
           return reply.value;
         });
@@ -67,7 +67,7 @@ export function sessionEngine(wasm: CheckedModule, threads: number, epoch: strin
               const snapshot = await replaceCommands([cmd]);
               return { seq: 0, revision: snapshot.model.revision, hash: snapshot.model.hash, warnings: [], output: { type: 'none' } };
             }
-            const reply = JSON.parse(await owner.dispatch(JSON.stringify({ context: context(), expectedVersion: lease.stamp.stateVersion, command: cmd }))) as WriteReply;
+            const reply = JSON.parse(await owner.dispatch(scientificJson({ context: context(), expectedVersion: lease.stamp.stateVersion, command: cmd }))) as WriteReply;
             current = reply.stamp;
             lease = { ...lease, stamp: reply.stamp };
             return reply.ack;

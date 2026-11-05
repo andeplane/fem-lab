@@ -23,7 +23,9 @@ Python in the browser loads a pinned Pyodide distribution and numpy only after a
 Python run, in a disposable Worker with a separate startup deadline and a hard execution
 termination deadline. Matplotlib loads only when imported and renders via Agg to PNG. This
 is an owner-authored analysis environment, not a security sandbox for arbitrary untrusted
-Python: Pyodide itself can import JavaScript APIs in its Worker. Downloaded project source
+Python: Pyodide itself can import JavaScript APIs in its Worker. AI `run_script` retains a
+TypeScript-only tool schema and runtime admission check; it cannot request the Python
+runtime, and nested script execution remains refused by the QuickJS host. Downloaded project source
 never runs automatically on open. Credentials/account/billing/script host operations are
 not admitted through the Python bridge. Scientific field values travel as transferred f64
 typed buffers, not renderer f32 buffers or an additional JSON serialization.

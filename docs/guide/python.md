@@ -30,7 +30,8 @@ identity and component count. Its values are a numpy view of the transferred num
 The Script run has a maximum 30000 ms execution deadline after a separate maximum 120000 ms
 runtime startup deadline. Source is limited to 64000 characters; console plus plot output is
 limited to 8 MiB. Each browser registry request is limited to 1 MiB. Stop terminates the disposable worker; already-applied Commands stay in the
-Journal. Infinite loops cannot freeze the editor. Arbitrary untrusted Python is unsupported:
+Journal. Infinite loops cannot freeze the editor. The Assistant’s `run_script` remains TypeScript-only; Python execution requires the explicit
+Run all cells action. Arbitrary untrusted Python is unsupported:
 Pyodide can access JavaScript APIs within its Worker. Account/billing/credential operations
 must use the ordinary explicit account controls.
 

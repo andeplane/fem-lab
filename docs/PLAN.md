@@ -340,6 +340,10 @@ only expanded engine Commands are journalled; source and plots stay in portable 
 files. See `docs/guide/python.md` for setup, supported limits and publication status. Public
 PyPI installation (Py.4) remains pending until the package is actually published; source/wheel installation is supported.
 
+Py.5 (AI-authored Python execution/evaluation parity) remains unimplemented. Owner-run
+Pyodide has Worker JavaScript/network privileges; AI scripts retain the isolated QuickJS
+TypeScript runtime and cannot select or nest Python execution.
+
 ## 11. Cross-cutting, every phase
 
 - **Docs**: each phase ships a README section and a KaTeX theory page (element formulation,

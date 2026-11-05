@@ -117,5 +117,8 @@ export function toToolDefinitions(registry: Registry): ToolDefinition[] {
   return [...commands, ...queries]
     .filter((d) => d.tool)
     .map((d) => ({ name: toolNameFor(d.name), description: d.description, input_schema: toolInputSchema(inlineDefs(d.schema, registry.defs)) }))
-    .concat(script ? [{ name: RUN_SCRIPT, description: script.description, input_schema: script.schema }] : []);
+    .concat(script ? [{ name: RUN_SCRIPT, description: `AI run_script executes TypeScript only. Python notebooks require the person's explicit Run all cells action. ${script.description}`, input_schema: {
+      ...script.schema,
+      properties: { ...(script.schema['properties'] as Record<string, unknown>), language: { type: 'string', enum: ['typescript'] } },
+    } }] : []);
 }
