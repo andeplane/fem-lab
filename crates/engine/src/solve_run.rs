@@ -623,6 +623,7 @@ pub(crate) fn procedure_step(step: &Step, opts: SolveOptions) -> Result<procedur
             output_every: step.output_every.unwrap_or(1) as usize,
         },
         Procedure::Implicit => procedure::Step::Implicit {
+            solver: opts,
             dt: want(step.dt, "dt")?,
             t_end: want(step.t_end, "tEnd")?,
             alpha: step.alpha.unwrap_or(0.0),

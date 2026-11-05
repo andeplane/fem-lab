@@ -12591,6 +12591,7 @@ fn implicit_step(
     output_every: usize,
 ) -> Step {
     Step::Implicit {
+        solver: SolveOptions::default(),
         dt,
         t_end,
         alpha,
@@ -17735,5 +17736,330 @@ fn f64_fgmres_reports_projected_rank_and_range_failures_after_a_partial_correcti
         println!("{cause}: {}", error.cause);
         assert_eq!(error.code, ErrorCode::SolveStalled);
         assert!(error.cause.contains(cause), "{}", error.cause);
+    }
+}
+// ----------------------------------------------- F20–F24: remaining dynamics gates (#396)
+
+/// Eliminate velocity and acceleration from the *eigenmode ansatz*, not an update loop.
+/// With x=ωΔt and u_n=U λ^n, HHT's characteristic polynomial is
+/// λ(λ−1)² + x²[(1+α)λ−α][βλ²+(γ+1/2−2β)λ+(1/2−γ+β)].
+/// Its one negative real root is parasitic; the conjugate physical pair has product ρ².
+fn hht_spectrum(alpha: f64, x: f64) -> (f64, f64, f64) {
+    let beta = (1.0 - alpha).powi(2) / 4.0;
+    let gamma = 0.5 - alpha;
+    let b = [0.5 - gamma + beta, gamma + 0.5 - 2.0 * beta, beta];
+    let c = [
+        -x * x * alpha * b[0],
+        1.0 + x * x * ((1.0 + alpha) * b[0] - alpha * b[1]),
+        -2.0 + x * x * ((1.0 + alpha) * b[1] - alpha * b[2]),
+        1.0 + x * x * (1.0 + alpha) * b[2],
+    ];
+    let polynomial = |r: f64| ((c[3] * r + c[2]) * r + c[1]) * r + c[0];
+    let (mut lo, mut hi) = (-1.0, 0.0);
+    assert!(polynomial(lo) < 0.0 && polynomial(hi) > 0.0);
+    for _ in 0..100 {
+        let mid = (lo + hi) / 2.0;
+        if polynomial(mid) < 0.0 {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    let parasitic = (lo + hi) / 2.0;
+    let rho2 = -c[0] / (c[3] * parasitic);
+    let real = (-c[2] / c[3] - parasitic) / 2.0;
+    assert!(rho2 > real * real && parasitic.abs() < rho2.sqrt());
+    (parasitic, real, rho2)
+}
+
+/// F20: measure the physical amplification radius directly from retained displacements.
+/// Filtering u_{n+1}−r u_n removes the real parasitic root. The conjugate pair's quadratic
+/// envelope Q_n=y_{n+1}²−2 Re(λ)y_n y_{n+1}+ρ² y_n² obeys Q_{n+1}=ρ² Q_n.
+#[test]
+fn hht_amplitude_decay_matches_its_characteristic_spectral_radius() {
+    let side = 0.1;
+    let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([side; 3]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let p = axial_sdof(&mesh, &sets, &bodies, 0.0);
+    let omega = (3.0 * p_wave_modulus() / (DENSITY * side * side)).sqrt();
+    let tip = sets["xmax"].nodes[0] as usize * 3;
+    for alpha in [-0.05, -0.2, -1.0 / 3.0] {
+        for nominal_x in [0.5, 2.0, 8.0] {
+            let res = run_step(
+                &p,
+                &implicit_step(
+                    nominal_x / omega,
+                    32.0 * nominal_x / omega,
+                    alpha,
+                    (0.0, 0.0),
+                    Some([1.0, 0.0, 0.0].repeat(mesh.n_nodes())),
+                    1,
+                ),
+            )
+            .expect("HHT free vibration");
+            let x = omega * res.scalars["dt"];
+            let (r, real, rho2) = hht_spectrum(alpha, x);
+            let h = res.history.unwrap();
+            let y: Vec<f64> = h.values.windows(2).map(|f| f[1][tip] - r * f[0][tip]).collect();
+            let q: Vec<f64> =
+                y.windows(2).map(|y| y[1] * y[1] - 2.0 * real * y[0] * y[1] + rho2 * y[0] * y[0]).collect();
+            assert!(q.iter().all(|v| *v > 0.0));
+            for (n, &value) in q.iter().enumerate() {
+                let want = q[0] * rho2.powi(n as i32);
+                assert!((value / want - 1.0).abs() < 2e-8, "α={alpha}, x={x}, n={n}: Q ratio {}", value / want);
+            }
+            let measured = (q[q.len() - 1] / q[0]).powf(0.5 / (q.len() - 1) as f64);
+            assert!((measured - rho2.sqrt()).abs() < 2e-9, "α={alpha},x={x}:ρ={measured} vs {}", rho2.sqrt());
+            assert!(measured < 1.0);
+            println!("F20 alpha={alpha} x={x}: rho={measured:.12}, characteristic={:.12}", rho2.sqrt());
+        }
+    }
+}
+
+/// F21: the same SDOF driven through the actual load amplitude in time and through the modal
+/// harmonic host. Fourier projection of the last ten cycles measures both phase and gain.
+#[test]
+fn implicit_harmonic_forcing_converges_to_the_closed_form_and_frequency_domain_response() {
+    let side = 0.1;
+    let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([side; 3]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let p = axial_sdof(&mesh, &sets, &bodies, 1e6);
+    let omega = (3.0 * p_wave_modulus() / (DENSITY * side * side)).sqrt();
+    let u_static = 1e6 * side / p_wave_modulus();
+    let tip = sets["xmax"].nodes[0] as usize * 3;
+    let modal =
+        run_step(&p, &Step::Modal { n_modes: 4, shift: None, solver: SolveOptions::default(), prestress: None })
+            .unwrap();
+    for (ratio, zeta) in [(0.5, 0.05), (1.0, 0.05), (1.5, 0.2)] {
+        let frequency = ratio * omega / (2.0 * PI);
+        let period = 1.0 / frequency;
+        let re = 1.0 - ratio * ratio;
+        let im = 2.0 * zeta * ratio;
+        let denom = re * re + im * im;
+        let want = [u_static * re / denom, -u_static * im / denom];
+        let harmonic = run_after(&p, &harmonic_step(frequency, frequency * 1.01, 2, zeta, 1), Some(&modal)).unwrap();
+        let sweep = harmonic.sweep.unwrap();
+        let amplitude = sweep.amplitude[0].data[tip];
+        let phase = sweep.phase[0].data[tip];
+        gate(
+            "harmonic complex coefficients",
+            &[amplitude * libm::cos(phase), -amplitude * libm::sin(phase)],
+            &want,
+            1e-8,
+        );
+        let mut errors = Vec::new();
+        for per_cycle in [100usize, 200, 400] {
+            let mut step =
+                implicit_step(period / per_cycle as f64, 60.0 * period, 0.0, (zeta * omega, zeta / omega), None, 1);
+            let Step::Implicit { amplitude, .. } = &mut step else { panic!() };
+            *amplitude = Some(procedure::Amplitude::Sine { amplitude: 1.0, period });
+            let result = run_step(&p, &step).expect("sinusoidal forcing");
+            let history = result.history.unwrap();
+            let dt = result.scalars["dt"];
+            // Uniform time_grid may add one increment for a rounded quotient. Integrate by
+            // trapezoids over the last ten *physical* periods, rather than assuming a stride.
+            let start = 50.0 * period;
+            let mut coefficients = [0.0; 2];
+            let mut duration = 0.0;
+            for n in 1..history.times.len() {
+                if history.times[n] > start {
+                    let t0 = history.times[n - 1].max(start);
+                    let t1 = history.times[n];
+                    let f = (t0 - history.times[n - 1]) / (t1 - history.times[n - 1]);
+                    let u0 = (1.0 - f) * history.values[n - 1][tip] + f * history.values[n][tip];
+                    for (j, factor) in [libm::sin as fn(f64) -> f64, libm::cos as fn(f64) -> f64].iter().enumerate() {
+                        coefficients[j] += (t1 - t0)
+                            * (u0 * factor(2.0 * PI * t0 / period)
+                                + history.values[n][tip] * factor(2.0 * PI * t1 / period))
+                            / (10.0 * period);
+                    }
+                    duration += t1 - t0;
+                }
+            }
+            assert!(duration >= 10.0 * period - 2.0 * dt);
+            let error = rel_diff(&coefficients, &want);
+            assert!(error < 0.02, "r={ratio}, N={per_cycle}, complex response {coefficients:?} vs {want:?}");
+            errors.push(error);
+        }
+        for pair in errors.windows(2) {
+            let rate = libm::log(pair[0] / pair[1]) / libm::log(2.0);
+            assert!(rate > 1.8, "r={ratio}: rate={rate}, errors={errors:?}");
+        }
+        println!("F21 r={ratio} zeta={zeta} complex errors={errors:?}");
+    }
+}
+
+/// F22: damping removes the transient without shifting the equilibrium. The slowest envelope
+/// exp(-ζωt) is below 6e-14 after 100 rad at ζ=.3; this also checks all retained final fields.
+#[test]
+fn a_damped_implicit_step_reaches_the_independent_static_equilibrium() {
+    let side = 0.1;
+    let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([side; 3]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let p = axial_sdof(&mesh, &sets, &bodies, 1e6);
+    let omega = (3.0 * p_wave_modulus() / (DENSITY * side * side)).sqrt();
+    let stat = run_step(&p, &static_step(SolveOptions::default())).unwrap();
+    for alpha in [0.0, -0.2] {
+        let result =
+            run_step(&p, &implicit_step(0.05 / omega, 100.0 / omega, alpha, (0.3 * omega, 0.3 / omega), None, 50))
+                .unwrap();
+        for field in [Field::Displacement, Field::Stress, Field::Reaction] {
+            gate("damped final field", &result.fields[&field].data, &stat.fields[&field].data, 1e-9);
+        }
+        let tip = sets["xmax"].nodes[0] as usize * 3;
+        let want = 1e6 * side / p_wave_modulus();
+        assert!((result.fields[&Field::Displacement].data[tip] / want - 1.0).abs() < 1e-10);
+    }
+}
+
+/// F23: the rod's modal, implicit and explicit histories have independently known spectra.
+/// Their history disagreement is bounded by their mass/temporal dispersion, not a guessed
+/// percentage. Refining the space/time together must reduce this bound at second order.
+#[test]
+fn implicit_and_explicit_histories_agree_with_their_modal_dispersion_bound() {
+    let length = 1.0;
+    let c = (ROD_E / ROD_RHO).sqrt();
+    let mut bounds = Vec::new();
+    for n in [10usize, 20, 40] {
+        let (mesh, sets) = rod_mesh(n, length);
+        let bodies = one_body();
+        let p = rod_problem(&mesh, &sets, &bodies);
+        let wave = PI / (2.0 * length);
+        let h = length / n as f64;
+        let ck = libm::cos(wave * h);
+        let wi = c / h * (6.0 * (1.0 - ck) / (2.0 + ck)).sqrt();
+        let we = 2.0 * c / h * libm::sin(0.5 * wave * h);
+        let modal =
+            run_step(&p, &Step::Modal { n_modes: 1, shift: None, solver: SolveOptions::default(), prestress: None })
+                .unwrap();
+        assert!((2.0 * PI * modal.frequencies[0] / wi - 1.0).abs() < 1e-6);
+        let mut kick = vec![0.0; mesh.n_nodes() * 3];
+        for node in 0..mesh.n_nodes() {
+            kick[node * 3] = libm::sin(wave * mesh.node(node as u32)[0]);
+        }
+        let end = 5.0 * 2.0 * PI / (c * wave);
+        let ex = run_step(
+            &p,
+            &Step::Explicit { t_end: end, dt_factor: 0.1, initial_velocity: Some(kick.clone()), output_every: 1 },
+        )
+        .unwrap();
+        let dt = ex.scalars["dt"];
+        let im = run_step(&p, &implicit_step(dt, end, 0.0, (0.0, 0.0), Some(kick), 1)).unwrap();
+        let actual_dt = im.scalars["dt"];
+        let wti = 2.0 / actual_dt * libm::atan(wi * actual_dt / 2.0);
+        let wte = 2.0 / dt * libm::asin(we * dt / 2.0);
+        let ai = 1.0 / wi;
+        let ae = 1.0 / (we * (1.0 - (we * dt / 2.0).powi(2)).sqrt());
+        let bound = (ai - ae).abs() + ai.max(ae) * (wti - wte).abs() * end;
+        let tip = node_at(&mesh, [length, 0.0, 0.0]) as usize * 3;
+        let ih = im.history.unwrap();
+        let eh = ex.history.unwrap();
+        let period = zero_crossing_period(&ih.times, &ih.values.iter().map(|f| f[tip]).collect::<Vec<_>>());
+        assert!((2.0 * PI / period / wti - 1.0).abs() < 1e-4);
+        let mut max_difference = 0.0f64;
+        for (idx, (&time, frame)) in ih.times.iter().zip(&ih.values).enumerate() {
+            let want = ai * libm::sin(wti * time);
+            assert!((frame[tip] - want).abs() < 1e-8 * ai);
+            // time_grid only ever adds at most a rounding increment; interpolation bounds
+            // the explicit comparison if the two adjusted grids differ by one step.
+            let i = eh.times.partition_point(|t| *t < time).clamp(1, eh.times.len() - 1);
+            let fraction = (time - eh.times[i - 1]) / (eh.times[i] - eh.times[i - 1]);
+            let explicit = eh.values[i - 1][tip] * (1.0 - fraction) + eh.values[i][tip] * fraction;
+            let interpolation = ae * (wte * dt).powi(2) / 8.0;
+            let difference = (frame[tip] - explicit).abs();
+            assert!(
+                difference <= bound + interpolation + 1e-8 * ai,
+                "n={n},frame={idx}:difference={difference},bound={bound}"
+            );
+            max_difference = max_difference.max(difference);
+        }
+        bounds.push(bound / ai);
+        println!("F23 n={n} relative bound={}, observed={}", bound / ai, max_difference / ai);
+    }
+    for pair in bounds.windows(2) {
+        assert!(libm::log(pair[0] / pair[1]) / libm::log(2.0) > 1.9);
+    }
+}
+
+/// F24 CPU half: backend selection reaches both initial acceleration and the increment solves.
+#[test]
+fn implicit_cpu_backends_agree_and_refuse_unavailable_or_exhausted_solvers() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [2, 1, 1] }.box_([1.0, 0.1, 0.1]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let p = rod_problem(&mesh, &sets, &bodies);
+    let mut step = implicit_step(1e-5, 8e-5, -0.1, (10.0, 1e-6), Some([1.0, 0.0, 0.0].repeat(mesh.n_nodes())), 1);
+    let direct = run_step(&p, &step).unwrap();
+    let Step::Implicit { solver, .. } = &mut step else { panic!() };
+    solver.solver = Solver::CpuPcg;
+    let pcg = run_step(&p, &step).unwrap();
+    assert_eq!(pcg.solver.solver, "cpu-pcg");
+    for (a, b) in pcg.history.unwrap().values.iter().zip(&direct.history.as_ref().unwrap().values) {
+        gate("PCG history", a, b, 1e-8);
+    }
+    let Step::Implicit { solver, .. } = &mut step else { panic!() };
+    solver.solver = Solver::GpuPcg;
+    assert_eq!(run_step(&p, &step).unwrap_err().code, ErrorCode::Unsupported);
+    let Step::Implicit { solver, .. } = &mut step else { panic!() };
+    solver.solver = Solver::CpuPcg;
+    solver.max_iterations = 0;
+    assert_eq!(run_step(&p, &step).unwrap_err().code, ErrorCode::SolveStalled);
+}
+
+/// F24 GPU half runs under the required software adapter lane as well as native Metal.
+/// These are representative actual integrator cases: initial kick, loaded/damped HHT,
+/// sinusoidal forcing, and rigid free fall; no CPU result is labelled as a GPU result.
+#[cfg(feature = "gpu-tests")]
+#[test]
+fn implicit_gpu_backend_matches_direct_and_cpu_pcg_for_dynamic_cases() {
+    let gpu =
+        pollster::block_on(femlab_engine::gpu::Gpu::request(femlab_engine::gpu::Gpu::default_backends())).unwrap();
+    let mesh = Structured { kind: ElementKind::Hex8, n: [2, 1, 1] }.box_([1.0, 0.1, 0.1]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    for case in 0..4 {
+        let mut p = rod_problem(&mesh, &sets, &bodies);
+        if case == 3 {
+            p.constraints.clear();
+            p.loads = vec![Load::Gravity { g: [0.0, 0.0, -9.81] }];
+        }
+        if case == 1 || case == 2 {
+            p.loads = vec![Load::Traction { faces: "xmax".into(), t: [1e6, 0.0, 0.0] }];
+        }
+        let mut step = implicit_step(
+            1e-5,
+            8e-5,
+            if case == 1 { -0.2 } else { 0.0 },
+            (10.0, 1e-6),
+            Some([1.0, 0.0, 0.0].repeat(mesh.n_nodes())),
+            1,
+        );
+        if case == 2 {
+            let Step::Implicit { amplitude, .. } = &mut step else { panic!() };
+            *amplitude = Some(procedure::Amplitude::Sine { amplitude: 1.0, period: 6e-5 });
+        }
+        let reference = run_step(&p, &step).unwrap();
+        for backend in [Solver::CpuPcg, Solver::GpuPcg] {
+            let Step::Implicit { solver, .. } = &mut step else { panic!() };
+            solver.solver = backend;
+            let actual =
+                pollster::block_on(procedure::run(&p, &step, &Pool::new(2), Some(&gpu), None, &mut nop)).unwrap();
+            assert_eq!(actual.solver.solver, solver_name(backend));
+            for (a, b) in actual.history.unwrap().values.iter().zip(&reference.history.as_ref().unwrap().values) {
+                gate("GPU/CPU dynamic history", a, b, 2e-8);
+            }
+            for field in [Field::Displacement, Field::Stress, Field::Reaction] {
+                if case == 3 && field == Field::Stress {
+                    // A rigid body has zero stress: a relative norm of round-off is undefined.
+                    // E·δu/L with δu <2e-8·8e-5 m is <0.4 Pa for this metre-long rod.
+                    assert!(actual.fields[&field].data.iter().all(|v| v.abs() < 1.0));
+                } else {
+                    gate("GPU/CPU final field", &actual.fields[&field].data, &reference.fields[&field].data, 2e-7);
+                }
+            }
+        }
     }
 }

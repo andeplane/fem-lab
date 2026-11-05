@@ -1139,6 +1139,12 @@ hydration replies cannot overwrite a newer selection; modal phase controls remai
 | F17 | #73, NAFEMS R0016 Test 5R / Ansys VM19: simply-supported deep beam, 10/20/40 elements | f₁ = 42.65 Hz; peak displacement PSD = 180.90 mm²/Hz; peak bending stress PSD = 58515.60 (N/mm²)²/Hz | 2 % frequency and displacement PSD, 1 % stress PSD | correlated modal response; signed extreme-fibre stress; mesh refinement | engine test |
 | F18 | #346, logarithmic decrement: F3's SDOF hex8 released with an initial velocity (no load) at ζ = 0.05, Rayleigh pair `α = ζω, β = ζ/ω` | `δ = 2πζ/√(1−ζ²)`, measured from two parabolically-interpolated peaks four damped periods apart, `ln(peak₀/peak₄)/4` | 1 % | free-decay damping reaches the ratio the pair was chosen for, independent of F3's step-load closed form | engine test |
 | F19 | #346, half-power bandwidth: F14's SDOF sweep at ζ = 0.02 driven entirely by the new `dampingRatios` list (one entry) instead of the scalar `dampingRatio` | `Δf ≈ 2ζf_n`, the two frequencies either side of resonance where `\|u\| = \|u_max\|/√2`, linearly interpolated on a 401-point sweep | 2 % | `dampingRatios` reaches the modal damping ratio the same way `dampingRatio` does, checked against a second independent relation | engine test |
+| F20 | HHT free-vibration amplitude, nine α/ωΔt pairs | characteristic cubic and its conjugate spectral radius; filtered displacement envelope | 2e-9 absolute radius, 2e-8 relative envelope | exact numerical damping, not merely decreasing energy | engine test |
+| F21 | Sine-loaded SDOF at frequency ratios 0.5, 1, 1.5 and damping ratios 0.05/0.2, three time refinements | complex compliance `(F/k)/(1−r²+2iζr)`; independent modal harmonic solve | <2 % complex response; refinement rate >1.8; harmonic coefficient 1e-8 | amplitude, phase and time/frequency-domain agreement | engine test |
+| F22 | Damped implicit SDOF, α=0 and −0.2, ζωt=30 | analytical `F/k` and independently solved static displacement/stress/reaction | 1e-9 relative fields, 1e-10 tip | damping leaves the correct equilibrium | engine test |
+| F23 | First rod mode through modal, implicit and explicit, 10/20/40 elements | consistent/lumped-chain spectra and atan/asin time dispersion; amplitude + phase history bound | 1e-6 modal frequency, 1e-4 history frequency; bound refinement rate >1.9 | quantitative cross-integrator agreement with different mass matrices | engine test |
+| F24 | Actual direct/CPU-PCG/GPU-PCG implicit paths: initial kick, damped HHT load, sine forcing, free fall | direct history and independent numerical/physical gates F2c/F20–F23; backend identity | 2e-8 history, 2e-7 stress/reaction | selected backend reaches both a₀ and every increment; unavailable/exhausted backends fail | engine test + required gpu-tests |
+
 | F20 | #73, one-sided white-noise SDOF response, unit mass, f_n = 7 Hz, ζ = 0.2/0.02/1e-5 | stationary energy balance: variance = S p²/(8 ζ ω_n³); integrate to 10,000 f_n | 1e-8 relative | Hz normalization and resonance resolution; exact cancellation of equal modes with opposite participation and invariance to subdividing a linear PSD table | engine unit test |
 | F21 | #602, finite logarithmic frequency grids, including 1e-300–1e100 Hz and binary 2^-1074–2^974 | geometric midpoint 1e-100 Hz; independently encoded binary powers at 3/5/9/17 points; exact endpoints and identical shared quantiles under refinement | 4e-13 relative on closed quantiles; exact endpoint bits; finite nondecreasing values within bounds | positive finite endpoints do not require a representable endpoint ratio or exponential scale factor; subnormal/adjacent/MAX intervals and generated finite-bit patterns retain the range contract | engine unit + public registry |
 | F21b | #602, one full-integration guided steel hex8, complete four-mode basis, 10 kN axial force and log grid 1e-300–1e20 Hz at 3/5/9/17 points, native 1/4 threads | uniform tip amplitude F/abs(K-Mω²), K=C11 A/L, C11=E(1-ν)/[(1+ν)(1-2ν)], M=ρAL/3; undamped phase 0 or ±π | 1e-10 relative amplitude, 1e-12 phase; exact shared grid quantiles and replay/thread identity | the endpoint ratio still overflows, while the response denominator remains representable; the original 1e100 Hz fixture separately checks frequencies, retained modal fields and replay without declaring its high-frequency response accurate | public registry, native/WASM replay + Chromium |
@@ -1385,13 +1391,39 @@ extrapolates +1/12 within 1 %, allowing higher-order and interpolation errors wh
 a wrong sign or the 1/24 coefficient. Successive error rates must lie between 1.9 and 2.1;
 the finest error is still about 1.3e-3, well above roundoff.
 
-**Remaining #396 scope after #72:** HHT amplitude decay against its spectral radius,
-harmonic forcing against the closed-form magnification, explicit-versus-implicit agreement
-at small Δt, a damped implicit run converging to the static solution, and the
-direct/iterative/GPU linear solvers agreeing under the implicit integrator. Free fall with
-initial velocity through both procedures already shipped in #348 (F2c); Newmark period
-elongation is now F5a. Explicit dynamics has no linear solve, so the last comparison applies
-only to implicit dynamics.
+**F20–F24 complete the implicit/cross-solver remainder of #396.** The HHT spectral
+oracle eliminates velocity and acceleration from an eigenmode ansatz to obtain
+`λ(λ−1)² + x²[(1+α)λ−α][βλ²+(γ+1/2−2β)λ+(1/2−γ+β)] = 0`,
+where `x=ωΔt`. It is not another integration loop. Bisection locates the negative
+parasitic root `r`; Vieta's formulas give the physical conjugate pair's real part and
+squared modulus `ρ²`. Filtering `y_n=u_{n+1}−r u_n` removes that parasitic mode.
+The quadratic envelope `Q_n=y_{n+1}²−2 Re(λ)y_n y_{n+1}+ρ²y_n²` then decays
+by exactly `ρ²` per increment. Nine cases span `α=−0.05,−0.2,−1/3` and nominal
+`ωΔt=0.5,2,8`. This gates the *amount* of algorithmic damping, not just monotonicity.
+The α-method reference is [Hilber, Hughes and Taylor (1977)](https://doi.org/10.1002/eqe.4290050306).
+
+F21 drives F3's analytically known SDOF through the actual sine load amplitude. The
+last ten of sixty forcing cycles give sine/cosine response coefficients, compared
+against the independent complex compliance `(F/k)/(1−r²+2iζr)` and the frequency-domain
+modal response. Three time refinements must converge at second order; gain alone
+cannot hide the wrong phase. F22 compares the fully damped final displacement,
+stress and reaction with a separate static solve and its analytical `F/k` tip value.
+
+F23 gives the first axial mode to both integrators on 10/20/40-element rods. The
+consistent and lumped chain frequencies are known independently (F11); each method's
+closed-form dispersion supplies its observed frequency. Their maximum history difference
+is bounded by amplitude mismatch plus the accumulated phase mismatch, including the
+linear-interpolation bound when adjusted grids differ. Spatial/time refinement must
+reduce that bound at second order. F2c already verifies initial-velocity free fall
+through both procedures; F5a verifies the Newmark coefficient.
+
+F24 selects `cpu-direct`, `cpu-pcg` and the host's actual `gpu-pcg` for initial
+acceleration and increment equations in initial-kick, loaded/damped HHT, sinusoidal
+forcing and free-fall cases. It compares every retained displacement and the final
+stress/reaction, and checks the reported backend. The GPU half is mandatory under
+`gpu-tests` (lavapipe in CI); no adapter is a failure. CPU tests also prove explicit
+GPU requests without a device and exhausted iterative budgets fail rather than
+silently using direct solves. Explicit dynamics itself has no linear solve.
 
 F2b's endpoint regression adds `u(t) = v₀t + gt²/2` on two mesh sizes at end times of 0.25,
 1.6 and 2.25 nominal stable steps. The final history time is exactly the requested endpoint,
