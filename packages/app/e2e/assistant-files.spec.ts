@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { FileDelivery } from '@femlab/registry';
+import type { Response } from '@playwright/test';
 import { expect, test } from './fixtures';
 
 test.use({ trace: 'on' });
@@ -12,10 +13,18 @@ test('@cpu Assistant file cards use actual deliveries and exclude a cancelled re
     threaded: createHash('sha256').update(await readFile(new URL('../src/generated/wasm-threads/femlab_engine_wasm_bg.wasm', import.meta.url))).digest('hex'),
   };
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
-  const wasm: Promise<{ url: string; sha256: string }>[] = [];
-  page.on('response', response => {
-    if (/femlab_engine_wasm_bg.*\.wasm/.test(response.url())) wasm.push(response.body().then(bytes => ({ url: response.url(), sha256: createHash('sha256').update(bytes).digest('hex') })));
-  });
+  type WasmBody = { url: string; sha256: string };
+  const wasm: Promise<WasmBody | { url: string; readError: string }>[] = [];
+  const onResponse = (response: Response): void => {
+    const url = response.url();
+    // Replaced Workers can close their response target. Handle that rejection when the
+    // observation starts, rather than leaving it unhandled until the final fingerprint check.
+    if (/femlab_engine_wasm_bg.*\.wasm/.test(url)) wasm.push(response.body().then(
+      bytes => ({ url, sha256: createHash('sha256').update(bytes).digest('hex') }),
+      error => ({ url, readError: String(error) }),
+    ));
+  };
+  page.on('response', onResponse);
   await page.addInitScript(() => {
     localStorage.setItem('femlab.ai.key.openai', 'test-only');
     localStorage.setItem('femlab.ai.model', 'gpt-5.4-mini');
@@ -111,9 +120,6 @@ test('@cpu Assistant file cards use actual deliveries and exclude a cancelled re
   expect(downloads).toEqual([]);
   expect(await page.evaluate(async () => ({ journal: await window.fem.query.journal(), view: await window.fem.registry.query({ query: 'query.view' }) }))).toEqual(before);
   page.off('download', onDownload);
-  const runtime = await Promise.all(wasm);
-  expect(runtime.length).toBeGreaterThan(0);
-  expect(new Set(runtime.map(item => item.sha256))).toEqual(new Set([expectedWasm]));
   const shownFiles = await drawer.locator('.files-row').evaluateAll(rows => rows.map(row => ({ name: row.querySelector('.path')?.textContent, destination: row.querySelector('.faint')?.textContent, command: row.querySelector('button')?.dataset['cmd'] })));
   expect(shownFiles).toEqual([
     { name: 'assistant-files.femlab.json', destination: 'download', command: 'clipboard.copy' },
@@ -149,5 +155,23 @@ test('@cpu Assistant file cards use actual deliveries and exclude a cancelled re
   }, delivery.id);
   expect(refused).toBe('file.not-found');
   await testInfo.attach('expired-file-download.png', { body: await page.screenshot(), contentType: 'image/png' });
-  await testInfo.attach('file-delivery-receipts.json', { body: JSON.stringify({ expectedMode, runtimeCapabilities, bindingHashes, expectedWasm, runtime, shownFiles, delivery, available, defaultFilename: first.suggestedFilename(), scriptFilename: script.suggestedFilename(), bytes: firstBytes.length, sha256: createHash('sha256').update(firstBytes).digest('hex'), repeatSha256: createHash('sha256').update(repeatedBytes).digest('hex'), refused, cancelledDownloads: downloads, before, edited }, null, 2), contentType: 'application/json' });
+  const defaultFilename = first.suggestedFilename(), scriptFilename = script.suggestedFilename();
+  // Include late observations from the document replacement above before closing the audit.
+  page.off('response', onResponse);
+  // A retired Worker's body read may remain pending until its page closes. All interaction
+  // assertions and screenshots are complete; end this owned lifetime before draining reads.
+  await page.close();
+  const observations = await Promise.all(wasm);
+  await testInfo.attach('wasm-observations.json', {
+    body: JSON.stringify({ expectedMode, expectedWasm, observations }, null, 2), contentType: 'application/json',
+  });
+  const runtime = observations.filter((item): item is WasmBody => 'sha256' in item);
+  expect(runtime.length).toBeGreaterThan(0);
+  expect(new Set(runtime.map(item => item.sha256))).toEqual(new Set([expectedWasm]));
+  const completedAssets = new Set(runtime.map(({ url }) => { const asset = new URL(url); return asset.origin + asset.pathname; }));
+  for (const item of observations) if ('readError' in item) {
+    const asset = new URL(item.url);
+    expect(completedAssets.has(asset.origin + asset.pathname), `Unread WASM asset has no verified selected-runtime body: ${item.url}`).toBe(true);
+  }
+  await testInfo.attach('file-delivery-receipts.json', { body: JSON.stringify({ expectedMode, runtimeCapabilities, bindingHashes, expectedWasm, runtime, observations, shownFiles, delivery, available, defaultFilename, scriptFilename, bytes: firstBytes.length, sha256: createHash('sha256').update(firstBytes).digest('hex'), repeatSha256: createHash('sha256').update(repeatedBytes).digest('hex'), refused, cancelledDownloads: downloads, before, edited }, null, 2), contentType: 'application/json' });
 });
