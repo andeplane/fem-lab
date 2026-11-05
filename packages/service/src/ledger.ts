@@ -1,4 +1,6 @@
 import type { Sql } from './accounts';
+import {transaction,type Database} from './transactions';
+import {ServiceFailure} from './errors';
 import { calendarPeriod, balanceCredits, CREDIT_SCALE, FREE_MONTHLY_CREDITS, PLANS, TARIFF_VERSION, type PlanId } from './credits';
 import type {PublicCreditUnit} from '@femlab/registry';
 import {freePolicy,freeGrantAllowed,type EmailFingerprint} from './free-eligibility';
@@ -48,3 +50,39 @@ export function creditLedger(sql: Sql, now: () => Date, newId: () => string, fin
     } };
 }
 export type CreditLedger = ReturnType<typeof creditLedger>;
+
+
+export interface DebitAdjustment {accountId:string;grantId:string;idempotencyId:string;actorRef:string;reasonRef:string;subcredits:string}
+export interface AdjustmentReceipt {id:string;accountId:string;grantId:string;source:string;debitedSubcredits:string;createdAt:string;replay:boolean}
+/** Operator-only debit correction. Uses the same transaction lock as admission and
+ * settlement; reserved/dispatched/uncertain allocations remain unavailable.
+ * A positive correction requires a separately reviewed funding mechanism.
+ */
+export async function debitAdjustment(db:Database,input:DebitAdjustment,now:()=>Date):Promise<AdjustmentReceipt>{
+  const uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
+  if(!uuid.test(input.accountId)||!uuid.test(input.grantId)||!uuid.test(input.idempotencyId)||!/^[-a-zA-Z0-9._]{1,64}$/.test(input.reasonRef)||!(/^[a-f0-9]{64}$/).test(input.actorRef)||!/^([1-9][0-9]{0,18})$/.test(input.subcredits)||BigInt(input.subcredits)>9223372036854775807n)
+    throw new ServiceFailure(422,'invalid-adjustment','Use account/grant/idempotency UUIDs, authenticated actor and case references, and positive exact integer subcredits.','operator.adjustment');
+  const accountId=input.accountId.toLowerCase(),grantId=input.grantId.toLowerCase(),id=input.idempotencyId.toLowerCase(),source=`operator-adjustment:v1:${input.actorRef}:${input.reasonRef}:${input.idempotencyId.toLowerCase()}`,amount=BigInt(input.subcredits);
+  return transaction(db,async sql=>{
+    const previous=(await sql.query('SELECT * FROM credit_entries WHERE id=$1',[id])).rows[0];
+    const receipt=(row:Record<string,unknown>,replay:boolean):AdjustmentReceipt=>({id:String(row.id),accountId:String(row.account_id),grantId:String(row.grant_id),source:String(row.source),debitedSubcredits:(-BigInt(String(row.amount))).toString(),createdAt:(row.created_at as Date).toISOString(),replay});
+    if(previous){
+      if(previous.account_id!==accountId||previous.grant_id!==grantId||previous.kind!=='adjustment'||previous.source!==source||BigInt(String(previous.amount))!==-amount)
+        throw new ServiceFailure(409,'adjustment-conflict','This correction reference already describes another debit.','operator.adjustment');
+      return receipt(previous,true);
+    }
+    const account=(await sql.query('SELECT status FROM accounts WHERE id=$1 FOR UPDATE',[accountId])).rows[0];
+    if(account?.status!=='active')throw new ServiceFailure(404,'adjustment-account-unavailable','The target account is unavailable.','operator.adjustment');
+    const clock=now();
+    const grant=(await sql.query(`SELECT g.*,g.amount
+      + COALESCE((SELECT sum(e.amount) FROM credit_entries e WHERE e.grant_id=g.id),0)
+      - COALESCE((SELECT sum(h.amount) FROM credit_holds h JOIN ai_requests r ON r.id=h.request_id
+        WHERE h.grant_id=g.id AND r.state IN ('reserved','dispatched','pending_reconciliation')),0) AS available
+      FROM credit_grants g WHERE g.id=$1 AND g.account_id=$2 AND g.starts_at <= $3 AND g.expires_at > $3 FOR UPDATE`,[grantId,accountId,clock])).rows[0];
+    if(!grant)throw new ServiceFailure(404,'adjustment-grant-unavailable','Select an active grant belonging to this account.','operator.adjustment');
+    if(amount>BigInt(String(grant.available)))throw new ServiceFailure(409,'adjustment-exceeds-available','This debit exceeds the unspent, unreserved grant balance.','operator.adjustment');
+    const row=(await sql.query(`INSERT INTO credit_entries(id,account_id,grant_id,source,amount,kind,created_at)
+      VALUES($1,$2,$3,$4,$5,'adjustment',$6) RETURNING *`,[id,accountId,grantId,source,(-amount).toString(),clock])).rows[0]!;
+    return receipt(row,false);
+  });
+}
