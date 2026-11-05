@@ -270,9 +270,12 @@ them.
 
 **8. Mixed u/p element for near-incompressibility — 1 tutorial.**
 Tutorial 69.
-Scope: a three-field or B-bar formulation as a `Formulation` variant alongside
-`incompatible-modes` and `full`. BENCHMARKS C3 (ν = 0.49 … 0.4999) is already green, so today's
-elements survive the linear case; this only becomes load-bearing with hyperelasticity (#11).
+The original gap called for a three-field or B-bar `Formulation` alongside
+`incompatible-modes` and `full`. Small-strain `mean-dilatation` now covers Hex8 and
+plane-strain/axisymmetric Quad4, with a structural Step override (#343, #8).
+BENCHMARKS C3 gates displacement and both bore stresses at ν = 0.49 … 0.4999 across
+refinements. This linear capability does not enable finite-strain incompressible
+hyperelasticity; that remains separate work under #69.
 
 ### Materials
 

@@ -392,11 +392,14 @@ See ADR 0037.
 supplier-cost budget before one provider round. It becomes a confirmed debit or
 pending reconciliation; losing the browser stream does not erase it. See ADR 0028.
 
-**Mean dilatation (`mean-dilatation`)** is the explicit small-strain Hex8 B-bar
-formulation: eight-point integration with physical-volume-averaged volumetric strain.
-It preserves deviatoric/shear strain and uses the ordinary material extension point.
-Abaqus C3D8 imports select it; other supported source kinds retain full integration.
-Existing `full` Journals keep pointwise full integration. See ADR 0034.
+**Mean dilatation (`mean-dilatation`)** is the explicit small-strain B-bar
+formulation for Hex8 and Quad4 in plane strain or axisymmetry, including twist.
+It retains full deviatoric/shear quadrature and averages mechanical dilatation over
+physical volume, including the ring weight and the same projection of thermal
+strain. A structural Step can override the mesh default. Abaqus C3D8 imports select
+it; plane-stress Quad4 and other kinds retain full integration. Existing `full`
+Journals keep pointwise full integration. Finite-deformation B-bar is unsupported.
+See ADR 0034 and ADR 0050.
 
 **Owner partition** — A browser cache/history/folder destination captured for one
 Account UID or for anonymous work. It does not follow a later login. Authentication
