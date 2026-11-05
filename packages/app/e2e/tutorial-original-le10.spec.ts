@@ -70,4 +70,15 @@ test('@cpu completes original line-supported LE10 visibly and distinguishes the 
   const result = await page.evaluate(() => window.fem.query.result({ step: 'static' }));
   expect(result.balance).toBeLessThan(1e-9);
   await expect(page.locator('button.solve')).toHaveText(/Solved/);
+  await testInfo.attach('le10-original-numerical-receipt', {
+    body: JSON.stringify({ stress: stress.value, balance: result.balance, solveMs: result.timeMs }),
+    contentType: 'application/json',
+  });
+});
+
+test('@cpu renders the original LE10 guide on the public documentation route', async ({ page }) => {
+  await page.goto('docs/examples-tutorials/#le10-original-mid-plane-line-support');
+  await expect(page.locator('#le10-original-mid-plane-line-support')).toHaveText('LE10: original mid-plane line support');
+  await expect(page.locator('main')).toContainText('uz is held only on its z = 0.3 m mid-plane line');
+  await expect(page.locator('main a[href="https://www.simscale.com/docs/validation-cases/thick-plate-under-pressure/"]')).toBeVisible();
 });

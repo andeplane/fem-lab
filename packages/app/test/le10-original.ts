@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
 import type { TutorialCommand } from '../src/tutorial/types';
 
@@ -18,14 +20,15 @@ type Mesh = {
     provenance: { sha256: string };
   };
 };
+const here = path.dirname(fileURLToPath(import.meta.url));
 
 /** One fine tutorial replay also owns the independent three-mesh physical check. */
 export async function checkOriginalLe10(Engine: new (threads: number) => Engine, commands: TutorialCommand[]) {
   const errors: number[] = [];
   for (const [n, layers] of [[4, 2], [4, 4], [6, 6]] as const) {
     const size = `${n}x${n}x${layers}`;
-    const mesh = (n === 6 ? commands.find(c => c.cmd === 'mesh.set') : JSON.parse(readFileSync(new URL(`./fixtures/le10-original/${size}.mesh.json`, import.meta.url), 'utf8'))) as Mesh;
-    const deck = readFileSync(new URL(`../../../tools/fixtures/le10-original/${size}.inp`, import.meta.url), 'utf8');
+    const mesh = (n === 6 ? commands.find(c => c.cmd === 'mesh.set') : JSON.parse(readFileSync(path.join(here, 'fixtures', 'le10-original', `${size}.mesh.json`), 'utf8'))) as Mesh;
+    const deck = readFileSync(path.resolve(here, '../../../tools/fixtures/le10-original', `${size}.inp`), 'utf8');
     expect(createHash('sha256').update(deck).digest('hex')).toBe(mesh.mesher.provenance.sha256);
     expect(mesh.mesher.elements).toHaveLength(n * n * layers);
     expect(mesh.mesher.elements.every(e => e.kind === 'hex20' && e.nodes.length === 20)).toBe(true);

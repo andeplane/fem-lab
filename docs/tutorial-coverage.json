@@ -1,7 +1,7 @@
 {
   "source": "docs/TUTORIAL-COVERAGE.md",
   "epic": 432,
-  "about": "One entry per numbered vendor-tutorial row of docs/TUTORIAL-COVERAGE.md §1. status_written is the verdict the doc wrote on the day it was written (can-do, variant, partial, cannot) and does not change; needs lists the sub-issues of epic #432 whose capabilities the tutorial requires, including the ones that have since landed, so tools/tutorial-coverage.mjs decides doability from live issue state rather than from the prose. note records where the mapping needed judgment.",
+  "about": "One entry per numbered vendor-tutorial row of docs/TUTORIAL-COVERAGE.md §1. status_written mirrors the written §1 verdict (can-do, variant, partial, cannot); update both when the documented workflow changes. It is not a live issue-state verdict; needs lists the sub-issues of epic #432 whose capabilities the tutorial requires, including the ones that have since landed, so tools/tutorial-coverage.mjs decides doability from live issue state rather than from the prose. note records where the mapping needed judgment.",
   "tutorials": [
     {
       "id": 1,
@@ -790,9 +790,9 @@
       "vendor": "SimScale",
       "title": "Validation Case: Thick Plate Under Pressure (NAFEMS LE10)",
       "url": "https://www.simscale.com/docs/validation-cases/thick-plate-under-pressure/",
-      "status_written": "variant",
+      "status_written": "can-do",
       "needs": [],
-      "note": "The doc ships a whole-face-support variant (nafems-le10-plate). The original mid-plane-line-supported model is #183, which is not in the #432 list, so needs is empty."
+      "note": "Original mid-plane-line LE10 is reproduced by le10-original (#86), with exact imported support Sets and three refinements against −5.38 MPa. The separately labelled nafems-le10-plate / le10-full-face variant retains ESRD’s −5.25 MPa reference. No missing #432 capability is required."
     },
     {
       "id": 73,
