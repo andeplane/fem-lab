@@ -73,7 +73,7 @@ jobs:
   rust-lint:
     name: rust lint
     needs: changes
-    if: needs.changes.outputs.rust == 'true'
+    if: ${{ false }} # Temporary #825 schema-only bootstrap; restored before final gate.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -93,12 +93,17 @@ jobs:
   # The CLI crate's tests replay and solve every bundled example through the binary (~90 s on
   # their own); they run on merge with the rest of the workspace.
   rust-test:
-    name: rust tests
+    name: native schema bootstrap (825)
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CARGO_BUILD_JOBS: 2
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.94"
@@ -106,34 +111,41 @@ jobs:
         with:
           shared-key: workspace
           save-if: false
-      - run: cargo test --workspace --exclude femlab
-      # This multi-minute physics study belongs to main; relevant operator/oracle PRs
-      # also run it explicitly. The cheap fixed-deck/rigid replay test always runs above.
-      - if: needs.changes.outputs.fv52 == 'true'
+      - name: Emit official combined #343 + corrected #850 + #825 native schema only
+        shell: bash
         run: |
-          cargo test -p femlab-engine --test registry modal_fv52::fv52_enlarged_spectra_obey_square_symmetry_and_nested_space_min_max -- --ignored --exact --nocapture | tee fv52-study.log
-          python3 -c "from pathlib import Path; assert 'test result: ok. 1 passed; 0 failed; 0 ignored;' in Path('fv52-study.log').read_text()"
-      # D3's independently published fixed deck also has to pass actual CLI dispatch.
-      # One 16-element case, not the broad CLI replay suite; unrelated PRs skip it.
-      - if: needs.changes.outputs.fv52 == 'true'
-        run: |
-          cargo run -p femlab -- bench --filter fv52-published-hex20-deck --cpu --threads 1 --json > fv52-benchmark.json
-          cat fv52-benchmark.json
-          python3 -c "import json; r=json.load(open('fv52-benchmark.json')); assert len(r)==1 and r[0]['name']=='fv52-published-hex20-deck' and r[0]['pass'] and len(r[0]['checks'])==13 and all(c['pass'] for c in r[0]['checks'])"
-      - if: always() && needs.changes.outputs.fv52 == 'true'
-        uses: actions/upload-artifact@v4
+          set -euo pipefail
+          cargo run --locked -p femlab -- schema --out 825-native-schema.json
+          python3 - <<'PY_SOURCE'
+          import hashlib, json, pathlib, subprocess
+          def git(*args):
+              return subprocess.check_output(['git', *args], text=True).strip()
+          schema = pathlib.Path('825-native-schema.json')
+          payload = {
+              'source': git('rev-parse', 'HEAD'),
+              'engine_tree': git('rev-parse', 'HEAD:crates/engine/src'),
+              'geometry_tree': git('rev-parse', 'HEAD:crates/geometry/src'),
+              'compiler': subprocess.check_output(['rustc', '--version'], text=True).strip(),
+              'schema_sha256': hashlib.sha256(schema.read_bytes()).hexdigest(),
+              'schema_bytes': schema.stat().st_size,
+          }
+          pathlib.Path('825-native-source.json').write_text(json.dumps(payload, indent=2) + '\n')
+          print(json.dumps(payload, indent=2))
+          PY_SOURCE
+      - uses: actions/upload-artifact@v4
         with:
-          name: fv52-benchmark
+          name: 825-native-schema
           retention-days: 3
           if-no-files-found: error
           path: |
-            fv52-benchmark.json
-            fv52-study.log
+            825-native-schema.json
+            825-native-source.json
 
   # A cache hit (any PR that does not touch Rust) takes seconds; a miss builds the same optimized
   # bundle main builds.
   wasm:
     name: wasm bundle
+    if: ${{ false }} # No WASM build in the temporary metadata bootstrap.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -155,6 +167,7 @@ jobs:
   # Four parallel slices of what `web` runs on main, each about a minute of work.
   web:
     name: web (${{ matrix.slice }})
+    if: ${{ false }} # Generated bindings are intentionally awaiting the official emitter.
     needs: wasm
     runs-on: ubuntu-latest
     strategy:
@@ -223,6 +236,7 @@ jobs:
     needs: [changes, rust-lint, rust-test, wasm, web]
     runs-on: ubuntu-latest
     steps:
-      - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
-        run: exit 1
-      - run: echo "pull-request gate passed"
+      - name: Fail intentionally until canonical validation is restored
+        run: |
+          echo "Temporary #825 schema-only bootstrap: no acceptance or merge is permitted. Restore canonical pr.yml before final validation." >&2
+          exit 1

@@ -156,6 +156,24 @@ describe('fields and the legend', () => {
     expect(fieldChoices(['stressPly:0:top', 'stressPly:1:middle'])).toEqual([]);
   });
 
+  it('offers thermal vectors with independent intensity units and all three signed components', () => {
+    const fields = ['temperatureGradient', 'heatFlux'];
+    const choices = fieldChoices(fields);
+    expect(choices).toHaveLength(8);
+    expect(siUnitOf('temperatureGradient')).toBe('K/m');
+    expect(siUnitOf('heatFlux')).toBe('W/m^2');
+    const units = { temperature: 'degC', temperatureGradient: 'K/mm', power: 'kW', heatFlux: 'kW/m^2' };
+    expect(displayUnitOf('temperatureGradient', units)).toBe('K/mm');
+    expect(displayUnitOf('heatFlux', units)).toBe('kW/m^2');
+    for (const field of fields) {
+      expect(choiceOf(fieldKeyOf(field, null)).magnitude).toBe(true);
+      for (let component = 0; component < 3; component++) {
+        expect(choiceOf(fieldKeyOf(field, component))).toEqual(choices.find(c => c.field === field && c.component === component));
+      }
+      expect(() => fieldKeyOf(field, 3)).toThrowError(expect.objectContaining({ code: 'unsupported' }));
+    }
+  });
+
   it('collapses a vector to its magnitude, and leaves a scalar alone', () => {
     expect([...magnitude(Float32Array.from([3, 4, 0, 0, 0, 2]), true)]).toEqual([5, 2]);
     const scalar = Float32Array.from([1, 2]);

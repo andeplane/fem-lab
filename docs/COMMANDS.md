@@ -1695,6 +1695,16 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "description": "Dimensionless local ZZ energy-error contribution per element. Sum of squares\nequals the squared global relative estimate. Available when requested in\nstep.add.output on supported linear simplex static/heat Steps, or after study.adapt.",
       "type": "string",
       "const": "errorEstimate"
+    },
+    {
+      "description": "Endpoint temperature gradient in K/m, three components, recovered at thermal Gauss\npoints and corner-shape extrapolated per element node without interface averaging.\nGlobal x/y/z in 3D; x/y/0 in planar models and radial/axial/0 in axisymmetry.\nAvailable on heat Results only; retained frames contain temperature, not this field.",
+      "type": "string",
+      "const": "temperatureGradient"
+    },
+    {
+      "description": "Endpoint conductive flux q = -K grad(T), in W/m^2, with the same location and axes as\ntemperatureGradient. Uses the full material conductivity tensor. Current 2D Models\nallow only in-plane material axes, giving zero omitted gradient/flux. Tilted axes in\n3D can couple all components. This is flux density, not applied inward flux or total W.",
+      "type": "string",
+      "const": "heatFlux"
     }
   ]
 }
@@ -4577,6 +4587,20 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "null"
       ]
     },
+    "temperatureGradient": {
+      "description": "Temperature difference per length; defaults to K/m. In degC/m the temperature is an\ninterval: compound units never apply an absolute-temperature offset.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "heatFlux": {
+      "description": "Conductive flux density display unit; defaults to W/m^2, independently of total power.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "acceleration": {
       "type": [
         "string",
@@ -4786,6 +4810,8 @@ Field names include mode:k for one-based modal/buckling shapes owned by the Resu
 for laminate ply faces (k starts at 1, bottom to top within each Section). Ply stresses
 are global xx, yy, zz, xy, xz, yz in Pa, unaveraged per element node; elements without
 that ply carry zeros. Both sides of an interface remain distinct. Explicit ids use solved metadata;
+temperatureGradient (K/m) and heatFlux (W/m^2) are final heat endpoint vectors,
+recovered per element node without averaging. They are not retained frame fields.
 omitted ids refuse stale Results. Retained samples use query.frame's existing protocol.
 
 Returns: `ResultField`.
@@ -4934,6 +4960,8 @@ Returns: `ObjectList`.
 ### query.path
 
 A field sampled at `n` points along the line from `from` to `to`, for a line plot.
+Element-node fields interpolate within one element without interface averaging;
+shared-face ties use the lowest element id, exactly as query.probe does.
 Optional sample selects a retained primary-field frame; omitted means the final field.
 Omitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.
 
@@ -4968,10 +4996,11 @@ Returns: `PortableProject`.
 
 ### query.probe
 
-A field value at a point (default: the last solved Step). Nodal fields are
-interpolated; errorEstimate returns the containing element's constant value
+A field value at a point (default: the last solved Step). Nodal and unaveraged
+element-node fields are interpolated within the containing element; no interface
+averaging is applied. errorEstimate returns the containing element's constant value
 with interpolated=false. Shared-face ties use the lowest element id. Component
-indices: displacement 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.
+indices: displacement and thermal vectors 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.
 Optional sample selects a retained primary-field frame; omitted means the final field.
 Omitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.
 
@@ -8065,6 +8094,16 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "description": "Dimensionless local ZZ energy-error contribution per element. Sum of squares\nequals the squared global relative estimate. Available when requested in\nstep.add.output on supported linear simplex static/heat Steps, or after study.adapt.",
       "type": "string",
       "const": "errorEstimate"
+    },
+    {
+      "description": "Endpoint temperature gradient in K/m, three components, recovered at thermal Gauss\npoints and corner-shape extrapolated per element node without interface averaging.\nGlobal x/y/z in 3D; x/y/0 in planar models and radial/axial/0 in axisymmetry.\nAvailable on heat Results only; retained frames contain temperature, not this field.",
+      "type": "string",
+      "const": "temperatureGradient"
+    },
+    {
+      "description": "Endpoint conductive flux q = -K grad(T), in W/m^2, with the same location and axes as\ntemperatureGradient. Uses the full material conductivity tensor. Current 2D Models\nallow only in-plane material axes, giving zero omitted gradient/flux. Tilted axes in\n3D can couple all components. This is flux density, not applied inward flux or total W.",
+      "type": "string",
+      "const": "heatFlux"
     }
   ]
 }
@@ -11120,6 +11159,20 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     "temperature": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "temperatureGradient": {
+      "description": "Temperature difference per length; defaults to K/m. In degC/m the temperature is an\ninterval: compound units never apply an absolute-temperature offset.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "heatFlux": {
+      "description": "Conductive flux density display unit; defaults to W/m^2, independently of total power.",
       "type": [
         "string",
         "null"

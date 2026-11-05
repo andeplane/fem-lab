@@ -159,7 +159,9 @@ pub trait Element: Send + Sync {
     /// second Piola–Kirchhoff stress the material law returns for the Green–Lagrange strain,
     /// and the linear elastic law therefore *is* St Venant–Kirchhoff. Three-dimensional solids
     /// and plane strain only; `mesh.inverted` when `det F ≤ 0`, which the Newton loop reads as
-    /// the signal to halve its increment.
+    /// the signal to halve its increment. Elastic Beam2 instead uses corotational section
+    /// kinematics: engineering axial section strain, extreme-fibre elastic stress and total
+    /// global rotation vectors (ADR 0048). The same force/tangent contract applies.
     fn tangent_and_force(
         &self,
         c: &ElementCtx<'_>,

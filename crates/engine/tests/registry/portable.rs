@@ -69,6 +69,36 @@ fn portable_results_roundtrip_exact_f64_mesh_context_and_identity_without_solvin
     let QueryResult::Project(again) = reply.value else { panic!() };
     assert_eq!(again, project, "restoration preserves all retained scientific bytes and complete solved context");
 }
+
+#[test]
+fn portable_thermal_vectors_preserve_their_unaveraged_scientific_layout() {
+    let mut e = inherited_heat_bar(2, 1);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"warm","solver":"cpu-direct"}"#);
+    let project = e.export_project().unwrap();
+    let text = serde_json::to_string(&project).unwrap();
+    let restored = PortableProject::from_json(&text).unwrap();
+    let mut target = owner();
+    let prepared = prepare(&mut target, restored).expect("valid three-component element-node fields");
+    target.commit_replacement(prepared).unwrap();
+    let lease = target.begin_run(&target.stamp().session).unwrap();
+    let reply = target
+        .query(femlab_engine::session::ReadRequest {
+            context: ExecutionContext {
+                session: lease.stamp.session,
+                run_id: lease.run_id,
+                operation_id: "read".into(),
+            },
+            query: Query::PortableProject {},
+        })
+        .unwrap();
+    let QueryResult::Project(again) = reply.value else { panic!() };
+    assert_eq!(again, project);
+    for field in [Field::TemperatureGradient, Field::HeatFlux] {
+        let mut corrupt = project.clone();
+        corrupt.results[0].result.fields.get_mut(&field).unwrap().per = femlab_engine::post::Per::Node;
+        assert!(prepare(&mut owner(), corrupt).is_err(), "cannot relabel an element-node vector as nodal");
+    }
+}
 #[test]
 fn portable_rejects_corrupt_untrusted_archive_atomically() {
     let project = source();

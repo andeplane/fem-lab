@@ -6,7 +6,7 @@
 // viewer colours by is converted once, here, with the scale and offset `query.convert` gives; the deformed
 // shape stays in SI because the mesh coordinates are.
 import { FemError, type FrameResult, type FramesResult, type ResultSummary, type Ack, type Warning } from '@femlab/registry';
-import { choiceOf, type FieldChoice, displayUnitOf, fieldChoices, modeCount, siUnitOf } from './fields';
+import { choiceOf, type FieldChoice, displayUnitOf, fieldChoices, modeCount, siUnitOf, thermalEndpointLabel } from './fields';
 import type { ViewerRef } from './host';
 import type { Store, ViewMode } from './store';
 import type { EngineTransport } from '@femlab/registry';
@@ -311,8 +311,8 @@ export class ResultsView {
       : [];
     if (!result || !choices.some((c) => c.key === key)) throw unavailableField(f.field, f.component ?? null);
     if (this.store.state.transient && choiceOf(key).field !== this.store.state.transient.catalogue.field)
-      throw new FemError('unsupported', `retained frames contain only ${this.store.state.transient.catalogue.field}`, 'view.showField', 'query.frames for available historical fields');
-    this.displayEpoch++;
+      this.invalidateTransient();
+    else this.displayEpoch++;
     this.store.set({ fieldKey: key, viewMode: 'results' });
     this.viewer.current?.setMode('results');
     await this.refresh(true);
@@ -369,7 +369,8 @@ export class ResultsView {
     const { legend, fieldKey, colormap, viewMode } = this.store.state;
     if (!legend || viewMode !== 'results') return null;
     const sample = this.store.state.transient?.frame;
-    return { title: `${choiceOf(fieldKey, this.store.state.result).label}${sample ? ` · ${sample.time.value} ${sample.time.unit}` : ''}`, unit: legend.unit, min: legend.min, max: legend.max, colormap };
+    const endpoint = sample ? null : thermalEndpointLabel(this.store.state.result, fieldKey);
+    return { title: `${choiceOf(fieldKey, this.store.state.result).label}${sample ? ` · ${sample.time.value} ${sample.time.unit}` : endpoint ? ` · ${endpoint}` : ''}`, unit: legend.unit, min: legend.min, max: legend.max, colormap };
   }
 
   /**

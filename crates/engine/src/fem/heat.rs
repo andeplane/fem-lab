@@ -152,6 +152,32 @@ pub fn conductivity(kind: ElementKind, c: &ElementCtx<'_>, out: &mut [f64]) -> R
     Ok(kin.min_det)
 }
 
+/// Physical temperature gradient and Fourier flux at thermal Gauss points, three
+/// components per point. The omitted gradient of a 2D model is zero. Flux uses the full
+/// conductivity tensor, including tilted coupling in 3D. Checked 2D Models permit only
+/// in-plane material axes; their omitted flux is zero.
+pub fn recover(kind: ElementKind, c: &ElementCtx<'_>, temperature: &[f64]) -> Result<(Vec<f64>, Vec<f64>), Error> {
+    let kin = kinematics(kind, c, rule_of(kind))?;
+    let dim = kind.dim();
+    let k = c.material.conductivity_tensor();
+    let mut gradient = vec![0.0; kin.n_gp * 3];
+    let mut flux = vec![0.0; kin.n_gp * 3];
+    for gp in 0..kin.n_gp {
+        for (a, &value) in temperature[..kin.n_nodes].iter().enumerate() {
+            // Partition of unity: subtract a constant before differentiating so the
+            // absolute temperature origin cannot create a numerical gradient.
+            let delta = value - temperature[0];
+            for (i, g) in gradient[3 * gp..3 * gp + dim].iter_mut().enumerate() {
+                *g += kin.g[gp * kin.n_nodes + a][i] * delta;
+            }
+        }
+        for (i, row) in k.iter().enumerate() {
+            flux[3 * gp + i] = -row.iter().zip(&gradient[3 * gp..3 * gp + dim]).map(|(k, g)| k * g).sum::<f64>();
+        }
+    }
+    Ok((gradient, flux))
+}
+
 /// `∫ ρ c_p Nᵀ N dV` into `out`: the consistent capacity the θ-method integrates with.
 pub fn capacity(kind: ElementKind, c: &ElementCtx<'_>, out: &mut [f64]) -> Result<(), Error> {
     let kin = kinematics(kind, c, product_rule_of(kind))?;

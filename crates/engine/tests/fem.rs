@@ -4964,6 +4964,273 @@ fn steady() -> Step {
     Step::HeatSteady { solver: SolveOptions::default(), control: NonlinearControl::default() }
 }
 
+/// E12: Fourier conduction is an intensive vector, not a boundary power or smoothed
+/// nodal temperature derivative. Every supported thermal family/refinement solves it.
+#[test]
+fn thermal_result_vectors_solve_fourier_conduction_for_every_family() {
+    for kind in ALL_KINDS {
+        for n in [2, 4, 8] {
+            let (size, id) = if kind.dim() == 3 {
+                ([1.0, 0.1, 0.1], Idealisation::Solid3d)
+            } else {
+                ([1.0, 0.1, 0.0], Idealisation::PlaneStress { thickness: 0.2 })
+            };
+            let mesh = Structured { kind, n: [n, 1, 1] }.box_(size);
+            let sets = sets_of(&mesh);
+            let bodies = one_body();
+            let p = heat_problem(
+                &mesh,
+                &sets,
+                &bodies,
+                id,
+                conductor(5.0, 1.0, 1.0),
+                vec![hold("cold", "xmin", 300.0), hold("hot", "xmax", 320.0)],
+                Vec::new(),
+            );
+            let res = run_step(&p, &steady()).expect("the Fourier bar solves");
+            let count: usize = mesh.blocks.iter().map(|b| b.conn.len()).sum();
+            for (field, want) in [(Field::TemperatureGradient, 20.0), (Field::HeatFlux, -100.0)] {
+                let f = &res.fields[&field];
+                assert_eq!((f.per, f.comps, f.len()), (Per::ElemNode, 3, count));
+                for row in f.data.chunks_exact(3) {
+                    assert!(
+                        (row[0] - want).abs() < 1e-8 && row[1].abs() < 1e-8 && row[2].abs() < 1e-8,
+                        "{kind:?}/{n} {field:?}: {row:?}"
+                    );
+                }
+                let value = probe(&mesh, f, [0.37, 0.04, size[2] * 0.5]).expect("inside").1;
+                assert!((value[0] - want).abs() < 1e-8);
+            }
+            // Independently integrate q dot n over the hot end. Support heat removal is
+            // negative there because this Dirichlet support supplies heat to the body.
+            let area = if kind.dim() == 3 { 0.01 } else { 0.02 };
+            assert!((res.reactions[1].1[0] + 100.0 * area).abs() < 1e-8);
+        }
+    }
+}
+
+/// A 45-degree material rotation about y gives Kxz=(k3-k1)/2. This analytic
+/// tensor-vector product checks a tilted axis and absolute-temperature shift invariance.
+#[test]
+fn thermal_result_vectors_keep_tilted_anisotropic_flux_and_axisymmetric_basis() {
+    let s = std::f64::consts::FRAC_1_SQRT_2;
+    for (kind, id, offset) in [
+        (ElementKind::Hex20, Idealisation::Solid3d, 0.0),
+        (ElementKind::Quad8, Idealisation::PlaneStrain, 0.0),
+        (ElementKind::Tri6, Idealisation::Axisymmetric { twist: false }, 1.0),
+    ] {
+        let mut mesh = Structured { kind, n: [2, 1, 1] }.box_([1.0, 0.2, if kind.dim() == 3 { 0.2 } else { 0.0 }]);
+        for point in mesh.coords.chunks_exact_mut(3) {
+            point[0] += offset;
+        }
+        let sets = sets_of(&mesh);
+        let bodies = one_body();
+        let mut material = conductor(1.0, 1.0, 1.0);
+        material.k = [2.0, 3.0, 10.0];
+        let expected_flux = if kind.dim() == 3 {
+            material.axes = Some([[s, 0.0, -s], [0.0, 1.0, 0.0], [s, 0.0, s]]);
+            [-12.0, -9.0, -8.0]
+        } else {
+            material.axes = Some([[s, -s, 0.0], [s, s, 0.0], [0.0, 0.0, 1.0]]);
+            [-6.5, -8.5, 0.0]
+        };
+        let p = heat_problem(&mesh, &sets, &bodies, id, material, Vec::new(), Vec::new());
+        for origin in [0.0, 273.15, 1e6] {
+            let t: Vec<f64> = (0..mesh.n_nodes())
+                .map(|n| {
+                    let x = mesh.node(n as u32);
+                    origin + 2.0 * x[0] + 3.0 * x[1]
+                })
+                .collect();
+            let (g, q) = femlab_engine::post::thermal::fields(&p, &t).expect("valid geometry");
+            for (gradient, flux) in g.data.chunks_exact(3).zip(q.data.chunks_exact(3)) {
+                for (actual, want) in gradient.iter().zip([2.0, 3.0, 0.0]) {
+                    assert!((actual - want).abs() < 1e-7);
+                }
+                for (actual, want) in flux.iter().zip(expected_flux) {
+                    assert!((actual - want).abs() < 1e-6, "{kind:?}: {flux:?}");
+                }
+            }
+            let one = Pool::new(1).install(|| femlab_engine::post::thermal::fields(&p, &t).unwrap());
+            let many = Pool::new(4).install(|| femlab_engine::post::thermal::fields(&p, &t).unwrap());
+            assert_eq!(one, many);
+            let one_bits: Vec<_> = one.0.data.iter().chain(&one.1.data).map(|v| v.to_bits()).collect();
+            let many_bits: Vec<_> = many.0.data.iter().chain(&many.1.data).map(|v| v.to_bits()).collect();
+            assert_eq!(one_bits, many_bits, "worker count preserves every IEEE-754 bit");
+        }
+    }
+}
+
+/// An actual 3D solve with affine temperatures on the whole boundary and free interior
+/// nodes: div(q)=0 for the constant tilted tensor, including its nonzero z flux.
+#[test]
+fn thermal_result_vectors_solve_the_tilted_anisotropic_patch() {
+    let s = std::f64::consts::FRAC_1_SQRT_2;
+    for n in [2, 3, 4] {
+        let mesh = Structured { kind: ElementKind::Hex20, n: [n, n, n] }.box_([1.0; 3]);
+        let mut sets = sets_of(&mesh);
+        let bodies = one_body();
+        for origin in [0.0, 273.15] {
+            let mut held = Vec::new();
+            for node in 0..mesh.n_nodes() as u32 {
+                let x = mesh.node(node);
+                if x.iter().any(|v| *v == 0.0 || *v == 1.0) {
+                    let name = format!("boundary{node}");
+                    sets.insert(
+                        name.clone(),
+                        ResolvedSet { kind: SetKind::Node, nodes: vec![node], faces: Vec::new(), elems: Vec::new() },
+                    );
+                    held.push(hold(&name, &name, origin + 2.0 * x[0] + 3.0 * x[1]));
+                }
+            }
+            assert!(held.len() < mesh.n_nodes(), "the interior temperature is solved");
+            let mut material = conductor(1.0, 1.0, 1.0);
+            material.k = [2.0, 3.0, 10.0];
+            material.axes = Some([[s, 0.0, -s], [0.0, 1.0, 0.0], [s, 0.0, s]]);
+            let p = heat_problem(&mesh, &sets, &bodies, Idealisation::Solid3d, material, held, Vec::new());
+            let result = run_step(&p, &steady()).expect("the rotated anisotropic patch solves");
+            for (field, expected) in
+                [(Field::TemperatureGradient, [2.0, 3.0, 0.0]), (Field::HeatFlux, [-12.0, -9.0, -8.0])]
+            {
+                for row in result.fields[&field].data.chunks_exact(3) {
+                    for (actual, want) in row.iter().zip(expected) {
+                        assert!((actual - want).abs() < 1e-7, "n={n}, origin={origin}, {field:?}: {row:?}");
+                    }
+                }
+            }
+            assert!(result.reactions.iter().map(|(_, q)| q[0]).sum::<f64>().abs() < 1e-9);
+        }
+    }
+}
+
+/// T=300+10x(1-x), k=5, source=100 has qx=100x-50 and equal removal
+/// at both ends. Linear elements converge in gradient L2 at order one; quadratic
+/// elements recover this polynomial exactly. Neither oracle calls the heat kernel.
+#[test]
+fn thermal_result_vectors_recover_a_varying_polynomial_and_converge() {
+    for kind in [ElementKind::Hex8, ElementKind::Hex20] {
+        let mut errors = Vec::new();
+        for n in [2, 4, 8] {
+            let mesh = Structured { kind, n: [n, 1, 1] }.box_([1.0, 0.1, 0.1]);
+            let sets = sets_of(&mesh);
+            let bodies = one_body();
+            let p = heat_problem(
+                &mesh,
+                &sets,
+                &bodies,
+                Idealisation::Solid3d,
+                conductor(5.0, 1.0, 1.0),
+                vec![hold("left", "xmin", 300.0), hold("right", "xmax", 300.0)],
+                vec![HeatLoad::Source { bodies: bodies.clone(), q: 100.0 }],
+            );
+            let res = run_step(&p, &steady()).expect("the polynomial bar solves");
+            let mut square_error = 0.0;
+            let g = &res.fields[&Field::TemperatureGradient];
+            for (entity, &node) in mesh.blocks.iter().flat_map(|b| &b.conn).enumerate() {
+                let x = mesh.node(node)[0];
+                square_error += (g.data[3 * entity] - (10.0 - 20.0 * x)).powi(2);
+                assert!((res.fields[&Field::HeatFlux].data[3 * entity] + 5.0 * g.data[3 * entity]).abs() < 1e-9);
+            }
+            errors.push((square_error / g.len() as f64).sqrt());
+            for (_, reaction) in &res.reactions {
+                assert!((reaction[0] - 0.5).abs() < 1e-9);
+            }
+            assert!((res.scalars["applied_total_x"] - 1.0).abs() < 1e-9);
+        }
+        if kind == ElementKind::Hex8 {
+            for pair in errors.windows(2) {
+                assert!((pair[0] / pair[1] - 2.0).abs() < 1e-7, "{errors:?}");
+            }
+        } else {
+            assert!(errors.iter().all(|e| *e < 1e-8), "{errors:?}");
+        }
+    }
+}
+
+/// Independent element values may jump at a conductivity interface. Query interpolation
+/// selects one side, including a shared-face tie, rather than averaging that jump away.
+#[test]
+fn thermal_result_vectors_preserve_interfaces_and_probe_each_element() {
+    let mesh = two_blocks(ElementKind::Hex8, [1, 1, 1], [1, 1, 1], [1.0, 0.1, 0.1], 0.0);
+    let sets = sets_of(&mesh);
+    let bodies = two_bodies();
+    let mut p =
+        heat_problem(&mesh, &sets, &bodies, Idealisation::Solid3d, conductor(2.0, 1.0, 1.0), Vec::new(), Vec::new());
+    p.materials.push(conductor(10.0, 1.0, 1.0));
+    p.material_of_block = vec![Some(0), Some(1)];
+    let t: Vec<f64> = (0..mesh.n_nodes()).map(|n| 300.0 + 5.0 * mesh.node(n as u32)[0]).collect();
+    let (_, flux) = femlab_engine::post::thermal::fields(&p, &t).unwrap();
+    for (x, element, want) in [(0.5, 0, -10.0), (1.0, 0, -10.0), (1.5, 1, -50.0)] {
+        let (got_element, value) = probe(&mesh, &flux, [x, 0.05, 0.05]).expect("inside");
+        assert_eq!(got_element, element);
+        assert!((value[0] - want).abs() < 1e-10);
+    }
+    let walk = path(&mesh, &flux, [0.5, 0.05, 0.05], [1.5, 0.05, 0.05], 3);
+    assert!((walk[2].1.as_ref().unwrap()[0] + 50.0).abs() < 1e-10);
+    // Recovery uses the same structured inverted-Jacobian error as assembly.
+    let mut coords = vec![0.0; 24];
+    mesh.elem_coords(0, &mut coords);
+    for x in coords.chunks_exact_mut(3) {
+        x[0] = -x[0];
+    }
+    let ctx = p.ctx(0, &coords, &[0.0; 8]).unwrap();
+    assert_eq!(
+        femlab_engine::fem::heat::recover(ElementKind::Hex8, &ctx, &[0.0; 8]).unwrap_err().code,
+        ErrorCode::MeshInverted
+    );
+    let mut folded = mesh.clone();
+    for x in folded.coords.chunks_exact_mut(3) {
+        x[0] = -x[0];
+    }
+    let invalid =
+        heat_problem(&folded, &sets, &bodies, Idealisation::Solid3d, conductor(2.0, 1.0, 1.0), Vec::new(), Vec::new());
+    assert_eq!(femlab_engine::post::thermal::fields(&invalid, &t).unwrap_err().code, ErrorCode::MeshInverted);
+    p.material_of_block[0] = None;
+    assert!(femlab_engine::post::thermal::fields(&p, &t).is_err(), "missing element material is a structured error");
+}
+
+/// Cylindrical resistance: T=300+100 log(r)/log(2) on 1<=r<=2, H=0.2,
+/// so q_r=-500/(r log(2)) and Q=2*pi*H*500/log(2), independent of radius.
+#[test]
+fn thermal_result_vectors_converge_to_radial_fourier_flux_and_total_power() {
+    let exact_gradient = 100.0 / (1.5 * libm::log(2.0));
+    let exact_power = 2.0 * PI * 0.2 * 500.0 / libm::log(2.0);
+    for kind in [ElementKind::Quad4, ElementKind::Quad8] {
+        let mut errors = Vec::new();
+        for n in [4, 8, 16] {
+            let mut mesh = Structured { kind, n: [n, 1, 1] }.box_([1.0, 0.2, 0.0]);
+            for point in mesh.coords.chunks_exact_mut(3) {
+                point[0] += 1.0;
+            }
+            let sets = sets_of(&mesh);
+            let bodies = one_body();
+            let p = heat_problem(
+                &mesh,
+                &sets,
+                &bodies,
+                Idealisation::Axisymmetric { twist: false },
+                conductor(5.0, 1.0, 1.0),
+                vec![hold("inner", "xmin", 300.0), hold("outer", "xmax", 400.0)],
+                Vec::new(),
+            );
+            let res = run_step(&p, &steady()).expect("the radial conductor solves");
+            let g = probe(&mesh, &res.fields[&Field::TemperatureGradient], [1.5, 0.1, 0.0]).unwrap().1;
+            let q = probe(&mesh, &res.fields[&Field::HeatFlux], [1.5, 0.1, 0.0]).unwrap().1;
+            errors.push((g[0] - exact_gradient).abs());
+            assert!((q[0] + 5.0 * g[0]).abs() < 1e-9);
+            assert!(g[1].abs() < 1e-9 && q[1].abs() < 1e-9);
+            assert_eq!((g[2], q[2]), (0.0, 0.0));
+            assert!((res.reactions[0].1[0] / exact_power - 1.0).abs() < 0.003);
+            assert!((res.reactions[0].1[0] + res.reactions[1].1[0]).abs() < 1e-8);
+        }
+        assert!(errors[2] < errors[1] && errors[1] < errors[0], "{kind:?}: {errors:?}");
+        let expected_rate = if kind == ElementKind::Quad4 { 1.0 } else { 2.0 };
+        let rate = (errors[1] / errors[2]).log2();
+        assert!((rate - expected_rate).abs() < 0.25, "{kind:?}: {errors:?}, rate {rate}");
+        assert!(errors[2] < if kind == ElementKind::Quad4 { 3.0 } else { 0.1 });
+    }
+}
+
 /// The nodal temperature of a heat Result.
 fn temperature_of(res: &StepResult) -> Vec<f64> {
     res.fields[&Field::Temperature].component(0)
@@ -5356,6 +5623,14 @@ fn steady_heat_power_balances_flux_sources_and_outgoing_convection() {
                 let res = run_step(&p, &steady()).unwrap();
                 assert!(res.scalars["applied_total_x"].abs() < 1e-8, "{kind:?}: {:?}", res.scalars);
                 assert!(res.reactions.is_empty());
+                let qx =
+                    probe(&mesh, &res.fields[&Field::HeatFlux], [1.0, 0.05, if kind.dim() == 3 { 0.05 } else { 0.0 }])
+                        .unwrap()
+                        .1[0];
+                assert!(
+                    (qx - flux).abs() < 1e-7,
+                    "Fourier flux equals imposed input and integrated film removal: {kind:?}, {qx} vs {flux}"
+                );
                 // The film face temperature follows q/h independently of k or mesh spacing.
                 for &node in &sets["xmax"].nodes {
                     assert!((temperature_of(&res)[node as usize] - (293.15 + flux / 50.0)).abs() < 1e-8);
@@ -5411,6 +5686,14 @@ fn transient_heat_reactions_include_storage_at_the_last_theta_stage() {
                     };
                     let res = run_step(&p, &step).unwrap();
                     assert!((res.scalars["storage_power"] - 0.12).abs() < 1e-10);
+                    for (field, expected) in
+                        [(Field::TemperatureGradient, 4.0 * (1.0 + end)), (Field::HeatFlux, -45.0 * 4.0 * (1.0 + end))]
+                    {
+                        for value in res.fields[&field].data.chunks_exact(3) {
+                            assert!((value[0] - expected).abs() < 1e-9, "endpoint {field:?}: {value:?}");
+                            assert!(value[1].abs() < 1e-9 && value[2].abs() < 1e-9);
+                        }
+                    }
                     assert!((res.scalars["dt"] - effective_dt).abs() < 1e-15);
                     let stage_factor = 1.0 + end - (1.0 - theta) * effective_dt;
                     let applied = film * 0.01 * (100.0 - 14.0 * stage_factor);
@@ -13677,11 +13960,17 @@ fn frames(r: &StepResult) -> Vec<f64> {
 
 /// `both + none == one + two` on every field that is linear in the loads, on the applied
 /// totals, the per-Constraint reactions and every retained history frame; returns the worst
-/// relative disagreement. Von Mises and principal stresses are not linear and are skipped.
-fn affine(both: &StepResult, none: &StepResult, one: &StepResult, two: &StepResult, label: &str) -> f64 {
+/// relative disagreement. Von Mises and principal stresses are not linear. The new thermal
+/// derivatives have a separate independent edge oracle below: their conditioning inherits
+/// errors in the solved temperatures, which this original primary-field gate still checks.
+fn affine_primary(both: &StepResult, none: &StepResult, one: &StepResult, two: &StepResult, label: &str) -> f64 {
     let mut worst = 0.0f64;
     for (field, f) in &both.fields {
-        if *field == Field::VonMises || *field == Field::Principal {
+        if *field == Field::VonMises
+            || *field == Field::Principal
+            || *field == Field::TemperatureGradient
+            || *field == Field::HeatFlux
+        {
             continue;
         }
         let got = add(&f.data, &none.fields[field].data);
@@ -13710,18 +13999,131 @@ fn superpose(p: &mut Problem<'_>, step: &Step, loads: &[Load], split: usize, lab
         run_step(p, step).expect("every load group solves")
     };
     let (both, none, one, two) = (run(loads), run(&[]), run(&loads[..split]), run(&loads[split..]));
-    affine(&both, &none, &one, &two, label)
+    affine_primary(&both, &none, &one, &two, label)
+}
+
+/// Independent Q1 cube derivative at each corner: the temperature difference along the
+/// parallel edge divided by its signed length. No quadrature, shape kernel or recovery code
+/// is called. K2's h=1/4 m makes the division exact; ||D||∞=2/h=8 m⁻¹.
+fn cube_edge_gradient(mesh: &Mesh, t: &[f64]) -> Vec<f64> {
+    let mut out = Vec::new();
+    for elem in 0..mesh.n_elems() {
+        let nodes = mesh.elem_nodes(elem as u32);
+        assert_eq!(nodes.len(), 8);
+        for &node in nodes {
+            let x = mesh.node(node);
+            for c in 0..3 {
+                let partner = nodes
+                    .iter()
+                    .copied()
+                    .find(|&other| {
+                        let y = mesh.node(other);
+                        y[c] != x[c] && (0..3).all(|j| j == c || x[j] == y[j])
+                    })
+                    .expect("each Q1 cube corner has one parallel edge");
+                let length = mesh.node(partner)[c] - x[c];
+                assert_eq!(length.abs(), 0.25);
+                out.push((t[partner as usize] - t[node as usize]) / length);
+            }
+        }
+    }
+    out
+}
+
+/// Check both the independent recovery accuracy and a linear combination of real solves.
+/// The combinations are K2's (+both,+none,-one,-two), and the physical offset relation
+/// (+T300-300K,-T0). Centering the nodal temperatures removes the DC from the summation;
+/// it does not modify any solve or its returned field.
+fn thermal_vector_combination(mesh: &Mesh, cases: &[(&StepResult, f64, f64)], label: &str) -> f64 {
+    let centered: Vec<Vec<f64>> =
+        cases.iter().map(|(r, _, datum)| temperature_of(r).iter().map(|t| t - datum).collect()).collect();
+    let references: Vec<Vec<f64>> = centered.iter().map(|t| cube_edge_gradient(mesh, t)).collect();
+    let mut combined_t = vec![0.0; mesh.n_nodes()];
+    for ((_, sign, _), t) in cases.iter().zip(&centered) {
+        for (a, b) in combined_t.iter_mut().zip(t) {
+            *a += sign * b;
+        }
+    }
+    let expected_gradient = cube_edge_gradient(mesh, &combined_t);
+    let n = cases.len() as f64;
+    // Standard floating-point summation bound gamma_n=n*eps/(1-n*eps). The extra
+    // four operations cover the final subtraction, edge subtraction and conductivity
+    // multiplication; this is an operation-count bound, not fitted to a failed ratio.
+    let gamma = (n + 4.0) * f64::EPSILON / (1.0 - (n + 4.0) * f64::EPSILON);
+    let t_sum = centered.iter().map(|t| t.iter().fold(0.0f64, |a, b| a.max(b.abs()))).sum::<f64>();
+    let mut worst = 0.0f64;
+    for (field, factor) in [(Field::TemperatureGradient, 1.0), (Field::HeatFlux, -45.0)] {
+        let mut actual = vec![0.0; expected_gradient.len()];
+        let mut accuracy_bound = 0.0;
+        let mut field_sum = 0.0;
+        for (i, ((result, sign, _), reference)) in cases.iter().zip(&references).enumerate() {
+            let want: Vec<f64> = reference.iter().map(|v| factor * v).collect();
+            let got = &result.fields[&field].data;
+            worst =
+                worst.max(gate(&format!("{label} run {i} {field:?} independent cube edges"), got, &want, EXACT_TOL));
+            // Sum the actual independently gated recovery errors, not four full tolerance
+            // allowances. Only the explicit operation-count term covers arithmetic rounding.
+            accuracy_bound += got.iter().zip(&want).fold(0.0f64, |a, (b, c)| a.max((b - c).abs()));
+            field_sum += got.iter().fold(0.0f64, |a, b| a.max(b.abs()));
+            for (a, b) in actual.iter_mut().zip(got) {
+                *a += sign * b;
+            }
+        }
+        let expected: Vec<f64> = expected_gradient.iter().map(|v| factor * v).collect();
+        let discrepancy = actual.iter().zip(&expected).fold(0.0f64, |a, (b, c)| a.max((b - c).abs()));
+        let rounding_bound = gamma * (field_sum + factor.abs() * 8.0 * t_sum);
+        let allowance = accuracy_bound + rounding_bound;
+        assert!(
+            discrepancy <= allowance,
+            "{label} {field:?}: independent defect mismatch {discrepancy:e} exceeds {allowance:e}"
+        );
+        let inherited = expected.iter().fold(0.0f64, |a, b| a.max(b.abs()));
+        eprintln!("{label} {field:?}: inherited solved-T defect {inherited:e}, recovery defect mismatch {discrepancy:e}, allowance {allowance:e}");
+        if field == Field::TemperatureGradient && cases.len() == 4 && cases[0].2 == 300.0 {
+            let (at, delta) = actual
+                .iter()
+                .enumerate()
+                .max_by(|(_, a), (_, b)| a.abs().total_cmp(&b.abs()))
+                .expect("nonempty cube field");
+            let elem = at / 24;
+            let nodes = mesh.elem_nodes(elem as u32);
+            let temperatures: Vec<Vec<f64>> = cases
+                .iter()
+                .map(|(r, _, _)| {
+                    let t = temperature_of(r);
+                    nodes.iter().map(|&n| t[n as usize]).collect()
+                })
+                .collect();
+            eprintln!("{label}: raw affine gradient defect {delta:e} at element {elem}, local node {}, component {}; four nodal-temperature arrays {temperatures:?}", (at / 3) % 8, at % 3);
+        }
+    }
+    worst
 }
 
 /// The same four runs of a heat superposition check: `base` is in every run (a convection
 /// film is part of the operator, so it cannot be a load group), `groups` are the two groups.
-fn superpose_heat(p: &mut Problem<'_>, step: &Step, base: &[HeatLoad], groups: [&[HeatLoad]; 2], label: &str) -> f64 {
+fn superpose_heat(
+    p: &mut Problem<'_>,
+    step: &Step,
+    base: &[HeatLoad],
+    groups: [&[HeatLoad]; 2],
+    datum: f64,
+    label: &str,
+) -> ([StepResult; 4], f64) {
+    assert_eq!(p.materials[0].k, [45.0; 3], "the independent Fourier oracle's conductivity");
+    assert_eq!(p.materials[0].axes, None);
     let mut run = |extra: &[&[HeatLoad]]| {
         p.heat_loads = base.iter().chain(extra.iter().flat_map(|g| g.iter())).cloned().collect();
         run_step(p, step).expect("every heat load group conducts")
     };
-    let (both, none, one, two) = (run(&groups), run(&[]), run(&groups[..1]), run(&groups[1..]));
-    affine(&both, &none, &one, &two, label)
+    let results = [run(&groups), run(&[]), run(&groups[..1]), run(&groups[1..])];
+    let [both, none, one, two] = &results;
+    let worst = affine_primary(both, none, one, two, label).max(thermal_vector_combination(
+        p.mesh,
+        &[(both, 1.0, datum), (none, 1.0, datum), (one, -1.0, datum), (two, -1.0, datum)],
+        label,
+    ));
+    (results, worst)
 }
 
 /// K2: superposition. `u(L₁ ∪ L₂) + u(∅) = u(L₁) + u(L₂)` for every linear procedure — the
@@ -13793,7 +14195,40 @@ fn every_linear_procedure_superposes_its_loads() {
         control: NonlinearControl::default(),
     };
     for step in [steady(), transient] {
-        worst = worst.max(superpose_heat(&mut h, &step, &base, [&flux, &source], step.name()));
+        let (warm, error) = superpose_heat(&mut h, &step, &base, [&flux, &source], 300.0, step.name());
+        worst = worst.max(error);
+        let mut zero = heat_problem(
+            &mesh,
+            &sets,
+            &bodies,
+            Idealisation::Solid3d,
+            conductor(45.0, 7800.0, 460.0),
+            vec![hold("cold", "xmin", 0.0)],
+            vec![],
+        );
+        let zero_base = [HeatLoad::Convection { faces: "xmax".into(), h: 50.0, t_inf: 50.0 }];
+        let mut zero_step = step.clone();
+        if let Step::HeatTransient { initial, .. } = &mut zero_step {
+            *initial = 0.0;
+        }
+        let (zero, error) = superpose_heat(
+            &mut zero,
+            &zero_step,
+            &zero_base,
+            [&flux, &source],
+            0.0,
+            &format!("{} zero datum", step.name()),
+        );
+        worst = worst.max(error);
+        for (i, (warm, zero)) in warm.iter().zip(&zero).enumerate() {
+            let want: Vec<f64> = temperature_of(zero).iter().map(|t| t + 300.0).collect();
+            worst = worst.max(gate("physical 300 K temperature offset", &temperature_of(warm), &want, EXACT_TOL));
+            worst = worst.max(thermal_vector_combination(
+                &mesh,
+                &[(warm, 1.0, 300.0), (zero, -1.0, 0.0)],
+                &format!("{} 300 K offset run {i}", step.name()),
+            ));
+        }
     }
     eprintln!("K2 superposition: worst relative disagreement {worst:e}");
 }
@@ -13857,9 +14292,12 @@ fn a_unit_flux_on_a_warms_b_as_much_as_a_unit_flux_on_b_warms_a() {
 
 /// Every field, applied total, per-Constraint reaction and history frame of two Results that
 /// must be the same numbers; returns the worst relative disagreement.
-fn same_result(a: &StepResult, b: &StepResult, label: &str) -> f64 {
+fn same_primary_heat_result(a: &StepResult, b: &StepResult, label: &str) -> f64 {
     let mut worst = 0.0f64;
     for (field, f) in &a.fields {
+        if *field == Field::TemperatureGradient || *field == Field::HeatFlux {
+            continue; // The independent, analytically controlled vector case follows K7 below.
+        }
         worst = worst.max(gate(&format!("{label} {field:?}"), &b.fields[field].data, &f.data, EXACT_TOL));
     }
     worst = worst.max(gate(&format!("{label} applied"), &applied_totals(b), &applied_totals(a), EXACT_TOL));
@@ -13903,7 +14341,9 @@ fn transient_step() -> Step {
 
 /// K7: heat frame invariance. Temperature is a scalar, so the model rotated by a general `R`
 /// gives the same nodal temperatures, reaction powers and history, steady and transient, to
-/// round-off.
+/// round-off. This preserves the original free-interior 300 K scalar/history/power cases;
+/// vector covariance has the independent affine control below, avoiding amplification of
+/// tiny solved-temperature differences by differentiation of the short-time solution.
 ///
 /// Fails on a conductivity or film integral that reads a coordinate direction, on a face
 /// measure taken from one component of a normal, and on any axis-dependent capacity term.
@@ -13919,10 +14359,105 @@ fn a_rotated_heat_model_gives_the_same_temperatures() {
         let (p, q) = (heated(&mesh, &sets, &bodies, id.clone()), heated(&rotated, &rsets, &bodies, id.clone()));
         for step in [steady(), transient_step()] {
             let (a, b) = (run_step(&p, &step).expect("conducts"), run_step(&q, &step).expect("rotated conducts"));
-            worst = worst.max(same_result(&a, &b, &format!("{kind:?} {id:?} {}", step.name())));
+            worst = worst.max(same_primary_heat_result(&a, &b, &format!("{kind:?} {id:?} {}", step.name())));
         }
     }
     eprintln!("K7 heat frame invariance: worst relative disagreement {worst:e}");
+}
+
+/// Global vectors transform as Rg and Rq, while changing the absolute temperature datum
+/// leaves them unchanged. The affine patch has an independent literal gradient and flux.
+/// Steady solves prescribe only boundary nodes and retain free interior unknowns. Transient
+/// controls prescribe every node because this procedure's initial temperature is a scalar;
+/// the original K7 and K2 transient cases above retain their actual free-interior solves.
+#[test]
+fn thermal_vector_covariance_and_temperature_datum_follow_the_affine_closed_form() {
+    for (kind, id) in heat_cases() {
+        let mesh = block(kind, [4, 2, 2], [1.0, 0.5, 0.5], 0.0);
+        let r = if kind.dim() == 3 { rotation(0.3, -0.7, 1.1) } else { rotation(0.0, 0.0, 0.9) };
+        let rotated = rotate_mesh(&mesh, &r);
+        let bodies = one_body();
+        let gradient = [2.0, 3.0, if kind.dim() == 3 { 4.0 } else { 0.0 }];
+        for (step, transient) in [(steady(), false), (transient_step(), true)] {
+            let mut datum_results = Vec::new();
+            for origin in [300.0, 0.0] {
+                let mut sets = sets_of(&mesh);
+                let mut held = Vec::new();
+                let expected_t: Vec<f64> = (0..mesh.n_nodes())
+                    .map(|n| {
+                        let x = mesh.node(n as u32);
+                        origin + gradient.iter().zip(x).map(|(a, b)| a * b).sum::<f64>()
+                    })
+                    .collect();
+                for (n, &value) in expected_t.iter().enumerate() {
+                    let x = mesh.node(n as u32);
+                    let boundary = (0..kind.dim()).any(|c| x[c] == 0.0 || x[c] == [1.0, 0.5, 0.5][c]);
+                    if transient || boundary {
+                        let name = format!("affine-{n}");
+                        sets.insert(
+                            name.clone(),
+                            ResolvedSet { kind: SetKind::Node, nodes: vec![n as u32], elems: vec![], faces: vec![] },
+                        );
+                        held.push(hold(&name, &name, value));
+                    }
+                }
+                if transient {
+                    assert_eq!(held.len(), mesh.n_nodes());
+                } else {
+                    assert!(mesh.n_nodes() > held.len(), "{kind:?}: real free interior nodes");
+                }
+                let p = heat_problem(
+                    &mesh,
+                    &sets,
+                    &bodies,
+                    id.clone(),
+                    conductor(45.0, 7800.0, 460.0),
+                    held.clone(),
+                    vec![],
+                );
+                // Matching node ids keep T_i=origin+g·x_i under rotation, so the new global
+                // gradient is Rg; evaluating g against rotated x would change the problem.
+                let q =
+                    heat_problem(&rotated, &sets, &bodies, id.clone(), conductor(45.0, 7800.0, 460.0), held, vec![]);
+                let mut controlled_step = step.clone();
+                if let Step::HeatTransient { initial, .. } = &mut controlled_step {
+                    *initial = origin;
+                }
+                let (a, b) = (
+                    run_step(&p, &controlled_step).expect("affine patch solves"),
+                    run_step(&q, &controlled_step).expect("rotated affine patch solves"),
+                );
+                for (result, g) in [(&a, gradient), (&b, rot_vec(&r, gradient))] {
+                    gate("affine nodal temperatures", &temperature_of(result), &expected_t, EXACT_TOL);
+                    for (field, factor) in [(Field::TemperatureGradient, 1.0), (Field::HeatFlux, -45.0)] {
+                        let got = &result.fields[&field];
+                        let entities = mesh.n_elems() * kind.n_nodes();
+                        assert!(entities > 0);
+                        assert_eq!(got.per, Per::ElemNode);
+                        assert_eq!(got.comps, 3);
+                        assert_eq!(got.data.len(), 3 * entities);
+                        let want: Vec<f64> = (0..3 * entities).map(|i| factor * g[i % 3]).collect();
+                        gate(&format!("{kind:?} {} {origin} K {field:?}", step.name()), &got.data, &want, EXACT_TOL);
+                    }
+                }
+                datum_results.push((a, b));
+            }
+            for (warm, zero) in [(&datum_results[0].0, &datum_results[1].0), (&datum_results[0].1, &datum_results[1].1)]
+            {
+                let delta: Vec<f64> =
+                    temperature_of(warm).iter().zip(temperature_of(zero)).map(|(a, b)| a - b).collect();
+                gate("affine physical temperature datum difference", &delta, &vec![300.0; mesh.n_nodes()], EXACT_TOL);
+                for field in [Field::TemperatureGradient, Field::HeatFlux] {
+                    gate(
+                        "affine vector datum invariance",
+                        &warm.fields[&field].data,
+                        &zero.fields[&field].data,
+                        EXACT_TOL,
+                    );
+                }
+            }
+        }
+    }
 }
 
 /// A Model built by dispatching `cmds` (JSON, one Command each) into a fresh Engine.
@@ -14912,7 +15447,7 @@ fn the_default_beam_orientation_puts_the_height_vertical_and_turns_a_column_to_x
     assert_eq!((e.code, e.where_.as_deref()), (ErrorCode::ModelIllPosed, Some("orientation")));
 }
 
-/// A beam has no face, no finite-strain kernel and no stress stiffening; without a Section it
+/// A beam has no face or linear stress-stiffening matrix; without a Section it
 /// names `section.assign` from every integral; a member whose material refuses its properties
 /// fails at every integral that calls the law and at none of the ones that do not; and a
 /// folded member is `mesh.inverted`.
@@ -14932,8 +15467,7 @@ fn a_beam_refuses_what_it_cannot_do_and_names_what_it_is_missing() {
     let (mut sig, mut eps) = (vec![0.0; VOIGT], vec![0.0; VOIGT]);
     let mut state = Vec::new();
     let nl = TangentOut { k: &mut big, f: &mut v, stress: &mut sig, strain: &mut eps, state: &mut state };
-    let e = el.tangent_and_force(&c, &[0.0; 12], &[], nl).expect_err("no finite-strain kernel");
-    assert_eq!(e.code, ErrorCode::Unsupported);
+    el.tangent_and_force(&c, &[0.0; 12], &[], nl).expect("elastic finite-rotation kernel");
 
     let t = [10.0; 2];
     let bare = beam_ctx(&coords, &mat, None, None, [0.0; 3], None);
@@ -18611,4 +19145,276 @@ fn mean_dilatation_quad4_has_the_known_first_order_strain_consistency_rate() {
         }
         previous = Some(error);
     }
+}
+
+// ------------------- corotational elastic beams (B6, #825 / #345)
+#[test]
+fn corotational_beam_tangent_is_linear_at_zero_and_consistent_at_finite_rotation() {
+    let (coords, _) = skew_beam();
+    let (mat, sec) = (steel(), beam_section());
+    let c = beam_ctx(&coords, &mat, Some(&sec), None, [0.0; 3], None);
+    let el = element_for(ElementKind::Beam2);
+    let mut linear = vec![0.0; 144];
+    el.stiffness(&c, &mut linear).unwrap();
+    let (zero, force, _, _) = element_tangent(ElementKind::Beam2, &c, &[0.0; 12]).unwrap();
+    let scale = linear.iter().fold(0.0_f64, |a, b| a.max(b.abs()));
+    assert!(zero.iter().zip(&linear).all(|(a, b)| (a - b).abs() < 2e-14 * scale));
+    assert!(force.iter().all(|v| v.abs() < 1e-14 * scale));
+    let u = [0.01, -0.02, 0.03, 0.25, -0.17, 0.3, 0.02, 0.03, -0.01, 0.3, 0.1, 0.4];
+    let (k, _, _, _) = element_tangent(ElementKind::Beam2, &c, &u).unwrap();
+    let scale = k.iter().fold(0.0_f64, |a, b| a.max(b.abs()));
+    for j in 0..12 {
+        let mut plus = u;
+        let mut minus = u;
+        plus[j] += 1e-6;
+        minus[j] -= 1e-6;
+        let (_, fp, _, _) = element_tangent(ElementKind::Beam2, &c, &plus).unwrap();
+        let (_, fm, _, _) = element_tangent(ElementKind::Beam2, &c, &minus).unwrap();
+        for i in 0..12 {
+            assert!(
+                (k[i * 12 + j] - (fp[i] - fm[i]) / 2e-6).abs() < 2e-9 * scale,
+                "({i},{j}) analytic {} FD {}",
+                k[i * 12 + j],
+                (fp[i] - fm[i]) / 2e-6
+            );
+            assert!((k[i * 12 + j] - k[j * 12 + i]).abs() < 1e-14 * scale);
+        }
+    }
+}
+
+#[test]
+fn corotational_beam_rigid_rotation_translation_and_coordinate_frame_are_objective() {
+    let coords = [0.0, 0.0, 0.0, 2.0, 0.0, 0.0];
+    let (mat, sec) = (steel(), beam_section());
+    let c = beam_ctx(&coords, &mat, Some(&sec), Some([0.0, 0.0, 1.0]), [0.0; 3], None);
+    // Independent Rodrigues rigid motion about an oblique unit axis, plus translation.
+    let axis = [2.0 / 3.0, -1.0 / 3.0, 2.0 / 3.0];
+    let angle = 1.7_f64;
+    let rotate = |v: [f64; 3]| {
+        let cross = [axis[1] * v[2] - axis[2] * v[1], axis[2] * v[0] - axis[0] * v[2], axis[0] * v[1] - axis[1] * v[0]];
+        let dot: f64 = axis.iter().zip(v).map(|(a, b)| a * b).sum();
+        std::array::from_fn::<_, 3, _>(|i| {
+            libm::cos(angle) * v[i] + libm::sin(angle) * cross[i] + (1.0 - libm::cos(angle)) * dot * axis[i]
+        })
+    };
+    let mut rigid = [0.0; 12];
+    for n in 0..2 {
+        let x = [coords[n * 3], coords[n * 3 + 1], coords[n * 3 + 2]];
+        let moved = rotate(x);
+        for i in 0..3 {
+            rigid[n * 6 + i] = moved[i] - x[i] + [0.7, -0.3, 1.2][i];
+            rigid[n * 6 + 3 + i] = angle * axis[i];
+        }
+    }
+    let (_, f, s, e) = element_tangent(ElementKind::Beam2, &c, &rigid).unwrap();
+    assert!(f.iter().all(|v| v.abs() < 1e-5), "{f:?}");
+    assert!(s.iter().all(|v| v.abs() < 1e-3), "{s:?}");
+    assert!(e.iter().all(|v| v.abs() < 1e-14));
+    // Changing global coordinates must rotate forces and the tangent blockwise, while the
+    // section stress and strain scalars remain invariant even in a finitely deformed state.
+    let u = [0.01, -0.02, 0.03, 0.25, -0.17, 0.3, 0.02, 0.03, -0.01, 0.3, 0.1, 0.4];
+    let (_, f, s, e) = element_tangent(ElementKind::Beam2, &c, &u).unwrap();
+    let mut transformed_coords = [0.0; 6];
+    let mut transformed_u = [0.0; 12];
+    for (src, dst) in coords.chunks_exact(3).zip(transformed_coords.chunks_exact_mut(3)) {
+        dst.copy_from_slice(&rotate([src[0], src[1], src[2]]));
+    }
+    for (src, dst) in u.chunks_exact(3).zip(transformed_u.chunks_exact_mut(3)) {
+        dst.copy_from_slice(&rotate([src[0], src[1], src[2]]));
+    }
+    let c2 = beam_ctx(&transformed_coords, &mat, Some(&sec), Some(rotate([0.0, 0.0, 1.0])), [0.0; 3], None);
+    let (_, f2, s2, e2) = element_tangent(ElementKind::Beam2, &c2, &transformed_u).unwrap();
+    let scale = f.iter().fold(0.0_f64, |a, b| a.max(b.abs()));
+    for (src, dst) in f.chunks_exact(3).zip(f2.chunks_exact(3)) {
+        let expected = rotate([src[0], src[1], src[2]]);
+        for i in 0..3 {
+            assert!((expected[i] - dst[i]).abs() < 1e-13 * scale);
+        }
+    }
+    assert!((s[0] - s2[0]).abs() < 1e-12 * s[0].abs());
+    assert!((e[0] - e2[0]).abs() < 1e-13);
+    // Superpose a rigid motion on the deformed beam, keeping the reference geometry fixed.
+    // Independent unit-quaternion composition supplies the transformed total rotations.
+    let qs = [
+        libm::cos(angle / 2.0),
+        axis[0] * libm::sin(angle / 2.0),
+        axis[1] * libm::sin(angle / 2.0),
+        axis[2] * libm::sin(angle / 2.0),
+    ];
+    let mut superposed = [0.0; 12];
+    for node in 0..2 {
+        let r = [u[node * 6 + 3], u[node * 6 + 4], u[node * 6 + 5]];
+        let norm = r.iter().map(|v| v * v).sum::<f64>().sqrt();
+        let qr = [
+            libm::cos(norm / 2.0),
+            r[0] * libm::sin(norm / 2.0) / norm,
+            r[1] * libm::sin(norm / 2.0) / norm,
+            r[2] * libm::sin(norm / 2.0) / norm,
+        ];
+        let q = [
+            qs[0] * qr[0] - qs[1] * qr[1] - qs[2] * qr[2] - qs[3] * qr[3],
+            qs[0] * qr[1] + qs[1] * qr[0] + qs[2] * qr[3] - qs[3] * qr[2],
+            qs[0] * qr[2] - qs[1] * qr[3] + qs[2] * qr[0] + qs[3] * qr[1],
+            qs[0] * qr[3] + qs[1] * qr[2] - qs[2] * qr[1] + qs[3] * qr[0],
+        ];
+        let norm = (q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+        let theta = 2.0 * libm::atan2(norm, q[0]);
+        let current = [
+            coords[node * 3] + u[node * 6],
+            coords[node * 3 + 1] + u[node * 6 + 1],
+            coords[node * 3 + 2] + u[node * 6 + 2],
+        ];
+        let transformed = rotate(current);
+        for i in 0..3 {
+            superposed[node * 6 + i] = transformed[i] + [0.7, -0.3, 1.2][i] - coords[node * 3 + i];
+            superposed[node * 6 + 3 + i] = theta * q[i + 1] / norm;
+        }
+    }
+    let (_, super_force, super_stress, super_strain) = element_tangent(ElementKind::Beam2, &c, &superposed).unwrap();
+    for node in 0..2 {
+        let expected = rotate([f[node * 6], f[node * 6 + 1], f[node * 6 + 2]]);
+        for i in 0..3 {
+            assert!((super_force[node * 6 + i] - expected[i]).abs() < 2e-13 * scale);
+        }
+    }
+    assert!((super_stress[0] - s[0]).abs() < 2e-12 * s[0].abs());
+    assert!((super_strain[0] - e[0]).abs() < 1e-13);
+}
+
+#[test]
+fn corotational_beam_refuses_singular_frames_and_stateful_materials_and_propagates_errors() {
+    let coords = [0.0, 0.0, 0.0, 2.0, 0.0, 0.0];
+    let (mat, sec) = (steel(), beam_section());
+    let c = beam_ctx(&coords, &mat, Some(&sec), None, [0.0; 3], None);
+    let mut collapsed = [0.0; 12];
+    collapsed[6] = -2.0;
+    let mut opposed = [0.0; 12];
+    opposed[3] = PI / 2.0;
+    opposed[9] = -PI / 2.0;
+    // Absolute rotations +pi/2 and a chord at -pi/2 reach the relative-logarithm cut.
+    let mut branch = [0.0; 12];
+    branch[5] = PI / 2.0;
+    branch[11] = PI / 2.0;
+    branch[6] = -2.0;
+    branch[7] = -2.0;
+    let mut nonfinite = [0.0; 12];
+    nonfinite[6] = f64::NAN;
+    for u in [collapsed, opposed, branch, nonfinite] {
+        assert_eq!(element_tangent(ElementKind::Beam2, &c, &u).unwrap_err().code, ErrorCode::MeshInverted);
+    }
+    for angle in [PI, 2.0 * PI, f64::NAN] {
+        let mut outside_chart = [0.0; 12];
+        outside_chart[5] = angle;
+        assert_eq!(element_tangent(ElementKind::Beam2, &c, &outside_chart).unwrap_err().code, ErrorCode::Unsupported);
+    }
+    let weighted = beam_ctx(&coords, &mat, Some(&sec), None, [0.0, 0.0, -9.81], None);
+    assert_eq!(element_tangent(ElementKind::Beam2, &weighted, &[0.0; 12]).unwrap_err().code, ErrorCode::Unsupported);
+    let stateful = Material { law: &J2Plasticity, ..steel() };
+    let plastic = beam_ctx(&coords, &stateful, Some(&sec), None, [0.0; 3], None);
+    assert_eq!(element_tangent(ElementKind::Beam2, &plastic, &[0.0; 12]).unwrap_err().code, ErrorCode::Unsupported);
+    let bare = beam_ctx(&coords, &mat, None, None, [0.0; 3], None);
+    assert_eq!(element_tangent(ElementKind::Beam2, &bare, &[0.0; 12]).unwrap_err().code, ErrorCode::ModelNoSection);
+    let bad = Material { props: vec![YOUNG], ..steel() };
+    let c = beam_ctx(&coords, &bad, Some(&sec), None, [0.0; 3], None);
+    assert_eq!(element_tangent(ElementKind::Beam2, &c, &[0.0; 12]).unwrap_err().code, ErrorCode::MaterialProps);
+    let c = beam_ctx(&[0.0; 6], &mat, Some(&sec), None, [0.0; 3], None);
+    assert_eq!(element_tangent(ElementKind::Beam2, &c, &[0.0; 12]).unwrap_err().code, ErrorCode::MeshInverted);
+}
+
+/// B6: independent circular-elastica end-moment solution, including the chord-versus-arc
+/// spatial discretisation error. The error must converge at second order; no one-mesh pass.
+#[test]
+fn corotational_beam_end_moment_converges_to_circular_elastica_at_finite_angles() {
+    for theta in [PI / 2.0, -PI / 2.0] {
+        let mut errors = Vec::new();
+        for n in [4u32, 8, 16] {
+            let mesh =
+                femlab_geometry::line(&[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], &[[0, 1]], n, ElementKind::Beam2).unwrap();
+            let mut sets = root_set();
+            sets.insert(
+                "tip".into(),
+                ResolvedSet { kind: SetKind::Node, faces: Vec::new(), nodes: vec![1], elems: Vec::new() },
+            );
+            let bodies = vec!["beam".into()];
+            let mut p = beam_cantilever_problem(&mesh, &sets, &bodies, generic_section(1e-3, 1e-3, 2e-3));
+            p.loads = vec![Load::NodalMoment { nodes: "tip".into(), m: [0.0, 0.0, theta * 1e-3] }];
+            let o = NlOptions {
+                increments: 16,
+                solver: SolveOptions { solver: Solver::CpuDirect, ..SolveOptions::default() },
+                ..nl_options(16)
+            };
+            let step = Step::StaticNonlinear(o);
+            let mut solutions = Vec::new();
+            for workers in [1, 2] {
+                let res = pollster::block_on(procedure::run(&p, &step, &Pool::new(workers), None, None, &mut nop))
+                    .expect("finite moment equilibrium");
+                solutions.push(res);
+            }
+            assert_eq!(solutions[0], solutions[1], "worker count must not alter the numerical answer");
+            let res = &solutions[0];
+            let u = &res.history.as_ref().unwrap().values.last().unwrap();
+            let expected = [libm::sin(theta) / theta, (1.0 - libm::cos(theta)) / theta];
+            let tip = [1.0 + u[6], u[7]];
+            let error = ((tip[0] - expected[0]).powi(2) + (tip[1] - expected[1]).powi(2)).sqrt();
+            errors.push(error);
+            assert!(
+                error < 0.01 * (expected[0] * expected[0] + expected[1] * expected[1]).sqrt(),
+                "n={n} theta={theta} tip={tip:?} exact={expected:?} error={error}"
+            );
+            assert!((u[11] - theta).abs() < 1e-8, "tip rotation {} vs {theta}", u[11]);
+            // Every section has kappa=M/EI. Original endpoints are nodes 0/1;
+            // the mesher appends interior nodes, so use each node's reference coordinate.
+            for node in 0..=n as usize {
+                assert!((u[6 * node + 5] - theta * mesh.coords[3 * node]).abs() < 1e-8);
+            }
+        }
+        for pair in errors.windows(2) {
+            let rate = (pair[0] / pair[1]).log2();
+            assert!(rate > 1.95 && rate < 2.05, "{errors:?}, rate={rate}");
+        }
+    }
+}
+
+#[test]
+fn corotational_beam_axial_and_thermal_section_response_keeps_the_linear_limit() {
+    let coords = [0.0, 0.0, 0.0, 2.0, 0.0, 0.0];
+    let (mut mat, sec) = (steel(), beam_section());
+    mat.alpha = [1e-5; 3];
+    let temp = [100.0; 2];
+    let cold = beam_ctx(&coords, &mat, Some(&sec), None, [0.0; 3], None);
+    let hot = beam_ctx(&coords, &mat, Some(&sec), None, [0.0; 3], Some(&temp));
+    for sign in [-1.0, 1.0] {
+        let mut u = [0.0; 12];
+        u[6] = sign * 0.002;
+        let (_, f, s, e) = element_tangent(ElementKind::Beam2, &cold, &u).unwrap();
+        let exact = sign * 0.001 * YOUNG;
+        assert!((s[0] / exact - 1.0).abs() < 1e-12);
+        assert!((e[0] - sign * 0.001).abs() < 1e-15);
+        assert!((f[6] / (exact * sec.a) - 1.0).abs() < 1e-12);
+    }
+    let (_, _, s, _) = element_tangent(ElementKind::Beam2, &hot, &[0.0; 12]).unwrap();
+    assert!((s[0] / (-0.001 * YOUNG) - 1.0).abs() < 1e-12);
+    let mut free = [0.0; 12];
+    free[6] = 0.002;
+    let (_, f, s, _) = element_tangent(ElementKind::Beam2, &hot, &free).unwrap();
+    assert!(f.iter().all(|v| v.abs() < 1e-4));
+    assert!(s[0].abs() < 1e-3);
+}
+
+#[test]
+fn corotational_beam_small_moment_agrees_with_the_b25_linear_solution() {
+    let mesh = femlab_geometry::line(&[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], &[[0, 1]], 1, ElementKind::Beam2).unwrap();
+    let mut sets = root_set();
+    sets.insert(
+        "tip".into(),
+        ResolvedSet { kind: SetKind::Node, faces: Vec::new(), nodes: vec![1], elems: Vec::new() },
+    );
+    let bodies = vec!["beam".into()];
+    let mut p = beam_cantilever_problem(&mesh, &sets, &bodies, generic_section(1e-3, 1e-3, 2e-3));
+    p.loads = vec![Load::NodalMoment { nodes: "tip".into(), m: [0.0, 0.0, 1e-6] }];
+    let res = run_nonlinear(&p, nl_options(4), &mut nop).unwrap();
+    let u = res.history.as_ref().unwrap().values.last().unwrap();
+    assert!((u[7] / 0.0005 - 1.0).abs() < 1e-6, "B25 small-angle tip {}", u[7]);
+    assert!((u[11] / 0.001 - 1.0).abs() < 1e-8);
+    assert_eq!(res.fields[&Field::Rotation].data[5], u[11]);
 }
