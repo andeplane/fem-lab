@@ -199,12 +199,11 @@ fn deformation(cxt: &ElementCtx<'_>, u: &[f64], fr: &Frame) -> Result<[Jet; N_DO
     }
     let rotations = [exp([v[3], v[4], v[5]]), exp([v[9], v[10], v[11]])];
     let mut sections = [[[c(0.0); 3]; 3]; 2];
-    for node in 0..2 {
-        for axis in 0..3 {
-            for global in 0..3 {
-                for k in 0..3 {
-                    sections[node][axis][global] =
-                        sections[node][axis][global] + rotations[node][global][k] * c(fr.r[axis][k]);
+    for (node, section) in sections.iter_mut().enumerate() {
+        for (axis, director) in section.iter_mut().enumerate() {
+            for (global, value) in director.iter_mut().enumerate() {
+                for (rotation, reference) in rotations[node][global].iter().zip(fr.r[axis]) {
+                    *value = *value + *rotation * c(reference);
                 }
             }
         }

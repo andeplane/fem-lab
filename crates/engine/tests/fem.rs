@@ -19331,7 +19331,7 @@ fn corotational_beam_end_moment_converges_to_circular_elastica_at_finite_angles(
             let mut sets = root_set();
             sets.insert(
                 "tip".into(),
-                ResolvedSet { kind: SetKind::Node, faces: Vec::new(), nodes: vec![n], elems: Vec::new() },
+                ResolvedSet { kind: SetKind::Node, faces: Vec::new(), nodes: vec![1], elems: Vec::new() },
             );
             let bodies = vec!["beam".into()];
             let mut p = beam_cantilever_problem(&mesh, &sets, &bodies, generic_section(1e-3, 1e-3, 2e-3));
@@ -19352,14 +19352,15 @@ fn corotational_beam_end_moment_converges_to_circular_elastica_at_finite_angles(
             let res = &solutions[0];
             let u = &res.history.as_ref().unwrap().values.last().unwrap();
             let expected = [theta.sin() / theta, (1.0 - theta.cos()) / theta];
-            let tip = [1.0 + u[6 * n as usize], u[6 * n as usize + 1]];
+            let tip = [1.0 + u[6], u[7]];
             let error = ((tip[0] - expected[0]).powi(2) + (tip[1] - expected[1]).powi(2)).sqrt();
             errors.push(error);
             assert!(error < 0.01, "n={n} theta={theta} tip={tip:?} exact={expected:?} error={error}");
-            assert!((u[6 * n as usize + 5] - theta).abs() < 1e-8, "tip rotation {} vs {theta}", u[6 * n as usize + 5]);
-            // Every section has kappa=M/EI, so both rotation and stress must have the proper sign.
+            assert!((u[11] - theta).abs() < 1e-8, "tip rotation {} vs {theta}", u[11]);
+            // Every section has kappa=M/EI. Original endpoints are nodes 0/1;
+            // the mesher appends interior nodes, so use each node's reference coordinate.
             for node in 0..=n as usize {
-                assert!((u[6 * node + 5] - theta * node as f64 / f64::from(n)).abs() < 1e-8);
+                assert!((u[6 * node + 5] - theta * mesh.coords[3 * node]).abs() < 1e-8);
             }
         }
         for pair in errors.windows(2) {
