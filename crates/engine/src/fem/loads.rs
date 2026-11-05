@@ -31,7 +31,9 @@ pub enum Load {
     Traction { faces: String, t: [f64; 3] },
     /// A force on *each* node of a Set.
     NodalForce { nodes: String, f: [f64; 3] },
-    /// A moment about the global axes on *each* node of a Set, on its rotational DOFs.
+    /// Rotational generalized load on *each* node of a Set. Linear procedures interpret it
+    /// as a physical global moment. Corotational beams instead use coefficients conjugate
+    /// to total rotation-vector coordinates; physical arbitrary-spatial torques are unsupported.
     NodalMoment { nodes: String, m: [f64; 3] },
     /// Gravity: `ρ g` over every element whose material has a density.
     Gravity { g: [f64; 3] },
