@@ -199,7 +199,8 @@ native factorization and triangular solution now use a fixed logical arithmetic 
 of 64, scheduled by the existing pool; Windows factorization remains sequential and
 wasm is unchanged ([ADR0031](adr/0031-fixed-sparse-direct-arithmetic-partition.md)).
 This is an exact reproducibility oracle, not a new frequency reference or convergence
-study: both FV52 tables remain unresolved under #7, and the existing physical and
+study. ADR0051 separately defines the accepted fixed published FV52 deck; the two
+historical NAFEMS attributions remain inconsistent. The existing physical and
 original-operator residual gates above remain unchanged.
 
 The Result-validity integration check also holds probe/path values and independently parsed
@@ -753,8 +754,9 @@ limits 3080.013, 3064.170 and 3060.147 psi. These fits are discretization
 diagnostics, **not independent oracles or proofs that true error decreases**.
 The sequence crosses the published target, and the cause of the offset remains
 unsettled. No universal recovered-point-stress rate is asserted from the
-quadratic element order. Tracking #7 retains the separate FV52 reference and D4
-norm questions; this case addresses only the finite VM142 criterion (#626).
+quadratic element order. This case addresses only the finite VM142 criterion (#626).
+D4's full-gradient norm verification shipped separately through #630; ADR0051
+settles FV52's fixed-deck versus continuum reference convention.
 
 **C2's displacement depends on the idealisation, its stresses do not.** BENCHMARKS.md's single
 5.90e-5 m is the free-ended (σ_z = 0) value; every row here holds ε_z = 0 and so lands on
@@ -789,7 +791,7 @@ checked beyond aggregate counts.
 |---|---|---|---|---|---|
 | D1 | LE10 full-face support variant (ESRD) | σyy(D) = −5.25 MPa | 2 % (hex20); hex8 recorded as the element-order row | 3D solid benchmark; original NAFEMS line support is a different problem | green |
 | D2 | Axisymmetric thermal stress, heated solid cylinder (**substitute for NAFEMS LE11**) | σzz(0) = −58.654 MPa (Timoshenko §151) | 3 % | thermal stress in axisymmetric, chained from a heat Step | green |
-| D3 | NAFEMS FV52 simply-supported solid plate, modal | 45.897, 109.44, 109.44, 167.89, 193.59, 206.19 Hz (Ansys) vs Abaqus row 44.092, 106.66, … — **resolve** | 3 % | 3D eigen | |
+| D3 | FV52 fixed published full Hex20 deck, modal | Independent Abaqus 2025 **computed C3D20** row: 44.796, 110.54, 110.54, 169.10, 193.92, 206.64, 206.64 Hz on its exact 4×4×1 deck; **not a NAFEMS continuum target** (ADR0051) | 3 % | 3D eigenpairs, analytic rigid span, exact worker replay; enlarged-spectrum nested-space and symmetry study | engine test + green |
 | D4 | Manufactured solution, elasticity and Poisson: every element kind on the lattice mesher (Kuhn-split simplices) in every idealisation, tri3/tri6 on the free mesher, hex8/quad4 in both formulations | `u = ∇φ`, `T = φ` for a harmonic φ (`sin x cosh y`, `sin x sin y cosh √2 z`, `r⁴ − 8r²z² + 8/3 z⁴` axisymmetric), the exact field on every boundary DOF; L2 rate p+1, full-gradient H1 seminorm rate p, plus retained engineering-strain rate p, over the two finest of h = 1/2, 1/4, 1/8 | rate ± 0.1 | an element is the order it claims: quadrature degree, shape-function order, mid-node placement, every strain term in `B` | engine test |
 | D5 | 780,300-equation incompatible-mode Hex8 cantilever (`[100,50,50]`, ignored real-device run) and its 66k CI sibling (`[50,20,20]`) | B1 Timoshenko tip deflection; direct factorisation as secondary 66k cross-check | Unchanged 2% B1 tip gate and f64 residual below 1e-8; global force/moment residual below .001 N/.001 N m for the 1 kN load; 66k displacement `‖u_gpu − u_direct‖ ≤ 1e-8 ‖u‖`; repeated 1/4-thread fields exactly equal. Final translated-row/FGMRES source passed real Metal at 66k residual 5.222915328431264e-10 and 780k residual 2.267548104643227e-9, with unchanged physical gates and 66k thread identity; full coverage and software-GPU CI are mandatory before merge | GPU PCG + bounded flexible f64 correction at scale, without CPU fallback | pending #3 |
 | D6 | Lamé thick cylinder as a 90° CSG revolve (#22), free **tet10** | reaction balance and Result freshness gate; σθθ, σrr and u_r at r = 0.15 m (mid-wall) recorded against the closed form 55.5556 MPa, −15.5556 MPa, 4.246667e-5 m | balance 1e-8; stress/displacement recorded, not gated | the free tet mesher's isosurface-stuffed mesh on a curved boundary; Set survival across a mesher swap | green |
@@ -797,13 +799,20 @@ checked beyond aggregate counts.
 | D8 | patch test on the free tet mesher's own unstructured mesh of a CSG box with a cylindrical bore, tet4 and tet10, all six constant-strain modes | exact constant stress and strain | 1e-9 rel | the mesher's irregular connectivity and curved boundary, not just the synthetic structured lattice A1 already covers | engine test |
 | D9 | quality, volume and Set survival on a box, cylinder, sphere and box-minus-cylinder at two sizes | dihedral ∈ [10.7°, 164.8°]; volume within the stated tolerance of the closed form; every Solid tag resolves to a non-empty face Set at both sizes | as stated | the mesher's SIGGRAPH 2007 dihedral-angle guarantee, measured rather than claimed | geometry test |
 
-**D3 remains unresolved after the bounded #639 investigation.** Full Hex20 grids
-4×4×1, 8×8×2 and 16×16×4 all met the measured modal backward-residual tolerance, but
-the fixed mode 4–10 discrepancy columns change under refinement and higher indexed mode
-content changes. Neither published reference was selected, and the original 3% comparisons
-are diagnostic only. The finest grid also exposed exact 1/4-thread nonreproducibility (#640).
-See [the findings and preserved raw-data index](research/639-fv52-solid-investigation.md)
-and [the frozen plan](plans/639-fv52-dual-reference-investigation.md). Parent #7 stays open.
+**D3's reference contract is settled by [ADR0051](adr/0051-fv52-fixed-deck-is-not-a-continuum-reference.md).**
+The [independent Abaqus input and computed C3D20 row](https://docs.software.vt.edu/abaqusv2025/English/SIMACAEBMKRefMap/simabmk-c-fv52.htm)
+define the fixed-deck comparison. Neither the Abaqus-attributed 44.092/... nor the
+Ansys-attributed 45.897/... NAFEMS table is adopted as continuum truth.
+[Altair's primary discussion](https://2022.help.altair.com/2022.3/ss/en_us/topics/simsolid/verification%20manual/modal_analysis_test_problem_vm06_r.htm)
+explains the coarse reference approximation and singular lower-edge supports.
+The installed `fv52-published-hex20-deck` case gates all seven nonzero frequencies
+at the unchanged 3%, plus three rigid-frequency bounds, exact mesh counts and freshness.
+The registry test checks the full analytic Tx/Ty/Rz span and exact retained fields at
+one/four workers. The [24-mode verification study](research/7-fv52-reference-contract.md)
+adds nested-space eigenvalue nonincrease and quarter-turn invariance of complete
+modal subspaces across 4×4×1, 8×8×2 and 16×16×4 meshes. No asymptotic rate or
+continuum FV52 accuracy is claimed. The original #639 ten-mode observations remain
+preserved as historical evidence.
 
 **D4 distinguishes full gradient, engineering strain and energy (#630).** The elastic
 H1 seminorm measures the Frobenius error of every derivative of the represented nodal

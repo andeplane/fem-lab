@@ -73,6 +73,19 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      # FV52's bounded 24-mode refinement/symmetry study is an always-run main physics
+      # gate on Linux, not an extra macOS multiplier or a routine unrelated-PR cost.
+      - if: matrix.os == 'ubuntu-latest'
+        run: |
+          cargo test -p femlab-engine --test registry modal_fv52::fv52_enlarged_spectra_obey_square_symmetry_and_nested_space_min_max -- --ignored --exact --nocapture | tee fv52-study.log
+          python3 -c "from pathlib import Path; assert 'test result: ok. 1 passed; 0 failed; 0 ignored;' in Path('fv52-study.log').read_text()"
+      - if: always() && matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: fv52-study
+          retention-days: 3
+          if-no-files-found: error
+          path: fv52-study.log
       - run: cargo check -p femlab-engine -p femlab-geometry -p femlab-engine-wasm --target wasm32-unknown-unknown
 
   # The wasm module, the Node wasm build, the schema document and the release CLI, built once and
@@ -156,6 +169,7 @@ jobs:
           toolchain: "1.94"
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
+
 
   # TypeScript side: generated types are fresh, the registry type-checks, and vitest holds 100 % on
   # all four metrics. No Rust toolchain: the schema document is committed, and the wasm module the

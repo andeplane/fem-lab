@@ -70,7 +70,7 @@ def run_measured(command, stdout, stderr, max_rss_mib, timeout):
             "stdoutSha256": sha(stdout), "stderrSha256": sha(stderr)}
 
 
-def check_and_summarize(raw, grid):
+def check_and_summarize(raw, grid, expected_modes=10):
     document, mesh, result, surface = raw[:4]
     sets, fields = raw[4:8], raw[8:]
     nx, ny, nz = grid
@@ -97,14 +97,14 @@ def check_and_summarize(raw, grid):
     support = set.union(*by_edge)
     assert len(support) == 8 * nx
     assert result["resultId"] == "result-1" and result["step"] == "modes"
-    assert not result["stale"] and result["modeCount"] == 10
+    assert not result["stale"] and result["modeCount"] == expected_modes
     residual = result["residual"]
     assert math.isfinite(residual) and 0 <= residual <= 1e-10
     frequencies = [f["value"] for f in result["frequencies"]]
-    assert len(frequencies) == 10 and frequencies == sorted(frequencies)
+    assert len(frequencies) == expected_modes and frequencies == sorted(frequencies)
     assert all(math.isfinite(f) and f >= 0 for f in frequencies)
     assert all(f["unit"] == "Hz" for f in result["frequencies"])
-    assert len(fields) == 10
+    assert len(fields) == expected_modes
     rigid_fits = []
     rigid_coefficients = []
     for mode, field in enumerate(fields, 1):
