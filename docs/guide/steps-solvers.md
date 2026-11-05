@@ -23,6 +23,14 @@ Transient procedures require physical time settings and relevant initial conditi
 
 `solve.run` supports `auto`, `cpu-direct`, `cpu-pcg` and `gpu-pcg`. Auto chooses a sparse direct solve for smaller systems and an iterative path for larger systems, using GPU availability where applicable. Some procedures require direct factorization; the schema and errors state those restrictions. Explicitly requesting an unsupported GPU/procedure combination is not a reason to accept a different physical result.
 
+For `implicit`, the selected backend solves both the initial acceleration and each
+HHT/Newmark increment. `cpu-direct` factors the fixed effective matrix once and reuses
+it; `cpu-pcg` and `gpu-pcg` solve each right-hand side through the same f64 residual
+refinement used for static analysis. An explicit GPU request without a device fails.
+Solver choice changes algebraic accuracy and cost, not the consistent mass, damping,
+time grid or retained-history convention. For small models, direct factorization usually
+avoids the setup and dispatch overhead of iterative solves.
+
 Use `query.cost` first for large models. Its memory accounting is scoped, not a guarantee of fit. A failed iterative solve can justify trying `cpu-direct` on a model small enough for it, after checking constraints and conditioning. Finer meshes can increase direct-solver memory sharply.
 
 ## Cancel and continue

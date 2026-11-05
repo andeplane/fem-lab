@@ -11900,6 +11900,14 @@ fn an_implicit_step_is_defined_costed_and_run_through_the_registry() {
     }
     let summary = result_of(&mut e, Some("fall"));
     assert_eq!((summary.solver.as_str(), summary.iterations, summary.history.len()), ("cpu-direct", 5, 4));
+    // #396: the public solve.run backend request must reach implicit dynamics, including a₀.
+    ok(&mut e, r#"{"cmd":"solve.run","step":"fall","solver":"cpu-pcg"}"#);
+    let iterative = result_of(&mut e, Some("fall"));
+    assert_eq!((iterative.solver.as_str(), iterative.iterations), ("cpu-pcg", 5));
+    for (c, want) in want.iter().enumerate() {
+        let got = probe_at(&mut e, "fall", Field::Displacement, Some(c as u8), ["50 mm", "50 mm", "50 mm"]);
+        assert!((got - want).abs() <= 1e-10, "iterative component {c}: {got} vs {want}");
+    }
     // A free body has nothing to react against, and its d'Alembert total `f − M a` is round-off
     // of the 76.5 N it weighs.
     assert!(summary.reactions.is_empty());

@@ -1,4 +1,4 @@
-//! Implicit dynamics: the HHT-α method on the consistent mass, one factorisation per Step.
+//! Implicit dynamics: HHT-α on the consistent mass, through the requested linear backend.
 //!
 //! `M a + C v + K u = f` with Rayleigh damping `C = αR·M + βR·K`. The α-method (Hilber,
 //! Hughes and Taylor 1977) evaluates the internal and damping forces between the ends of the
@@ -43,7 +43,7 @@ use crate::post::{extremes, reactions_per_constraint, Per};
 use crate::procedure::modal::assemble_mass;
 use crate::procedure::static_::stress_fields;
 use crate::procedure::{blank, report, retained_frame_count, time_grid, vector_field, Amplitude, History, StepResult};
-use crate::solve::{direct::Direct, LinearSolve};
+use crate::solve::{direct::Direct, solve_reusable, SolveOptions};
 
 /// The time-stepping constants of one Step: the α-method's parameters, the increment and the
 /// Rayleigh coefficients — everything the predictor, the corrector and the effective stiffness
@@ -176,8 +176,9 @@ fn energy(m: &Csr, k: &Csr, st: &mut State) -> f64 {
 
 /// Integrate one implicit dynamics Step.
 #[allow(clippy::too_many_arguments)]
-pub fn run(
+pub async fn run(
     p: &Problem<'_>,
+    opts: &SolveOptions,
     dt: f64,
     t_end: f64,
     alpha: f64,
@@ -186,6 +187,7 @@ pub fn run(
     output_every: usize,
     amplitude: Option<&Amplitude>,
     pool: &Pool,
+    gpu: Option<&crate::gpu::Gpu>,
     mut progress: OnProgress<'_>,
 ) -> Result<StepResult, Error> {
     // A tie transforms both operators and the state every step; base motion is where that
@@ -252,7 +254,7 @@ pub fn run(
     }
     // Positive definite for the admissible `α`, non-negative Rayleigh coefficients and a
     // non-negative density; a malformed material must still be an Error, not a crash.
-    let mut factored = pool.install(|| Direct::factor(&red.k_ff))?;
+    let mut factored: Option<Direct> = None;
 
     let g = |time: f64| amplitude.map_or(1.0, |amp| amp.at(time));
     // Held DOFs sit at their prescribed value with zero velocity and acceleration throughout.
@@ -270,17 +272,19 @@ pub fn run(
         *qi = g(0.0) * fi - *qi;
     }
     let red0 = reduce(&m, &q, &rc0, &[]);
-    let mut sol_f = vec![0.0; red.free.len()];
-    let mut solver = Direct::factor(&red0.k_ff)
-        .map_err(|_| {
-            Error::new(
-                ErrorCode::ModelIllPosed,
-                "the mass matrix is singular on the free DOFs: every Body with a free DOF needs a density",
-            )
-            .at("materials")
-            .suggest("material.add with rho, e.g. \"7850 kg/m^3\", then material.assign")
-        })
-        .and_then(|mut m_ff| m_ff.solve(&red0.f_f, &mut sol_f))?;
+    let (mut sol_f, mut solver, _) =
+        solve_reusable(&red0.k_ff, &red0.f_f, opts, pool, gpu, &mut progress).await.map_err(|error| {
+            if error.code == ErrorCode::SolveNotPositiveDefinite {
+                Error::new(
+                    ErrorCode::ModelIllPosed,
+                    "the mass matrix is singular on the free DOFs: every Body with a free DOF needs a density",
+                )
+                .at("materials")
+                .suggest("material.add with rho, e.g. \"7850 kg/m^3\", then material.assign")
+            } else {
+                error
+            }
+        })?;
     st.a = expand(&red0, &sol_f);
     drop(red0);
     let e0 = energy(&m, &a.k, &mut st);
@@ -304,8 +308,15 @@ pub fn run(
         for (i, &dof) in red.free.iter().enumerate() {
             rhs_f[i] = st.r[dof as usize];
         }
-        // A bad direct result stops the Step before an invalid state enters the history.
-        solver = factored.solve(&rhs_f, &mut sol_f)?;
+        // Every backend verifies the residual before an invalid state enters the history.
+        if let Some(direct) = &mut factored {
+            solver = direct.solve_with_tolerance(&rhs_f, &mut sol_f, opts.rel_tol)?;
+        } else {
+            let (solution, info, factor) = solve_reusable(&red.k_ff, &rhs_f, opts, pool, gpu, &mut progress).await?;
+            sol_f = solution;
+            solver = info;
+            factored = factor;
+        }
         st.a = expand(&red, &sol_f);
         correct(&s, &mut st);
         if step % every == 0 || step == n_steps {

@@ -2514,6 +2514,8 @@ pub enum Command {
         /// Existing Step to solve; its procedure, active Constraints and Loads define the problem.
         step: String,
         /// Linear solver implementation; omitted means auto, which selects an available compatible backend.
+        /// Implicit dynamics applies this backend to its initial acceleration and every increment;
+        /// cpu-direct reuses its effective-matrix factorization, while cpu-pcg/gpu-pcg refine in f64.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         solver: Option<Solver>,
         /// Positive finite residual tolerance; omitted means 1e-10. For modal, the maximum

@@ -304,9 +304,10 @@ pub enum Step {
         initial_velocity: Option<Vec<f64>>,
         output_every: usize,
     },
-    /// Implicit dynamics by the HHT-α method on the consistent mass, one factorisation reused
-    /// for every time step ([`implicit`]).
+    /// Implicit dynamics by HHT-α on the consistent mass. The direct backend reuses its
+    /// factorisation; CPU/GPU iterative backends refine every increment ([`implicit`]).
     Implicit {
+        solver: SolveOptions,
         dt: f64,
         t_end: f64,
         /// `α ∈ [−1/3, 0]`; 0 is Newmark average acceleration, below it HHT numerical damping.
@@ -539,6 +540,7 @@ pub async fn run(
             explicit::run(p, *t_end, *dt_factor, initial_velocity.as_deref(), *output_every, pool, progress)
         }
         Step::Implicit {
+            solver,
             dt,
             t_end,
             alpha,
@@ -547,18 +549,23 @@ pub async fn run(
             initial_velocity,
             output_every,
             amplitude,
-        } => implicit::run(
-            p,
-            *dt,
-            *t_end,
-            *alpha,
-            (*rayleigh_alpha, *rayleigh_beta),
-            initial_velocity.as_deref(),
-            *output_every,
-            amplitude.as_ref(),
-            pool,
-            progress,
-        ),
+        } => {
+            implicit::run(
+                p,
+                solver,
+                *dt,
+                *t_end,
+                *alpha,
+                (*rayleigh_alpha, *rayleigh_beta),
+                initial_velocity.as_deref(),
+                *output_every,
+                amplitude.as_ref(),
+                pool,
+                gpu,
+                progress,
+            )
+            .await
+        }
     }
 }
 

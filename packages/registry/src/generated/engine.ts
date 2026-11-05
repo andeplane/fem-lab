@@ -2501,6 +2501,8 @@ export type Command =
       step: string;
       /**
        * Linear solver implementation; omitted means auto, which selects an available compatible backend.
+       * Implicit dynamics applies this backend to its initial acceleration and every increment;
+       * cpu-direct reuses its effective-matrix factorization, while cpu-pcg/gpu-pcg refine in f64.
        */
       solver?: Solver | null;
       /**
@@ -6978,6 +6980,8 @@ export type QueryResult_Command =
       step: string;
       /**
        * Linear solver implementation; omitted means auto, which selects an available compatible backend.
+       * Implicit dynamics applies this backend to its initial acceleration and every increment;
+       * cpu-direct reuses its effective-matrix factorization, while cpu-pcg/gpu-pcg refine in f64.
        */
       solver?: Solver | null;
       /**
@@ -9825,6 +9829,8 @@ export type ModelFile_Command =
       step: string;
       /**
        * Linear solver implementation; omitted means auto, which selects an available compatible backend.
+       * Implicit dynamics applies this backend to its initial acceleration and every increment;
+       * cpu-direct reuses its effective-matrix factorization, while cpu-pcg/gpu-pcg refine in f64.
        */
       solver?: Solver | null;
       /**
@@ -12766,6 +12772,8 @@ export type PortableProject_Command =
       step: string;
       /**
        * Linear solver implementation; omitted means auto, which selects an available compatible backend.
+       * Implicit dynamics applies this backend to its initial acceleration and every increment;
+       * cpu-direct reuses its effective-matrix factorization, while cpu-pcg/gpu-pcg refine in f64.
        */
       solver?: Solver | null;
       /**
@@ -15731,6 +15739,8 @@ export type ReadReply_Command =
       step: string;
       /**
        * Linear solver implementation; omitted means auto, which selects an available compatible backend.
+       * Implicit dynamics applies this backend to its initial acceleration and every increment;
+       * cpu-direct reuses its effective-matrix factorization, while cpu-pcg/gpu-pcg refine in f64.
        */
       solver?: Solver | null;
       /**
@@ -18458,6 +18468,8 @@ export type DocumentSnapshot_Command =
       step: string;
       /**
        * Linear solver implementation; omitted means auto, which selects an available compatible backend.
+       * Implicit dynamics applies this backend to its initial acceleration and every increment;
+       * cpu-direct reuses its effective-matrix factorization, while cpu-pcg/gpu-pcg refine in f64.
        */
       solver?: Solver | null;
       /**
