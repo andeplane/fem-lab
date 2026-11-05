@@ -36,8 +36,9 @@ the corresponding positive axis; the boundary `load.heatFlux` input is instead p
 power (W) are different quantities.
 
 ```ts
-// After solving the heat Step named 'conduct':
+// With the heat Step 'conduct' configured for a 1 m × 100 mm × 100 mm bar:
 await fem.model.setUnits({ units: { temperatureGradient: 'K/mm', heatFlux: 'kW/m^2' } });
+await fem.solve.run({ step: 'conduct', solver: 'cpu-direct' });
 console.log(await fem.query.probe({ step: 'conduct', field: 'heatFlux', component: 0,
   at: ['0.5 m', '50 mm', '50 mm'] }));
 console.log(await fem.query.field({ step: 'conduct', field: 'temperatureGradient' })); // raw SI
