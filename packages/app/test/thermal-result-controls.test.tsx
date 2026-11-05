@@ -169,4 +169,14 @@ describe('retained Result deformation capabilities', () => {
     expect(root.querySelector('.probe-out')?.textContent).not.toContain('-999');
     expect(root.querySelector('.sample .chart')?.textContent).toBe(newPath);
   });
+
+  it('samples the selected engine field rather than the first summary field', async () => {
+    const result = { ...thermal, extremes: [extreme('reaction', 'W'), extreme('temperature', 'K'), extreme('heatFlux', 'W/m^2')] };
+    const { root, query } = mount({ result, fieldKey: 'temperature' });
+    query.mockResolvedValue({ value: { value: 320, unit: 'K' }, element: 0, interpolated: true });
+    await act(async () => root.querySelector<HTMLButtonElement>('[data-cmd="query.probe"]')!.click());
+    expect(query).toHaveBeenLastCalledWith({ query: 'query.probe', resultId: result.resultId, step: result.step,
+      field: 'temperature', component: 0, at: ['0 mm', '0 mm', '0 mm'] });
+    expect(root.querySelector('.probe-out')?.textContent).toContain('temperature 320 K');
+  });
 });

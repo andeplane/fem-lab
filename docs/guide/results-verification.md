@@ -17,7 +17,8 @@ storage powers still use the last theta integration stage. A static Step chained
 consumes temperature; read these vectors from its heat predecessor, not the structural Result.
 
 The engine differentiates temperature at thermal Gauss points and fits each element's
-corner shape functions by least squares to extrapolate to its nodes. Raw `query.field`
+corner shape functions by least squares to extrapolate to its nodes.
+Single-point Tri3/Tet4 recovery is constant within each element. Raw `query.field`
 reports `per: 'elementNode'`, three components, SI units and the solved Mesh's element-node
 order. Values are never averaged between elements, even where they share nodes or a material
 interface. Linear-element gradients are generally discontinuous; the displayed contour and
@@ -48,7 +49,9 @@ the final endpoint field. In the browser, choosing a gradient/flux contour exits
 and labels the final endpoint time, including in exported legend text. The playback button
 returns to retained temperature frames; an earlier frame's time never labels an endpoint
 vector. Difference Queries currently accept nodal fields, so these
-element-node vectors cannot be used in that comparison operation. Cost estimates include
+element-node vectors cannot be used in that comparison operation. `study.converge` also
+rejects element-node quantities; refine meshes explicitly and compare the same probe/path
+locations for these vectors. Cost estimates include
 both endpoint fields and intermediate Gauss arrays in `recoveryBytes`; element-local scratch
 and host/allocator overhead remain additional. Heat `solve.run` rejects a counted estimate
 above the planning budget before allocating endpoint output; coarsen the mesh and query the cost

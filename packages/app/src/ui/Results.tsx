@@ -4,7 +4,7 @@
 // solve. Both are views of Queries, and every button on them is one Command.
 import type { CostEstimate, Extreme, MeshSummary, PathResult, ProbeResult, ResultSummary, Valued } from '@femlab/registry';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { FIELD_CHOICES, choiceOf, dimensionOf, formatNumber, hasDeformation, modeCount } from '../fields';
+import { FIELD_CHOICES, FIELD_DIMENSION, choiceOf, dimensionOf, formatNumber, hasDeformation, modeCount } from '../fields';
 import { benchmarkProvenance } from '../benchmark';
 import { lazy } from '../lazy';
 import { verificationState, type UiState } from '../store';
@@ -221,8 +221,8 @@ function Sample({ s, query }: { s: UiState; query: Query }) {
   const [path, setPath] = useState<PathResult | null>(null);
   const [error, setError] = useState('');
   const choice = choiceOf(s.fieldKey);
-  const thermalVector = choice.field === 'temperatureGradient' || choice.field === 'heatFlux';
-  const field = s.transient?.catalogue.field ?? (thermalVector ? choice.field : s.result?.extremes[0]?.field ?? 'vonMises');
+  const engineField = choice.field in FIELD_DIMENSION;
+  const field = s.transient?.catalogue.field ?? (engineField ? choice.field : s.result?.extremes[0]?.field ?? 'vonMises');
   const requested = useRef<{ probe: string[] | null; path: { from: string[]; to: string[] } | null }>({ probe: null, path: null });
   const generation = useRef(0);
   const sampledIdentity = useRef({ probe: '', path: '' });
@@ -232,7 +232,7 @@ function Sample({ s, query }: { s: UiState; query: Query }) {
   const context = {
     resultId: s.result?.resultId, step: s.result?.step, field,
     ...(s.transient ? { sample: { kind: 'frame', index: s.transient.frame.index } } : {}),
-    ...((s.transient || thermalVector) && choice.component !== null ? { component: choice.component } : {}),
+    ...((s.transient || engineField) && choice.component !== null ? { component: choice.component } : {}),
   };
   const parse = (text: string): string[] => text.split(',').map((p) => p.trim());
   const run = (q: Record<string, unknown>, keep: (v: unknown) => void): void => {
