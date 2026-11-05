@@ -55,5 +55,8 @@ No threshold moved; only where and how often checks run.
   on its first push, builds the wasm bundle it then caches for its later pushes.
 - The site deploys only from a green main run, so a red main also holds the deployment until it
   is fixed. `deploy.yml`'s dispatch republishes the newest green main build.
+  Pages uploads use an attempt-specific name, also passed to the deploy action, so retrying a
+  failed deployment selects exactly one artifact despite retained artifacts from earlier attempts
+  ([#834](https://github.com/andeplane/fem-lab/issues/834)). The tested `dist` is reused each time.
 - Branch protection must require `pr gate` instead of ADR 0022's job names, which no longer
   report on pull requests.
