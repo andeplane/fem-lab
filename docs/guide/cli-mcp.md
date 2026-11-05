@@ -79,3 +79,36 @@ combined with `--recover` or `--migrate`. It does not prove deployed alert deliv
 production load capacity or paid disaster recovery. Detailed thresholds and those
 operational acceptance boundaries are in the
 [service operator documentation](https://github.com/andeplane/fem-lab/blob/main/packages/service/README.md#read-only-operational-check).
+
+
+## Hosted-service operator actions
+
+Service operators use `infra/google/manage-operator.py` with their existing Google
+Cloud principal, the selected environment and a reviewed checkout. The launcher
+verifies that authenticated principal and the required project permissions. Unset
+`FIREBASE_AUTH_EMULATOR_HOST` first; the launcher and direct CLI reject emulator
+routing for these real-environment actions. A
+private receipt records the operation UUID, actor reference, non-personal case
+reference and outcome. Begin with an authenticated dry run:
+
+```sh
+python3 infra/google/manage-operator.py --environment staging --account OPERATOR \
+  --source /absolute/reviewed/checkout --action recover \
+  --operation-id OPERATION_UUID --reason-ref issue-556-check \
+  --receipt /absolute/private/operator-dry-run.json --dry-run
+```
+
+Replace `OPERATOR` and `OPERATION_UUID` with the selected authenticated account and
+a stable UUID. Dry runs check identity and IAM permissions without changing Auth
+or SQL records. The [operator action guide](https://github.com/andeplane/fem-lab/blob/main/docs/plans/556-operator-actions.md)
+provides the prerequisites and exact target arguments for suspension, debit
+correction and the existing whole recovery pass.
+
+Suspension disables the account's existing Firebase identity and revokes refresh
+tokens; subsequent authenticated requests use the existing disabled-user gate.
+Already admitted work retains its metering and recovery behavior. A debit
+correction takes exact integer internal subcredits and appends a negative ledger
+entry under the admission lock, preserving every active hold. Reuse the same
+operation UUID after an uncertain outcome. Positive credit adjustments are
+unsupported by this entry format. These privileged operator paths are separate
+from the account APIs available to ordinary app and MCP clients.

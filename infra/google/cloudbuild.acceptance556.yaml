@@ -1,0 +1,8 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: ['build', '-f', 'infra/google/acceptance556.Dockerfile', '-t', 'europe-west3-docker.pkg.dev/$PROJECT_ID/femlab/acceptance556:$_REVISION', '.']
+images: ['europe-west3-docker.pkg.dev/$PROJECT_ID/femlab/acceptance556:$_REVISION']
+substitutions:
+  _REVISION: dev
+options:
+  logging: CLOUD_LOGGING_ONLY

@@ -181,3 +181,22 @@ The API identity may read and sign its private export objects. The recovery iden
 write/delete exports and delete Firebase users. Google workload identities sign URLs;
 no service-account private key is used. Recovery logs contain counts and fixed failure
 codes, never exported content, signed URLs, credentials or vendor exception messages.
+
+
+## Read-only checks and deployment shutdown
+
+`node dist/main.mjs --operations` loads Postgres and the operational snapshot only.
+Firebase, object storage, OpenAI and Stripe SDKs load lazily for the normal runtime.
+The check preserves operator `PGOPTIONS` (including a restricted role or schema),
+then enforces a five-second statement timeout and a read-only session. Copy the
+entire `dist` directory when packaging: `main.mjs`, its generated runtime chunks and
+`migrations` belong together. The production Dockerfile copies that complete directory.
+
+On SIGTERM the HTTP host stops admitting work and becomes unready. Existing short
+streams may finish; after five seconds it closes remaining sockets so supported
+provider streams receive cancellation. It waits for the handlers' settlement or
+pending-state writes before closing the database pool. Five seconds bounds the
+socket grace, not an arbitrary hung dependency: Cloud Run can terminate the process
+at its ten-second platform deadline. A dispatched request already has its durable
+hold; recovery preserves uncertain usage after a hard kill. Retry an interrupted
+request with its original idempotency key rather than creating another generation.

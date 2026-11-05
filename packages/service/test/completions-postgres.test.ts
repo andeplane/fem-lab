@@ -10,7 +10,7 @@ import {postgresAccounts} from '../src/accounts';
 import {creditLedger} from '../src/ledger';
 import {migrate} from '../src/migrations';
 import {reservations,type RequestStatus} from '../src/reservations';
-import {completionService} from '../src/completions';
+import {completionService,type ProviderFailureEvent} from '../src/completions';
 import {serviceServer} from '../src/http';
 import type {ProviderGateway,Observations} from '../src/provider';
 import {ServiceFailure} from '../src/errors';
@@ -19,7 +19,8 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('authenticated completion HTTP p
   const schema=`completions_${randomUUID().replaceAll('-','')}`,admin=new pg.Pool({connectionString:process.env.TEST_DATABASE_URL});
   const db=new pg.Pool({connectionString:process.env.TEST_DATABASE_URL,options:`-c search_path=${schema}`});
   const now=()=>new Date('2026-10-14T12:00:00Z'),ledger=creditLedger(db,now,randomUUID),accounts=postgresAccounts(db,now,randomUUID),holds=reservations(db,now,randomUUID);
-  let counted:ChatRequest|undefined,generated=0,mode='complete',url='';
+  let counted:ChatRequest|undefined,generated=0,mode='complete',url='',observerThrows=false;
+  let providerEvents:ProviderFailureEvent[]=[];
   const provider:ProviderGateway={
     async countInput(request){counted=request;if(mode==='count-failure')throw new Error('private supplier failure');return 1000;},
     async *chat(_request,observations:Observations):AsyncIterable<ChatEvent>{
@@ -28,15 +29,19 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('authenticated completion HTTP p
       await observations.providerId('resp_pipeline');
       yield {type:'text_delta',text:'hello'};
       if(mode==='waiting') { if(!_request.signal?.aborted) await new Promise<void>(resolve=>_request.signal!.addEventListener('abort',()=>resolve(),{once:true})); return; }
+      if(mode==='drain-finish')await new Promise(resolve=>setTimeout(resolve,30));
       if(mode==='interrupted')throw new Error('network private error');
+      if(mode==='silent-end')return;
+      if(mode==='error-event'){yield {type:'error',message:'private provider account/key/prompt details'};return;}
       if(mode==='missing-usage'){yield {type:'done',stopReason:'end_turn'};return;}
       const usage={input:1000,cacheRead:0,output:100};await observations.usage(usage);
+      if(mode==='usage-then-error'){yield {type:'error',message:'private provider failure after known usage'};return;}
       yield {type:'tool_use',id:'call-one',name:'query_nodes',input:{set:'all'}};
       yield {type:'usage',usage};yield {type:'continuation',continuation:{provider:'openai',value:[]}};yield {type:'done',stopReason:'tool_use'};
     },
   };
   const account=async(header:string|undefined)=>{if(!header?.startsWith('Bearer '))throw new ServiceFailure(401,'login-required','Sign in to use hosted AI.','identity');const owner=await accounts.provision({uid:header.slice(7),email:`${header.slice(7)}@example.com`});if(mode!=='unapproved')await grantFreeFixture(ledger,owner.id,now());return owner;};
-  const completions=completionService({account,ledger,reservations:holds,provider});
+  const completions=completionService({account,ledger,reservations:holds,provider,observe:event=>{providerEvents.push(event);if(observerThrows)throw new Error('private logging sink failure');}});
   const server=serviceServer({now,newId:randomUUID,ready:async()=>true,account,completions});
   const body={protocol:1,turnId:'turn-one',round:0,model:'gpt-5.4-mini',maxTokens:1000,system:'project context',messages:[{role:'user',content:[{type:'text',text:'inspect'}]}],tools:[]};
   beforeAll(async()=>{
@@ -45,7 +50,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('authenticated completion HTTP p
     const connection=await db.connect();try{await migrate(connection,migrations);}finally{connection.release();}await db.query('UPDATE ai_limits SET free_monthly_micros=50000000');
     server.listen(0,'127.0.0.1');await once(server,'listening');url=`http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   });
-  beforeEach(async()=>{await db.query('TRUNCATE accounts CASCADE');counted=undefined;generated=0;mode='complete';});
+  beforeEach(async()=>{await db.query('TRUNCATE accounts CASCADE');counted=undefined;generated=0;mode='complete';providerEvents=[];observerThrows=false;});
   afterAll(async()=>{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));await db.end();await admin.query(`DROP SCHEMA ${schema} CASCADE`);await admin.end();});
   const send=(key='key-one',input:unknown=body,authorization='Bearer owner',creditUnit?:string)=>fetch(`${url}/v1/ai/completions`,{method:'POST',headers:{authorization,'content-type':'application/json','idempotency-key':key,...(creditUnit?{'x-femlab-credit-unit':creditUnit}:{})},body:JSON.stringify(input)});
   it('negotiates SSE, status and replay credit units without rebilling or changing stored amounts',async()=>{
@@ -144,6 +149,75 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('authenticated completion HTTP p
     await response.body!.getReader().read();abort.abort();
     await expect.poll(async()=>(await db.query("SELECT state FROM ai_requests WHERE idempotency_key='cancel'")).rows[0].state).toBe('pending_reconciliation');
     expect((await db.query('SELECT * FROM usage_receipts')).rows).toHaveLength(0);
+  });
+  it('finishes a short stream and its exactly-once receipt within the drain grace',async()=>{
+    mode='drain-finish';
+    const draining=serviceServer({now,newId:randomUUID,ready:async()=>true,account,completions});
+    draining.listen(0,'127.0.0.1');await once(draining,'listening');
+    const origin=`http://127.0.0.1:${(draining.address() as AddressInfo).port}`;
+    try {
+      const response=await fetch(origin+'/v1/ai/completions',{method:'POST',headers:{authorization:'Bearer finish-owner','content-type':'application/json','idempotency-key':'finish-drain'},body:JSON.stringify(body)});
+      const received=response.text().then(text=>({text,error:null}),error=>({text:'',error}));await draining.drain(1000);
+      const result=await received;expect(result.error).toBeNull();expect(result.text).toContain('"outcome":"confirmed"');
+      expect((await db.query("SELECT state FROM ai_requests WHERE idempotency_key='finish-drain'")).rows).toEqual([{state:'settled'}]);
+      expect((await db.query('SELECT * FROM usage_receipts')).rows).toHaveLength(1);
+      const count=generated;
+      expect(await(await send('finish-drain',body,'Bearer finish-owner')).json()).toMatchObject({replay:true,state:'settled'});
+      expect(generated).toBe(count);
+    } finally { draining.closeAllConnections();draining.close(); }
+  });
+  it('drains quiet streams into durable pending state before shutdown completes',async()=>{
+    mode='waiting';
+    const draining=serviceServer({now,newId:randomUUID,ready:async()=>true,account,completions});
+    draining.listen(0,'127.0.0.1');await once(draining,'listening');
+    const origin=`http://127.0.0.1:${(draining.address() as AddressInfo).port}`;
+    try {
+      const response=await fetch(origin+'/v1/ai/completions',{method:'POST',headers:{authorization:'Bearer drain-owner','content-type':'application/json','idempotency-key':'drain'},body:JSON.stringify(body)});
+      await response.body!.getReader().read();
+      await draining.drain(20);
+      expect((await db.query("SELECT state FROM ai_requests WHERE idempotency_key='drain'")).rows).toEqual([{state:'pending_reconciliation'}]);
+      expect((await db.query('SELECT * FROM usage_receipts')).rows).toHaveLength(0);
+      expect((await db.query('SELECT * FROM credit_holds')).rows).not.toHaveLength(0);
+      const count=generated;
+      expect(await(await send('drain',body,'Bearer drain-owner')).json()).toMatchObject({replay:true,state:'pending_reconciliation'});
+      expect(generated).toBe(count);
+    } finally { draining.closeAllConnections();draining.close(); }
+  });
+  it.each([
+    ['count-failure',503,'provider-input-unavailable','released'],
+    ['interrupted',200,'provider-stream-unavailable','pending_reconciliation'],
+    ['rejected',200,'provider-rejected','released'],
+    ['missing-usage',200,'provider-metering-missing','pending_reconciliation'],
+    ['silent-end',200,'provider-metering-missing','pending_reconciliation'],
+    ['error-event',200,'provider-stream-unavailable','pending_reconciliation'],
+    ['usage-then-error',200,'provider-stream-unavailable','settled'],
+  ])('reports fixed redacted provider metadata for %s even when HTTP status is200',async(scenario,status,code,state)=>{
+    mode=scenario as string;
+    const response=await send('private-idempotency-needle',{...body,system:'private-prompt-needle'},'Bearer private-owner-needle');
+    expect(response.status).toBe(status);await response.text();
+    expect(providerEvents).toEqual([{event:'service-provider-error',severity:'ERROR',code,where:'service.provider'}]);
+    expect(JSON.stringify(providerEvents)).not.toContain('private');
+    expect((await db.query('SELECT state FROM ai_requests')).rows).toEqual([{state}]);
+  });
+  it('does not report expected admission denials or intentional cancellation as provider outages',async()=>{
+    mode='unapproved';await(await send('unapproved')).text();expect(providerEvents).toEqual([]);
+    mode='waiting';const abort=new AbortController();
+    const response=await fetch(url+'/v1/ai/completions',{method:'POST',headers:{authorization:'Bearer cancel-owner','content-type':'application/json','idempotency-key':'intentional'},body:JSON.stringify(body),signal:abort.signal});
+    await response.body!.getReader().read();abort.abort();
+    await expect.poll(async()=>(await db.query("SELECT state FROM ai_requests WHERE idempotency_key='intentional'")).rows[0].state).toBe('pending_reconciliation');
+    expect((await send('another',body,'Bearer cancel-owner')).status).toBe(429);expect(providerEvents).toEqual([]);
+  });
+  it('keeps the uncertain hold when the injected logger fails',async()=>{
+    mode='interrupted';observerThrows=true;await(await send()).text();
+    expect(providerEvents).toHaveLength(1);
+    expect((await db.query('SELECT state FROM ai_requests')).rows).toEqual([{state:'pending_reconciliation'}]);
+    expect((await db.query('SELECT * FROM usage_receipts')).rows).toHaveLength(0);
+    expect((await db.query('SELECT * FROM credit_holds')).rows.length).toBeGreaterThan(0);
+  });
+  it('does not misclassify a settlement-storage failure as a provider outage',async()=>{
+    const original=holds.settle;holds.settle=async()=>{throw new Error('private database outage');};
+    try {await(await send()).text();expect(providerEvents).toEqual([]);expect((await db.query('SELECT state FROM ai_requests')).rows).toEqual([{state:'pending_reconciliation'}]);}
+    finally {holds.settle=original;}
   });
   it('accepts bounded real image bytes and rejects excessive dimensions/count before admission',async()=>{
     const base64='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jZI0AAAAASUVORK5CYII=';
