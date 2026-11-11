@@ -60,3 +60,13 @@ No threshold moved; only where and how often checks run.
   ([#834](https://github.com/andeplane/fem-lab/issues/834)). The tested `dist` is reused each time.
 - Branch protection must require `pr gate` instead of ADR 0022's job names, which no longer
   report on pull requests.
+
+
+## GPU runner image stability (#860)
+
+The lavapipe coverage workflow uses `ubuntu-24.04` explicitly. On 11 November,
+`ubuntu-latest` resolved to Ubuntu 26.04/Mesa 26.0.8 and the unchanged instrumented GPU test
+binary exited with SIGSEGV. The earlier green run used Ubuntu 24.04/Mesa 25.2.8. Pinning the
+supported image makes driver upgrades deliberate and restores the known environment for a
+controlled full-suite comparison. No GPU test or coverage threshold changes. A green full
+coverage/D5 run is still required; the pin alone does not prove the cause of the crash.

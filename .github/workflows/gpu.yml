@@ -33,7 +33,10 @@ jobs:
   # Backends::PRIMARY picks Vulkan on Linux; wgpu reads WGPU_BACKEND only through Backends::from_env, which we do not call.
   gpu:
     name: gpu kernels on lavapipe
-    runs-on: ubuntu-latest
+    # Keep the known lavapipe environment stable: ubuntu-latest moved to Ubuntu 26.04
+    # and its Mesa 26 driver crashes this test binary (#860). Upgrade through an explicit
+    # full GPU validation, rather than implicitly changing drivers with the runner alias.
+    runs-on: ubuntu-24.04
     env:
       LVP_POISON_MEMORY: "true"
     steps:
