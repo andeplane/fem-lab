@@ -1,0 +1,28 @@
+name: artifact cleanup
+on:
+  workflow_run:
+    workflows: [pr, ci, gpu, release, deploy]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+# Serial deletion avoids racing two cleaners. A new completion waits for the current pass.
+concurrency:
+  group: artifact-cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      # workflow_run uses the default branch, never scripts or artifacts from a PR head.
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - run: python3 tools/clean-ci-artifacts.py --apply
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}

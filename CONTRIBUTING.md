@@ -142,3 +142,14 @@ rules so coverage merges generic and async instantiations correctly.
 
 Report test commands and outcomes accurately. A focused test does not establish full coverage;
 a local pass does not replace CI. Preserve failure output when a check fails.
+
+
+## CI artifacts and cost
+
+Consumed CI transfer artifacts are removed automatically after workflow completion. Active
+runs, the latest green main app bundle, and current diagnostic evidence are protected by the
+policy in [ADR 0047](docs/adr/0047-two-minute-pr-gate-cd-on-main-scheduled-deep-run.md).
+Temporary artifacts expire after one day; the main app bundle, final release bundle and failed
+GPU coverage detail have seven-day retention. To manually redeploy after the latest successful main bundle has
+expired, dispatch the CI workflow first and wait for its successful build. Published releases
+and the deployed Pages site are independent of this artifact cleanup.

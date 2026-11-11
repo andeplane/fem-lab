@@ -84,3 +84,44 @@ replays, the WASM bundle and the separate GPU coverage workflow keep their exist
 The observed Rust job cost was 11–17 runner-minutes. The app-only sample would avoid 16.7
 runner-minutes (about 39 % of that run's total job time), less the small change-detection job.
 These are estimates of avoided compute, not a measured reduction in the monthly bill.
+
+
+## Follow-up: near-zero artifact storage (#858)
+
+The owner's target is at least a 100× cost reduction, not a modest compute optimization.
+FEM Lab is public: standard hosted runner compute is free under
+[GitHub's billing policy](https://docs.github.com/en/billing/concepts/product-billing/github-actions).
+Artifact storage is separately metered. The 11 November inventory found 4,488 live artifacts,
+69.23 GB in total: 31.38 GB of `dist`, 13.41 GB of `wasm`, 10.01 GB of browser reports and
+repeated release intermediates. The account screenshot is **gross** usage, not evidence of
+net billed charges; account billing access is required to verify financial savings.
+
+`artifact cleanup` runs after PR, CI, GPU, release and deployment workflows complete. It runs
+only the trusted main-branch cleanup script and never executes a PR's artifact or code.
+The script defaults to a dry run; `--apply` removes consumed intermediate artifacts and older
+duplicated diagnostics. It preserves active runs, all artifacts younger than ten minutes,
+all `dist` artifacts while deployment is active, the latest successful main CI's `dist`,
+and the latest artifact of each diagnostic name. It refuses cleanup if the latest successful
+main CI cannot be identified. API failures stop deletion; the initial backlog sweep can wait
+for rate reset while preserving an API-call reserve for other work.
+
+Temporary artifacts also have one-day retention as a backstop. Main's `dist` has seven days,
+so manual redeployment requires a successful main CI build from the last seven days; dispatch
+CI first to rebuild when older. The latest green source is still protected from the cleanup
+script within that lifetime. Published GitHub Release assets, build caches, Actions logs,
+repository contents and the already-deployed Pages site are not removed by this policy.
+GPU failure coverage detail retains its existing seven-day lifetime. The final release bundle
+also has seven days so a release-environment approval need not happen on the build day.
+
+Local cleanup usage, from the repository checkout:
+
+```sh
+python3 -m unittest discover -s tools -p 'test_clean_ci_artifacts.py'
+python3 tools/clean-ci-artifacts.py --repo andeplane/fem-lab
+python3 tools/clean-ci-artifacts.py --repo andeplane/fem-lab --apply
+```
+
+The initial dry run retained 148.6 MB (about 466× less than 69.23 GB), including the current
+GPU failure artifact and the latest deployable app. These are storage-footprint measurements;
+future net charges must be checked after billing's usage reporting catches up. Already accrued
+monthly storage charges cannot be undone by deleting artifacts.

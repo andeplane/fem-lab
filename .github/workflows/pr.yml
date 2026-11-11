@@ -124,7 +124,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: fv52-benchmark
-          retention-days: 3
+          retention-days: 1
           if-no-files-found: error
           path: |
             fv52-benchmark.json
@@ -145,7 +145,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: wasm
-          retention-days: 3
+          retention-days: 1
           path: |
             packages/app/src/generated/wasm
             packages/app/src/generated/wasm-threads
@@ -165,6 +165,7 @@ jobs:
             run: |
               python3 -m unittest discover -s infra/stripe -p 'test_*.py'
               python3 -m unittest discover -s tools -p 'test_release_artifacts.py'
+              python3 -m unittest discover -s tools -p 'test_clean_ci_artifacts.py'
               python3 -B -m unittest discover -s tools/abaqus-interoperability -p 'test_*.py'
               python3 -m unittest discover -s infra/google -p 'test_*.py'
               npm run codegen:check

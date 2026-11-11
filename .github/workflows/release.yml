@@ -88,12 +88,14 @@ jobs:
       - run: node tools/build-project-io.mjs --target ${{ matrix.target }} --stage target/${{ matrix.target }}/release/femlab-project-io${{ contains(matrix.target, 'windows') && '.exe' || '' }}
       - uses: actions/upload-artifact@v4
         with:
+          retention-days: 1
           name: project-io-${{ matrix.target }}
           path: tools/project-io/
           if-no-files-found: error
       - run: python tools/release-artifacts.py native --target ${{ matrix.target }}
       - uses: actions/upload-artifact@v4
         with:
+          retention-days: 1
           name: release-files-${{ matrix.target }}
           path: release/*
           if-no-files-found: error
@@ -131,6 +133,7 @@ jobs:
       - run: python tools/release-artifacts.py web
       - uses: actions/upload-artifact@v4
         with:
+          retention-days: 1
           name: release-files-web
           path: release/*
           if-no-files-found: error
@@ -151,6 +154,7 @@ jobs:
       - run: python tools/release-artifacts.py checksums
       - uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: release-bundle
           path: release/*
           if-no-files-found: error
