@@ -23,9 +23,9 @@ on:
 
 # Three tiers (issue #820, ADR 0047, superseding ADR 0022's two gates). Pull requests run the
 # two-minute Linux gate in `pr.yml`. A push to main runs this workflow on Linux: workspace Rust
-# tests, the wasm bundle, web, the native-vs-wasm hashes and every Chromium smoke variant; when it
-# is green, `deploy.yml` publishes its `dist`. The schedule (1st and 15th), a dispatch with `deep` and
-# release validation (`strict`) add macOS and Windows. The lavapipe coverage gate lives in
+# tests when their inputs change, the wasm bundle, web, the native-vs-wasm hashes and every
+# Chromium smoke variant; when it is green, `deploy.yml` publishes its `dist`. The schedule
+# (1st and 15th), a dispatch with `deep` and release validation (`strict`) add macOS and Windows. The lavapipe coverage gate lives in
 # `gpu.yml`. Main can go red on what a PR did not run; whoever merged fixes forward before
 # anything else lands. Job names are check names, so keep them.
 
@@ -40,6 +40,40 @@ env:
   RUSTFLAGS: -D warnings
 
 jobs:
+  changes:
+    name: Rust input changes
+    runs-on: ubuntu-latest
+    outputs:
+      # Manual, scheduled and strict release runs always test Rust. Only an
+      # ordinary main push may skip it, and a failed comparison fails CI and holds deployment.
+      rust: ${{ steps.filter.outputs.rust }}
+    steps:
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main' && !inputs.strict && !inputs.deep
+        uses: actions/checkout@v4
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main' && !inputs.strict && !inputs.deep
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          # Compare the whole push, including all commits in a batched merge. Do not compare
+          # to HEAD^ or origin/main (which may already have advanced past this run).
+          base: ${{ github.event.before }}
+          filters: |
+            rust:
+              - 'crates/**'
+              - 'vendor/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain*'
+              - 'rustfmt.toml'
+              - '.rustfmt.toml'
+              - 'clippy.toml'
+              - '.clippy.toml'
+              - '.cargo/**'
+              - '.github/**'
+              # Native tests read the committed schema and fixtures outside crates/.
+              - 'packages/registry/src/generated/engine.schema.json'
+              - 'tools/**'
+
   billing-release:
     name: billing release guards
     runs-on: ubuntu-latest
@@ -50,11 +84,13 @@ jobs:
           python-version: '3.12'
       - run: python3 -m unittest discover -s infra/stripe -p 'test_*.py' -v
 
-  # Linux on every run; macOS (billed at ten times the Linux rate) only on the deep set. Full
-  # crate coverage belongs to `gpu.yml`. The shared cache key lets pull requests' Rust jobs start
-  # from this job's build.
+  # Linux when Rust inputs change on main, and always for manual/deep/release validation.
+  # macOS only on the deep set. Full crate coverage belongs to `gpu.yml`. The shared cache key
+  # lets pull requests' Rust jobs start from this job's build.
   rust:
     name: rust (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.rust != 'false'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false

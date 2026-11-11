@@ -30,8 +30,9 @@ Three tiers, each in its own workflow:
   (`cargo test --workspace --exclude femlab`) also run. One aggregate check, `pr gate`, is the
   only required status, so jobs can move between tiers without changing repository settings.
 - **CD on main (`ci.yml` on push, then `deploy.yml`)**, Linux only: workspace Rust tests
-  including the CLI replays, the wasm bundle (cached when Rust is unchanged), web with
-  thumbnails, the native-vs-wasm Journal hashes and every Chromium smoke variant (WebGPU on
+  including the CLI replays when Rust inputs change, the wasm bundle (cached when Rust is
+  unchanged), web with thumbnails, the native-vs-wasm Journal hashes and every Chromium smoke
+  variant (WebGPU on
   SwiftShader advisory). `deploy.yml` runs on that workflow's green completion and publishes the
   `dist` it built and tested; it no longer builds anything itself. `gpu.yml` runs the strict
   100 % lavapipe coverage gate when a merge changes the engine or geometry crates.
@@ -60,3 +61,26 @@ No threshold moved; only where and how often checks run.
   ([#834](https://github.com/andeplane/fem-lab/issues/834)). The tested `dist` is reused each time.
 - Branch protection must require `pr gate` instead of ADR 0022's job names, which no longer
   report on pull requests.
+
+## Follow-up: skip unchanged native checks on main (#858)
+
+Two successful main runs on 5 November spent
+[11.3 minutes](https://github.com/andeplane/fem-lab/actions/runs/42038839484) and
+[16.7 minutes](https://github.com/andeplane/fem-lab/actions/runs/42024825945) in the Linux Rust job.
+The latter merge changed only a browser test; this filter would skip its 16.7-minute Rust job.
+The former also changed a tool and remains conservatively included.
+
+On ordinary main pushes, compare the entire push to `github.event.before` and run the Rust job
+only when its inputs changed: crates (including shaders, tests and benchmark decks), vendor,
+Cargo manifests/lockfile/configuration, toolchain/lint configuration, GitHub configuration,
+tools/fixtures and the committed registry schema. Tool changes conservatively run Rust because
+native tests consume fixtures outside the crates. Add any future external native-test input to
+this filter in `ci.yml` in the same change that introduces it. Deletions and renames count too.
+A comparison failure fails CI and prevents deployment; it does not grant a green skip.
+
+Scheduled and manual runs always run Rust, as does strict release validation, including the
+deep platform matrix. Web tests, browser smoke, native-vs-wasm Journal
+replays, the WASM bundle and the separate GPU coverage workflow keep their existing gates.
+The observed Rust job cost was 11–17 runner-minutes. The app-only sample would avoid 16.7
+runner-minutes (about 39 % of that run's total job time), less the small change-detection job.
+These are estimates of avoided compute, not a measured reduction in the monthly bill.
