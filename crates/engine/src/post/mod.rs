@@ -6,6 +6,7 @@ pub mod equilibrium;
 pub mod estimator;
 pub mod probe;
 pub mod stress;
+pub mod thermal;
 
 use femlab_geometry::Mesh;
 

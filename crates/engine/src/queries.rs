@@ -853,9 +853,14 @@ impl Engine {
             }
             None => (record.named_field(&crate::solve_run::field_name(field))?.0.clone(), None),
         };
-        if f.per != crate::post::Per::Node && f.per != crate::post::Per::Element {
-            return Err(Error::new(ErrorCode::Unsupported, format!("{field:?} is not a nodal or element field"))
-                .suggest("query.probe of displacement, stress, vonMises, principal, strain or reaction"));
+        let thermal_element_node =
+            f.per == crate::post::Per::ElemNode && (field == Field::TemperatureGradient || field == Field::HeatFlux);
+        if f.per != crate::post::Per::Node && f.per != crate::post::Per::Element && !thermal_element_node {
+            return Err(Error::new(
+                ErrorCode::Unsupported,
+                format!("{field:?} is not a nodal, element or thermal-vector element-node field"),
+            )
+            .suggest("query.probe of displacement, stress, temperatureGradient or heatFlux"));
         }
         let model = if id.is_some() { &record.model } else { &self.model };
         let unit =
@@ -897,7 +902,7 @@ impl Engine {
             sample,
             value: Valued { value: value.value, unit },
             element: elem,
-            interpolated: f.per == crate::post::Per::Node,
+            interpolated: f.per != crate::post::Per::Element,
         })
     }
 

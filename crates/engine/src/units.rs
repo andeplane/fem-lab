@@ -102,6 +102,7 @@ const DIM_NAMES: &[(Dimension, &str)] = &[
     (Dimension([0, 1, 0, 0]), "mass"),
     (Dimension([0, 0, 1, 0]), "time"),
     (Dimension([0, 0, 0, 1]), "temperature"),
+    (Dimension([-1, 0, 0, 1]), "temperature gradient"),
     (Dimension([1, 1, -2, 0]), "force"),
     (Dimension([-1, 1, -2, 0]), "stress/pressure"),
     (Dimension([-3, 1, 0, 0]), "density"),
@@ -145,6 +146,7 @@ dims! {
     Mass, "mass", "2 kg", [0,1,0,0];
     Time, "time", "0.5 s", [0,0,1,0];
     Temperature, "temperature", "20 degC", [0,0,0,1];
+    TemperatureGradient, "temperature_gradient", "10 K/m", [-1,0,0,1];
     Force, "force", "10 kN", [1,1,-2,0];
     Power, "power", "1 kW", [2,1,-3,0];
     Stress, "stress", "210 GPa", [-1,1,-2,0];
@@ -658,6 +660,13 @@ pub struct UnitSet {
     pub time: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature: Option<String>,
+    /// Temperature difference per length; defaults to K/m. In degC/m the temperature is an
+    /// interval: compound units never apply an absolute-temperature offset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature_gradient: Option<String>,
+    /// Conductive flux density display unit; defaults to W/m^2, independently of total power.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heat_flux: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub acceleration: Option<String>,
 }
@@ -673,11 +682,13 @@ pub struct ResolvedUnits {
     pub density: String,
     pub time: String,
     pub temperature: String,
+    pub temperature_gradient: String,
+    pub heat_flux: String,
     pub acceleration: String,
 }
 
 impl UnitSet {
-    /// Fill defaults: m, N, W, Pa, kg, kg/m^3, s, K, m/s^2.
+    /// Fill defaults: m, N, W, Pa, kg, kg/m^3, s, K, K/m, W/m^2, m/s^2.
     pub fn resolve(&self) -> ResolvedUnits {
         let d = |o: &Option<String>, def: &str| o.clone().unwrap_or_else(|| def.to_string());
         ResolvedUnits {
@@ -689,12 +700,14 @@ impl UnitSet {
             density: d(&self.density, "kg/m^3"),
             time: d(&self.time, "s"),
             temperature: d(&self.temperature, "K"),
+            temperature_gradient: d(&self.temperature_gradient, "K/m"),
+            heat_flux: d(&self.heat_flux, "W/m^2"),
             acceleration: d(&self.acceleration, "m/s^2"),
         }
     }
     /// Every given unit must parse and have the right dimension.
     pub fn validate(&self) -> Result<(), Error> {
-        let checks: [(&Option<String>, Dimension, &str); 9] = [
+        let checks: [(&Option<String>, Dimension, &str); 11] = [
             (&self.length, Length::DIM, "length"),
             (&self.force, Force::DIM, "force"),
             (&self.power, Power::DIM, "power"),
@@ -703,6 +716,8 @@ impl UnitSet {
             (&self.density, Density::DIM, "density"),
             (&self.time, Time::DIM, "time"),
             (&self.temperature, Temperature::DIM, "temperature"),
+            (&self.temperature_gradient, TemperatureGradient::DIM, "temperatureGradient"),
+            (&self.heat_flux, HeatFlux::DIM, "heatFlux"),
             (&self.acceleration, Acceleration::DIM, "acceleration"),
         ];
         for (o, dim, field) in checks {
@@ -735,6 +750,8 @@ impl ResolvedUnits {
             d if d == Density::DIM => self.density.clone(),
             d if d == Time::DIM => self.time.clone(),
             d if d == Temperature::DIM => self.temperature.clone(),
+            d if d == TemperatureGradient::DIM => self.temperature_gradient.clone(),
+            d if d == HeatFlux::DIM => self.heat_flux.clone(),
             d if d == Acceleration::DIM => self.acceleration.clone(),
             d if d == Frequency::DIM => "Hz".to_string(),
             d if d == Torque::DIM => {
@@ -1045,6 +1062,22 @@ mod tests {
         assert_eq!(power.resolve().fmt(1000.0, Power::DIM).unwrap(), (1.0, "kW".to_string()));
         let bad_power = UnitSet { power: Some("kN".into()), ..Default::default() };
         assert_eq!(bad_power.validate().unwrap_err().code, ErrorCode::UnitDimension);
+        let thermal = UnitSet {
+            temperature_gradient: Some("K/mm".into()),
+            heat_flux: Some("kW/m^2".into()),
+            ..Default::default()
+        };
+        thermal.validate().unwrap();
+        assert_eq!(thermal.resolve().fmt(1000.0, TemperatureGradient::DIM).unwrap(), (1.0, "K/mm".into()));
+        assert_eq!(thermal.resolve().fmt(-1000.0, HeatFlux::DIM).unwrap(), (-1.0, "kW/m^2".into()));
+        assert_eq!(r.fmt(2.0, TemperatureGradient::DIM).unwrap(), (2.0, "K/m".into()));
+        assert_eq!(r.fmt(3.0, HeatFlux::DIM).unwrap(), (3.0, "W/m^2".into()));
+        assert_eq!(convert(2.0, "degC/m", Some(TemperatureGradient::DIM)).unwrap(), 2.0);
+        assert_eq!(Q::<TemperatureGradient>::text("1 K/mm").si().unwrap(), 1000.0);
+        let bad_gradient = UnitSet { temperature_gradient: Some("degC".into()), ..Default::default() };
+        assert_eq!(bad_gradient.validate().unwrap_err().where_.as_deref(), Some("units.temperatureGradient"));
+        let bad_flux = UnitSet { heat_flux: Some("W".into()), ..Default::default() };
+        assert_eq!(bad_flux.validate().unwrap_err().where_.as_deref(), Some("units.heatFlux"));
         assert_eq!(r.fmt(1.0, Mass::DIM).unwrap().1, "kg");
         assert_eq!(r.fmt(1.0, Density::DIM).unwrap().1, "kg/m^3");
         assert_eq!(r.fmt(1.0, Time::DIM).unwrap().1, "s");
