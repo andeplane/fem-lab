@@ -34,7 +34,10 @@
 //!
 //! Not here: warping torsion, shear-centre offsets (open sections twist under a load through
 //! the centroid, and this element does not know), stress stiffening (`geometric` refuses, so a
-//! buckling Step on a frame is `unsupported`) and finite strain (`tangent_and_force` refuses).
+//! buckling Step on a frame is `unsupported`). Finite rotations with small elastic section
+//! strains use the objective corotational kernel described in ADR 0048.
+
+mod corotational;
 
 use femlab_geometry::mesh::ElementKind;
 
@@ -405,18 +408,15 @@ impl Element for Beam2 {
         .suggest("step.add with procedure 'static', or mesh the member as a solid"))
     }
 
-    /// A beam has no finite-strain kernel: the total Lagrangian formulation of #59 is written
-    /// for continuum elements, and a corotational beam is its own piece of work.
+    /// Elastic corotational equilibrium with total global rotation vectors (ADR 0048).
     fn tangent_and_force(
         &self,
-        _c: &ElementCtx<'_>,
-        _u: &[f64],
+        c: &ElementCtx<'_>,
+        u: &[f64],
         _state_in: &[f64],
-        _out: super::element::TangentOut<'_>,
+        out: super::element::TangentOut<'_>,
     ) -> Result<f64, Error> {
-        Err(Error::new(ErrorCode::Unsupported, "a line member has no finite-strain kernel")
-            .at("element")
-            .suggest("step.add with procedure 'static', or mesh the member as a solid"))
+        corotational::tangent(c, u, out)
     }
 
     fn gp_xi(&self, i: usize) -> [f64; 3] {

@@ -28,6 +28,8 @@ Line members need a Section that represents their area and, for beams, bending/t
 
 For beams, a default `constraint.fix` is a clamp, while `constraint.pin` restrains translations without clamping rotations. Choosing a Section does not connect coincident-but-distinct nodes automatically; inspect mesh connectivity and Sets.
 
+For large rotations of an elastic beam, choose `static-nonlinear` with adequate `increments` and refine the member along its length. This uses a corotational Timoshenko element: section strains remain small, while the chord and nodal sections rotate. A cantilever under a planar end moment approaches the circular centreline with curvature `M / (E I)` as the mesh is refined. Read the retained `rotation` field for the total global rotation vector; see [physics limits](./physics.md) for moment conventions and explicitly unsupported combinations. A linear `static` Step continues to use small-displacement kinematics.
+
 ## Shells and laminates
 
 A shell Section supplies thickness for the `surface` mesher's midsurface. Directors identify the positive/top side. A laminate Section is a perfectly bonded stack ordered bottom to top, with each ply's Material, thickness and angle. Ply materials replace the Body material for the laminate integration.
@@ -81,3 +83,5 @@ await fem.material.assign({ material: 'sheet', bodies: ['beam'] });
 The application copies every available `E`, `nu`, `rho`, `alpha`, `k`, `cp` and `yield` value and the exact catalogue provenance into one ordinary `material.add` Journal entry. Values remain saved and replayable even when the current Step does not use them. Missing properties stay absent; the operation never invents conductivity, heat capacity or another missing value. Assignment to Bodies remains a separate Command. Ambiguous or unknown entries fail without creating a Material. This convenience Command is available in the browser and MCP, while custom materials still use `material.add` with only the properties you know. A catalogue yield value alone does not activate plasticity.
 
 See the [reference](./api-reference.md) for complete Material/Section schemas and [physics limits](./physics.md) for supported combinations.
+
+The corotational beam kernel rejects gravity loads. Its finite-rotation distributed-load interpolation and within-element self-weight stress recovery are not implemented. Use linear `static` beams or a solid model for self-weight; manually replacing gravity with nodal loads does not establish an equivalent distributed-load model. Nodal dead forces/moments and axial thermal expansion remain supported within the stated limits.

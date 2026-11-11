@@ -25,7 +25,7 @@ use crate::fem::heat::{capacity, conductivity, face_film, face_integrals, radiat
 use crate::fem::mpc::{self, Mpc};
 use crate::fem::problem::Problem;
 use crate::par::Pool;
-use crate::post::{extremes, reactions_per_constraint, Per};
+use crate::post::{extremes, reactions_per_constraint};
 use crate::procedure::{
     blank, iterate, report, retained_frame_count, time_grid, vector_field, History, NonlinearControl, StepResult,
 };
@@ -425,8 +425,8 @@ pub async fn steady(
             (sys, t, solver, None)
         }
     };
-    report(&mut progress, "post", 0.9, "recovering the temperature field")?;
-    let mut res = finish(p, &sys, &rc, &mpc, &t, &t, &vec![0.0; t.len()], solver);
+    report(&mut progress, "post", 0.9, "recovering temperature, gradient and heat flux")?;
+    let mut res = finish(p, &sys, &rc, &mpc, &t, &t, &vec![0.0; t.len()], solver)?;
     if let Some(passes) = passes {
         res.scalars.insert("nonlinear_iterations".to_string(), passes as f64);
     }
@@ -448,7 +448,7 @@ fn finish(
     evaluated: &[f64],
     capacity_rate: &[f64],
     solver: SolveInfo,
-) -> StepResult {
+) -> Result<StepResult, Error> {
     // Start on the original numbering, including storage BEFORE transferring a slave's
     // residual to a held master. Internal interface flux is not a support reaction.
     let mut residual = vec![0.0; sys.k.n];
@@ -467,6 +467,9 @@ fn finish(
     res.reaction_quantity = crate::units::ReactionQuantity::Power;
     res.fields.insert(Field::Temperature, vector_field(t, 1));
     res.fields.insert(Field::Reaction, vector_field(&flow, 1));
+    let (gradient, flux) = crate::post::thermal::fields(p, t)?;
+    res.fields.insert(Field::TemperatureGradient, gradient);
+    res.fields.insert(Field::HeatFlux, flux);
     res.scalars.insert("min_det_j".to_string(), sys.min_det_j);
     let outgoing: f64 = sys.film.iter().zip(evaluated).map(|(h, t)| h * t).sum();
     res.scalars.insert("applied_total_x".to_string(), sys.applied - outgoing);
@@ -481,14 +484,10 @@ fn finish(
     res.scalars.insert("applied_total_y".to_string(), 0.0);
     res.scalars.insert("applied_total_z".to_string(), 0.0);
     res.scalars.insert("rel_residual".to_string(), res.solver.rel_residual);
-    res.extremes = res
-        .fields
-        .iter()
-        .filter(|(_, f)| f.per == Per::Node)
-        .flat_map(|(name, f)| extremes(f, p.mesh).into_iter().map(|e| (*name, e)))
-        .collect();
+    res.extremes =
+        res.fields.iter().flat_map(|(name, f)| extremes(f, p.mesh).into_iter().map(|e| (*name, e))).collect();
     res.reactions = reactions_per_constraint(p, rc, &res.fields[&Field::Reaction]);
-    res
+    Ok(res)
 }
 
 /// One θ-method increment with a radiating face: Newton on the radiative film until the
@@ -707,7 +706,7 @@ pub fn transient(
     let mut capacity_rate = vec![0.0; cap.n];
     cap.spmv(&rate, &mut capacity_rate);
     drop(rate);
-    let mut res = finish(p, &sys, &rc, &mpc, &t, &evaluated, &capacity_rate, solver);
+    let mut res = finish(p, &sys, &rc, &mpc, &t, &evaluated, &capacity_rate, solver)?;
     if radiating {
         res.scalars.insert("nonlinear_iterations".to_string(), passes as f64);
     }

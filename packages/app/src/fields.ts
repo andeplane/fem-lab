@@ -15,6 +15,8 @@ export const SI_UNIT: Record<string, string> = {
   power: 'W',
   stress: 'Pa',
   temperature: 'K',
+  temperatureGradient: 'K/m',
+  heatFlux: 'W/m^2',
   torque: 'N m',
   dimensionless: '',
 };
@@ -33,6 +35,8 @@ export const FIELD_DIMENSION: Record<Field, keyof typeof SI_UNIT> = {
   errorEstimate: 'dimensionless',
   plasticStrain: 'dimensionless',
   temperature: 'temperature',
+  temperatureGradient: 'temperatureGradient',
+  heatFlux: 'heatFlux',
   rotation: 'dimensionless',
   sectionForce: 'force',
   sectionMoment: 'torque',
@@ -106,6 +110,10 @@ export const FIELD_CHOICES: FieldChoice[] = [
   { key: 'peeq', label: 'ε̄ᵖ', field: 'plasticStrain', component: 0 },
   { key: 'contactPressure', label: 'p_c', field: 'contactPressure', component: 0 },
   { key: 'temperature', label: 'T', field: 'temperature', component: 0 },
+  { key: 'temperatureGradient', label: '|∇T|', field: 'temperatureGradient', component: null, magnitude: true },
+  ...VEC.map((a, i) => ({ key: `temperatureGradient${a}`, label: `∇T${a}`, field: 'temperatureGradient', component: i })),
+  { key: 'heatFlux', label: '|q|', field: 'heatFlux', component: null, magnitude: true },
+  ...VEC.map((a, i) => ({ key: `heatFlux${a}`, label: `q${a}`, field: 'heatFlux', component: i })),
   { key: 'errorEstimate', label: 'Estimated spatial error', field: 'errorEstimate', component: 0 },
 ];
 
@@ -126,6 +134,14 @@ export function modeCount(result: ModeSpectrum | null | undefined): number {
 export function hasDeformation(result: ResultSummary | null, fieldKey: string): boolean {
   const mode = choiceOf(fieldKey).mode;
   return result !== null && (result.extremes.some((e) => e.field === 'displacement') || (mode !== undefined && mode <= modeCount(result)));
+}
+
+/** Endpoint-only thermal vectors never inherit the time of a previously displayed frame. */
+export function thermalEndpointLabel(result: ResultSummary | null, fieldKey: string): string | null {
+  const field = choiceOf(fieldKey).field;
+  const time = result?.history?.at(-1)?.time;
+  return time && (field === 'temperatureGradient' || field === 'heatFlux')
+    ? `final endpoint ${formatNumber(time.value)} ${time.unit}` : null;
 }
 
 /** The k-th mode shape, contoured by its magnitude and swept by the deformation bar. */

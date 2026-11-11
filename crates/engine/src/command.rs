@@ -251,6 +251,12 @@ pub enum Procedure {
     /// Green–Lagrange and the stress the material law returns is second Piola–Kirchhoff, so
     /// the linear elastic material becomes St Venant–Kirchhoff. The Result reports **Cauchy**
     /// stress and Green–Lagrange strain, and probes and paths stay in *reference* coordinates.
+    /// Elastic beam2 members also support finite rotations with small section strains via
+    /// an objective corotational kernel. Their rotations are total global rotation vectors;
+    /// moment components are generalized dead loads conjugate to those coordinates. Total
+    /// rotation-vector magnitude must remain below pi radians at every beam node. Stateful
+    /// beam materials, gravity loads and singular relative-section rotation frames are rejected. Beam
+    /// strain is engineering axial section strain, not continuum Green–Lagrange strain.
     /// Solid and plane-strain idealisations only. Incompatible modes are switched off, so
     /// hex8 and quad4 lock in bending under this procedure — use `order: 2`. Loads do not
     /// follow the deformation (a pressure keeps its reference direction and area) and a
@@ -448,6 +454,16 @@ pub enum Field {
     PlasticStrain,
     Reaction,
     Temperature,
+    /// Endpoint temperature gradient in K/m, three components, recovered at thermal Gauss
+    /// points and corner-shape extrapolated per element node without interface averaging.
+    /// Global x/y/z in 3D; x/y/0 in planar models and radial/axial/0 in axisymmetry.
+    /// Available on heat Results only; retained frames contain temperature, not this field.
+    TemperatureGradient,
+    /// Endpoint conductive flux q = -K grad(T), in W/m^2, with the same location and axes as
+    /// temperatureGradient. Uses the full material conductivity tensor. Current 2D Models
+    /// allow only in-plane material axes, giving zero omitted gradient/flux. Tilted axes in
+    /// 3D can couple all components. This is flux density, not applied inward flux or total W.
+    HeatFlux,
     Rotation,
     SectionForce,
     SectionMoment,
@@ -2091,6 +2107,14 @@ pub enum Command {
     /// joints of beam Bodies have: on any other node it has nothing to act on and the Step
     /// fails with model.ill-posed naming the Load. Right-handed about each axis, in the
     /// Model's torque unit ("5 kN m").
+    ///
+    /// In elastic corotational `static-nonlinear` beams these are constant generalized
+    /// coefficients conjugate to the total global rotation vector: virtual work is
+    /// `total · delta(rotationVector)`. A fixed-axis planar end moment has the ordinary
+    /// physical moment interpretation. Arbitrary three-dimensional physical global dead
+    /// torques and follower torques are unsupported: their SO(3) rotation-Jacobian pullback
+    /// is not implemented. Do not pass physical spatial torque components as though they
+    /// were these generalized coefficients.
     #[serde(rename = "load.moment", rename_all = "camelCase")]
     #[schemars(extend("x-execution" = "modelWrite"))]
     LoadMoment {
@@ -2098,13 +2122,17 @@ pub enum Command {
         name: String,
         /// Node Set of beam joints carrying rotational degrees of freedom.
         on: SetRef,
-        /// Total right-handed moment about global x/y/z, split equally over the Set, each component with torque units.
+        /// Total components, split equally over the Set, each with torque units. In linear
+        /// procedures these are physical right-handed moments about global x/y/z. In
+        /// corotational static-nonlinear beams they are generalized forces conjugate to
+        /// total global rotation-vector coordinates; arbitrary physical 3D torque is unsupported.
         total: [Q<Torque>; 3],
     },
 
     /// Gravity (or any uniform acceleration) as a body force on every Body whose Material has
     /// a density; Bodies without one are skipped and listed in the warnings. Explicit Steps
     /// apply gravity with their lumped inertia (m_i g); static Steps use consistent body forces.
+    /// Elastic corotational beam2 members in static-nonlinear explicitly reject this Load.
     #[serde(rename = "load.gravity", rename_all = "camelCase")]
     #[schemars(extend("x-execution" = "modelWrite"))]
     LoadGravity {

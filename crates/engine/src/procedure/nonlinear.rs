@@ -6,13 +6,14 @@
 //! equilibrium it solves is `f_int(u) = λ f_ext` rather than `K u = f`, so it is solved
 //! iteratively and the load is applied in increments.
 //!
-//! **Kinematics.** Total Lagrangian and nothing else: strains are Green–Lagrange, stresses are
+//! **Kinematics.** Continuum elements are total Lagrangian: strains are Green–Lagrange, stresses are
 //! second Piola–Kirchhoff, and both are integrated over the reference configuration
 //! ([`Element::tangent_and_force`](crate::fem::element::Element::tangent_and_force)). The
 //! existing linear elastic law, evaluated on `(E, S)` instead of `(ε, σ)`, *is* the St
 //! Venant–Kirchhoff material, so this procedure adds no constitutive code at all. The Result's
 //! stress field is Cauchy stress — what a gauge on the deformed part would read — and its
-//! strain field is Green–Lagrange.
+//! strain field is Green–Lagrange. Elastic beams instead use objective corotational section
+//! kinematics and total global rotation vectors (ADR 0048).
 //!
 //! **Pseudo-time.** One increment is a step in `t` over `[0, tEnd]`; the load factor is the
 //! Step's `Amplitude` at `t`, or `t / tEnd` without one. A load–unload cycle is therefore one
@@ -57,7 +58,7 @@ use crate::fem::state::GpState;
 use crate::model::Idealisation;
 use crate::par::Pool;
 use crate::post::{extremes, reactions_per_constraint, stress, FieldData, Per};
-use crate::procedure::{report, vector_field, Amplitude, History, StepResult};
+use crate::procedure::{report, rotation_field, vector_field, Amplitude, History, StepResult};
 use crate::solve::{solve, SolveInfo, SolveOptions};
 
 use femlab_geometry::ElementKind;
@@ -555,6 +556,9 @@ pub async fn run(
     let nodal_strain = stress::average_at_nodes(p, &stress::gp_to_nodes(p.mesh, &a.strain_gp));
     let mut fields = BTreeMap::new();
     fields.insert(Field::Displacement, vector_field(&u, dpn));
+    if p.has_beams() {
+        fields.insert(Field::Rotation, rotation_field(&u));
+    }
     fields.insert(Field::Reaction, vector_field(&reactions, dpn));
     fields.insert(Field::VonMises, stress::von_mises(&nodal_stress));
     fields.insert(Field::Principal, stress::principal(&nodal_stress));
